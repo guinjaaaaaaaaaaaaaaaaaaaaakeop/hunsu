@@ -42,6 +42,7 @@ And on every skill call (PreToolUse on `Skill`): a skill that is not in `hunsu.l
 |---|---|---|
 | `hunsu.json` | yes | you (via `init`, `add`, and by hand for `engines`, `resolutions`, `local-hooks-ok`) |
 | `hunsu.lock.json` | yes | `lock` — the resolved snapshot: versions, skills, hooks, engine versions found, warnings |
+| `hunsu-judgments.json` | yes | the judge round's verdicts per situation, fingerprinted by the members' text — what `judge: judged` in the lock refers to; `hunsu-conflicts.md` is its rendering (`judge render`, not committed) |
 | `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine |
 
 ## Commands

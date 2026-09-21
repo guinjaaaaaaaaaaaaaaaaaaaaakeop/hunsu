@@ -346,10 +346,23 @@ def locked_role(manifest, s, prov):
     return role_argv(manifest, s, prov)[0] or prov
 
 
+def judged_by(results):
+    """Who the judge was, from the responses' own `worker` records (host, model) — one name when they agree, else the set; the
+    runner's claim (`--by`) is for when the record is silent."""
+    names = sorted({str(r.get("judged-by")) for r in results if r.get("judged-by") and r.get("judged-by") != "unknown"})
+    return names[0] if len(names) == 1 else (", ".join(names) if names else "unknown")
+
+
 def hook_key(h):
-    """Identity of a hook for duplicate detection: event + matcher + the script it runs (path basename), not the interpreter."""
-    scripts = re.findall(r"[\w./\\:-]+\.(?:py|js|sh|cmd|ps1)", h["command"])
-    return (h["event"], h["matcher"], os.path.basename(scripts[-1]) if scripts else h["command"][:80])
+    """Identity of a hook for duplicate detection: event + matcher + the script it runs — its path with a plugin's root token
+    replaced by the plugin's name (two plugins' `hooks/session_start.py` are two scripts), not the interpreter."""
+    scripts = re.findall(r"[\w./\\:$\{\}-]+\.(?:py|js|sh|cmd|ps1)", h["command"])
+    if not scripts:
+        return (h["event"], h["matcher"], h["command"][:80])
+    script = scripts[-1].replace("\\", "/")
+    for token in ("${CLAUDE_PLUGIN_ROOT}", "${PLUGIN_ROOT}"):
+        script = script.replace(token, h.get("source", "plugin"))
+    return (h["event"], h["matcher"], script if "/" in script else os.path.basename(script))
 
 
 def check(target):
@@ -439,12 +452,12 @@ def check(target):
         seen.setdefault(hook_key(h), []).append(h)
     for key, group in seen.items():
         if len(group) > 1:
-            warnings.append("hook %s %s: registered %d times (%s)" % (key[0], key[2], len(group), ", ".join(sorted({g["source"] for g in group}))))
+            warnings.append("hook %s %s: registered %d times (%s)" % (key[0], os.path.basename(key[2]), len(group), ", ".join(sorted({g["source"] for g in group}))))
     ok = set(manifest.get("local-hooks-ok", []))
     for h in s["hooks"]:
         if h["source"] == "user" and not any(tag in h["command"] for tag in ok):
             kind = "mode instruction" if h["event"] == "SessionStart" else "hook"
-            warnings.append("user %s %s (%s): runs for this project but is not in the manifest — move to project settings, or list in local-hooks-ok" % (kind, h["event"], hook_key(h)[2]))
+            warnings.append("user %s %s (%s): runs for this project but is not in the manifest — move to project settings, or list in local-hooks-ok" % (kind, h["event"], os.path.basename(hook_key(h)[2])))
         if re.search(r"[A-Za-z]:\\|/Users/|/home/", h["command"]) and "${CLAUDE_PLUGIN_ROOT}" not in h["command"]:
             info.append("hook %s (%s): command has an absolute path — bound to this machine" % (h["event"], h["source"]))
 
@@ -729,7 +742,7 @@ def cmd_judge(args):
         mode_ids = [m["source"] for m in req.get("modes", [])]   # a mode is a member of every situation; its plugin's version counts too
         # what travels for the resolution gate: the judge's verdict on the existing resolution, the texts it could quote from, and who judged
         w = resp.get("worker") or {}
-        account = " ".join(str(w[k]) for k in ("host", "model") if w.get(k)) or args.by
+        account = " ".join(str(w[k]) for k in ("host", "model") if w.get(k)) or args.by or "unknown"
         packed = "\n".join([str(m.get("text", "")) for m in req.get("members", [])] + [str(m.get("command", "")) for m in req.get("modes", [])])
         verdicts[req.get("situation", name)] = (resp.get("resolution_verdict"), packed, account)
         results.append({"situation": req.get("situation", name), "members": members, "modes": mode_ids,
@@ -771,7 +784,7 @@ def cmd_judge(args):
         results = [r for r in existing.get("situations", []) if r["situation"] not in redone] + results
         rejected = existing.get("rejected", []) + rejected
     doc = {"artifact-type": "hunsu/judgments@1", "skills-fingerprint": skills_fingerprint(manifest, s), "skills": locked_skill_ids(manifest, s),
-           "judged-by": args.by, "situations": results, "rejected": rejected}
+           "judged-by": args.by or judged_by(results), "situations": results, "rejected": rejected}
     save_json(os.path.join(target, JUDGMENTS), doc)
     write_conflicts_doc(target, doc, manifest)
     n_find = sum(len(r["findings"]) for r in results)
@@ -1197,7 +1210,7 @@ def main(argv=None):
             p.add_argument("--groups", default=None, help="request: the stage-1 response -> stage-2 packets")
             p.add_argument("--stale", action="store_true", help="request: stage-2 packets for the situations whose members' text changed, from the judgments file")
             p.add_argument("--dir", default="hunsu-judge", help="consume: folder holding the responses")
-            p.add_argument("--by", default="unknown", help="consume: who judged (model, date)")
+            p.add_argument("--by", default=None, help="consume: who judged — default: what the workers' own `worker` records say (host and model)")
     args = parser.parse_args(argv)
     return {"survey": cmd_survey, "init": cmd_init, "add": cmd_add, "check": cmd_check,
             "link": cmd_link, "unlink": cmd_unlink, "lock": cmd_lock, "compose": cmd_compose,
