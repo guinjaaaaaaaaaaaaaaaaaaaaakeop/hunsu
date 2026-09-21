@@ -1,0 +1,18 @@
+{
+  "name": "hunsu",
+  "owner": {
+    "name": "guineeeeeeeeeeeeeeeeeeeeeeeerm"
+  },
+  "metadata": {
+    "description": "hunsu on its own: `claude plugin marketplace add guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu` then `claude plugin install hunsu@hunsu`.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "hunsu",
+      "source": "./",
+      "version": "1.0.0",
+      "description": "Locks a project's agent environment — plugins, skills, hooks, engines — the way a package manager locks dependencies."
+    }
+  ]
+}

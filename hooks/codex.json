@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/session_start.py\"",
+            "timeout": 30,
+            "statusMessage": "hunsu — checking the project environment"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/pre_skill.py\"",
+            "timeout": 10,
+            "statusMessage": "hunsu — checking the skill against hunsu.lock.json"
+          }
+        ]
+      }
+    ]
+  }
+}

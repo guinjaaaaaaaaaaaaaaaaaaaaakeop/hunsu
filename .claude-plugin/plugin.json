@@ -1,0 +1,8 @@
+{
+  "name": "hunsu",
+  "version": "1.0.0",
+  "engines": {
+    "python": ">=3.9"
+  },
+  "description": "Locks a project's agent environment — plugins, skills, hooks, engines — the way a package manager locks dependencies. Everyone on the project develops in the same environment; nothing outside the manifest runs."
+}

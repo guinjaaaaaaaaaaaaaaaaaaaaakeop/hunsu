@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hunsu",
+  "version": "1.0.0",
+  "engines": {
+    "python": ">=3.9"
+  },
+  "description": "Locks a project's agent environment the way a package manager locks dependencies.",
+  "extensions": {
+    "com.openai": {
+      "hooks": "./hooks/codex.json"
+    }
+  }
+}

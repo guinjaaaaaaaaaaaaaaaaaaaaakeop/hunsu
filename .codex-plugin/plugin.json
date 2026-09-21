@@ -1,0 +1,24 @@
+{
+  "name": "hunsu",
+  "version": "1.0.0",
+  "engines": {
+    "python": ">=3.11"
+  },
+  "description": "Locks a project's agent environment the way a package manager locks dependencies.",
+  "author": {
+    "name": "guineeeeeeeeeeeeeeeeeeeeeeeerm"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "hunsu",
+    "shortDescription": "Lock a project's agent environment.",
+    "longDescription": "Declare, check, and lock the plugins, skills, hooks, and engines a project uses.",
+    "developerName": "guineeeeeeeeeeeeeeeeeeeeeeeerm",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Use hunsu to compose this project's agent environment lock."
+  }
+}
