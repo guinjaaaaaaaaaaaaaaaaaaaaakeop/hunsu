@@ -387,10 +387,14 @@ def check(target):
             info.append("plugin %s: linked to %s" % (name, linked[name]))
         # the lock names content: the same version with other content than was locked is a version that lies — bump it
         locked = load_json(os.path.join(target, LOCK)).get("plugins", {}).get(name) or {}
+        taken = (want.get("content-taken") or {})
         if locked.get("fingerprint") and locked.get("version") == have["version"] and os.path.isdir(have.get("path") or "") \
-                and tree_fingerprint(have["path"]) != locked["fingerprint"]:
+                and tree_fingerprint(have["path"]) != locked["fingerprint"] and tree_fingerprint(have["path"]) != taken.get("fingerprint"):
             errors.append("plugin %s: content differs from what the lock recorded for version %s — a version names one content: bump it in plugin.json (patch at least), then `hunsu lock`"
-                          % (name, have["version"]))
+                          " (or, when the release itself was rewritten under this version, `hunsu add %s --take-content \"why\"` and lock)"
+                          % (name, have["version"], name))
+        elif taken.get("fingerprint") and locked.get("fingerprint") and taken["fingerprint"] != locked["fingerprint"] and locked.get("version") == have["version"]:
+            info.append("plugin %s: content taken under version %s (%s)" % (name, have["version"], taken.get("why", "")))
         # a linked plugin is this machine's development copy: the installed copy (what the host loads) must be that source —
         # whatever the manifest says about versions, this is about the link and the install
         if name in linked:
@@ -487,7 +491,7 @@ def check(target):
         info.append("no conflict judgment yet — `hunsu judge` groups the locked skills by situation and looks for overlap/contradiction")
     elif stale:
         if stale["unclustered"]:
-            errors.append("judgments have never seen %s — new skills need a cluster round: `hunsu judge request --out DIR`" % ", ".join(stale["unclustered"]))
+            errors.append("judgments have never seen %s — new members (a skill, or a role's prompt) need a cluster round: `hunsu judge request --out DIR`" % ", ".join(stale["unclustered"]))
         if stale["situations"]:
             errors.append("%d situation(s) were judged about other text of their members (%s) — `hunsu judge request --out DIR --stale`, judge those packets, `consume`"
                           % (len(stale["situations"]), "; ".join(stale["situations"])))
@@ -495,12 +499,16 @@ def check(target):
         for r in judged.get("situations", []):
             if r["findings"] and r["situation"] not in manifest.get("resolutions", {}):
                 errors.append("situation %r: %d finding(s), no resolution — see %s" % (r["situation"], len(r["findings"]), CONFLICTS_DOC))
-    locked_skills = set(locked_skill_ids(manifest, s))
+        known = {r["situation"] for r in judged.get("situations", [])} | {sid.split(":", 1)[1] for sid in judged_ids(manifest, s)}
+        for key in manifest.get("resolutions", {}):   # a cluster round names situations anew; a resolution about an old name decides nothing
+            if key not in known:
+                warnings.append("resolutions[%r] is about a situation no judgment has (and no skill is named so) — a cluster round renamed it; move or remove it" % key)
+    judged = set(judged_ids(manifest, s))
     for key, res in manifest.get("resolutions", {}).items():
         named = [x for x in ([res] if isinstance(res, str) else [res.get("use")] + list(res.get("deny", [])) + list(res.get("order", []))) if x and x != "deny"]
         for x in named:
-            if ":" in x and x not in locked_skills and not x.startswith("plugin:"):
-                warnings.append("resolutions[%r] names %s, which is not a locked skill" % (key, x))
+            if ":" in x and x not in judged and not x.startswith("plugin:"):
+                warnings.append("resolutions[%r] names %s, which is not a locked skill or a declared role" % (key, x))
     return errors, warnings, info
 
 
@@ -534,6 +542,19 @@ KINDS = ("overlap", "contradiction", "premise")
 
 def locked_skill_ids(manifest, s):
     return sorted("%s:%s" % (sk["plugin"], sk["name"]) for sk in s["skills"] if in_manifest(manifest, sk))
+
+
+def role_ids(manifest, s):
+    """The roles the manifest's plugins declare, as judged members `plugin:role`. A role whose name is also a skill of the same
+    plugin (dakdol's `build` was both, the worker's prompt being that SKILL.md) is judged once, as the skill."""
+    skills = set(locked_skill_ids(manifest, s))
+    return sorted("%s:%s" % (name, role) for name, want in manifest.get("plugins", {}).items()
+                  for role in ((enabled(s, name, want) or {}).get("roles") or {}) if "%s:%s" % (name, role) not in skills)
+
+
+def judged_ids(manifest, s):
+    """The set a judgment is about: the locked skills and the declared roles' prompts (modes are members of every situation)."""
+    return locked_skill_ids(manifest, s) + role_ids(manifest, s)
 
 
 def skills_fingerprint(manifest, s):
@@ -570,23 +591,137 @@ def members_fingerprint(manifest, members):
     return hashlib.sha256("\n".join("%s@%s" % (m, ver(m)) for m in sorted(members)).encode("utf-8")).hexdigest()[:12]
 
 
-def member_texts(s):
-    """What the judge actually read, per member id: a skill's SKILL.md (LF-normalized), a mode's SessionStart command(s).
-    A judgment is about text; a version bump that changes no text changes no judgment."""
+_MODE_TEXT = {}
+
+
+def mode_text(h, s):
+    """What a SessionStart hook injects: run its command the way the host does (a synthetic payload on stdin, `${CLAUDE_PLUGIN_ROOT}`
+    resolved to the plugin's root) and read `hookSpecificOutput.additionalContext` — the text the session actually receives.
+    A mode is judged by what it says, not by the name of its script. The command's failure is recorded as its text.
+    The probe sets HUNSU_SURVEY=1: a hook that runs hunsu itself (hunsu's own does) must not probe again, and any hook may answer
+    its standing text under it. Inside a probe this returns the command."""
+    import subprocess
+    if os.environ.get("HUNSU_SURVEY"):
+        return h["command"]
+    root = ""
+    if h["source"].startswith("plugin:"):
+        p = next((x for x in s["plugins"].values() if x["name"] == h["source"][7:]), None)
+        root = (p or {}).get("path", "")
+    key = (h["source"], h["command"], root)
+    if key in _MODE_TEXT:
+        return _MODE_TEXT[key]
+    cmd = h["command"].replace("${CLAUDE_PLUGIN_ROOT}", root).replace("${PLUGIN_ROOT}", root)
+    payload = json.dumps({"hook_event_name": "SessionStart", "source": "startup", "cwd": s["target"]})   # no session id: hooks that record sessions skip
+    try:
+        done = subprocess.run(cmd, shell=True, input=payload, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, cwd=s["target"],
+                              env=dict(os.environ, CLAUDE_PLUGIN_ROOT=root, HUNSU_SURVEY="1"))
+        out = (done.stdout or "").strip()
+        try:
+            doc = json.loads(out)
+            text = ((doc.get("hookSpecificOutput") or {}).get("additionalContext") or "").strip() or out
+        except ValueError:
+            text = out
+        if done.returncode and not text:
+            text = "<hook exited %d: %s>" % (done.returncode, (done.stderr or "").strip()[-200:])
+    except (OSError, subprocess.SubprocessError) as err:
+        text = "<hook did not run: %s>" % err
+    _MODE_TEXT[key] = text
+    return text
+
+
+_ROLE_PROMPT = {}
+
+
+def role_prompts(manifest, s):
+    """The prompt each declared role's worker is sent — asked of the worker itself (`--prompt-only` on a stub request), so the
+    judged text is exactly what a builder or a quibbler reads. Members keyed `plugin:role`, like the roles declaration."""
+    import subprocess, tempfile
+    out = {}
+    for name, want in manifest.get("plugins", {}).items():
+        have = enabled(s, name, want) or {}
+        for role, argv in (have.get("roles") or {}).items():
+            mid = "%s:%s" % (name, role)
+            if mid not in role_ids(manifest, s):
+                continue
+            tmp = tempfile.mkdtemp(prefix="hunsu-role-")
+            req = os.path.join(tmp, "request.json")
+            # the stage a runner would send this role: the manifest's verifier gets `verify`, its implementer `build`, a role hired
+            # around a task (before/after) its own name — the worker's prompt depends on it
+            fixed = [str(a) for a in argv if not re.fullmatch(r"\{(request|response|host|base|since)\}", str(a))]
+            assigned = next((k for k, v in manifest.get("roles", {}).items()
+                             if v == mid or (isinstance(v, list) and all(t in [str(x) for x in v] for t in fixed))), None)
+            stage = {"verifier": "verify", "implementer": "build"}.get(assigned, "build" if role == "build" else role)
+            save_json(req, {"artifact-type": "chongdae/request@1", "stage": stage, "run": "hunsu-judge", "task": "sample", "role": "verifier" if stage == "verify" else role,
+                            "target": s["target"], "goal": "<the project's goal>", "brief": "<the task's brief>", "closes": ["Q-sample"],
+                            "contract": {"Q-sample": "## Q-sample\n\n<an acceptance sentence>"}, "checks": [["python3", "-m", "unittest"]], "response": "<the response file>"})   # nothing of the temp dir in the prompt: the text must be the same on every probe
+            host = {"claude-code": "claude"}.get(HOST, HOST)
+            cmd = [str(a).replace("{plugin:%s}" % name, have.get("path", "")).replace("{request}", req).replace("{response}", os.path.join(tmp, "response.json")).replace("{host}", host)
+                   for a in argv] + ["--prompt-only"]
+            for m in re.findall(r"\{plugin:([\w.-]+)\}", " ".join(cmd)):
+                other = next((x for x in s["plugins"].values() if x["name"] == m), None)
+                cmd = [c.replace("{plugin:%s}" % m, (other or {}).get("path", "")) for c in cmd]
+            if cmd and cmd[0] in ("python", "python3") and not shutil.which(cmd[0]):
+                cmd[0] = next((c for c in ("python3", "python") if shutil.which(c)), cmd[0])
+            key = (mid, have.get("path", ""), named_files_fingerprint(cmd, have.get("path", "")))   # asked once per script content
+            if key in _ROLE_PROMPT:
+                out[mid] = _ROLE_PROMPT[key]
+                continue
+            try:
+                done = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, cwd=s["target"])
+                text = (done.stdout or "").strip() if done.returncode == 0 else "<worker exited %d: %s>" % (done.returncode, (done.stderr or "").strip()[-200:])
+            except (OSError, subprocess.SubprocessError) as err:
+                text = "<worker did not run: %s>" % err
+            shutil.rmtree(tmp, ignore_errors=True)
+            script = next((c for c in cmd if os.path.isfile(c) and c.endswith((".py", ".js", ".sh"))), cmd[1] if len(cmd) > 1 else cmd[0])
+            _ROLE_PROMPT[key] = out[mid] = {"id": mid, "plugin": name, "role": role, "path": script.replace(os.sep, "/"), "text": text,
+                                            "description": "the prompt the `%s` worker is sent (plugin.json roles of %s) — a worker acts on it in a fresh process, asks no person anything" % (role, name)}
+    return out
+
+
+def named_files_fingerprint(tokens, root):
+    """The content of the files a command's tokens name under `root` (its script) — "" when it names none. A script edited under
+    one command line is then a different member; a bump that touched only a README is not."""
+    import hashlib
+    parts = []
+    for cand in tokens:
+        if os.path.isfile(cand) and (not root or os.path.abspath(cand).startswith(os.path.abspath(root))):
+            with open(cand, "rb") as fh:
+                parts.append(hashlib.sha256(fh.read().replace(b"\r\n", b"\n")).hexdigest()[:12])
+    return (" #" + "+".join(parts)) if parts else ""
+
+
+def mode_script_fingerprint(h, s):
+    root = next((p.get("path", "") for p in s["plugins"].values() if h["source"] == "plugin:" + p["name"]), "")
+    tokens = [next(t for t in tok if t).replace("${CLAUDE_PLUGIN_ROOT}", root).replace("${PLUGIN_ROOT}", root)
+              for tok in re.findall(r'"([^"]+)"|\'([^\']+)\'|(\S+)', h["command"])]
+    return named_files_fingerprint(tokens, root)
+
+
+def member_texts(s, manifest=None, scripts=True):
+    """What identifies each judged member, per id: a skill's SKILL.md (LF-normalized), a role's worker prompt, a mode's
+    SessionStart command(s) plus the script files the command names. A judgment is about text; a version bump that changes
+    no text changes no judgment. A mode is judged by what it injects (mode_text), but that text may carry the project's state
+    (a run in progress, a check's result) and would stale every situation each time the state moved — so a mode's identity
+    is its command and the content of the script it runs, not the text of one session."""
     texts = {}
     for sk in s["skills"]:
         path = sk["path"]
         texts["%s:%s" % (sk["plugin"], sk["name"])] = io.open(path, encoding="utf-8").read().replace("\r\n", "\n") if os.path.exists(path) else ""
     for h in s["hooks"]:
         if h["event"] == "SessionStart":
-            texts.setdefault(h["source"], []).append(h["command"])
+            texts.setdefault(h["source"], []).append(h["command"] + (mode_script_fingerprint(h, s) if scripts else ""))
+    if manifest is not None:
+        for mid, r in role_prompts(manifest, s).items():
+            texts[mid] = r["text"]
     return {k: "\n".join(sorted(v)) if isinstance(v, list) else v for k, v in texts.items()}
 
 
-def members_text_fingerprint(s, members):
-    """Identity of one situation's judged members by content — see member_texts. A member no longer present hashes as absent."""
+def members_text_fingerprint(s, members, manifest=None, scripts=True):
+    """Identity of one situation's judged members by content — see member_texts. A member no longer present hashes as absent.
+    `scripts=False` is the identity judgments made before 1.2 carry (a mode by its command alone); judgments_status accepts
+    either, so an upgrade stales nothing — the next consume records the fuller one."""
     import hashlib
-    texts = member_texts(s)
+    texts = member_texts(s, manifest, scripts)
     return hashlib.sha256("\n".join("%s\0%s" % (m, texts.get(m, "<absent>")) for m in sorted(members)).encode("utf-8")).hexdigest()[:12]
 
 
@@ -597,7 +732,7 @@ def judgments_status(manifest, s, target):
     j = load_json(os.path.join(target, JUDGMENTS))
     if not j:
         return None, {}
-    locked = set(locked_skill_ids(manifest, s))
+    locked = set(judged_ids(manifest, s))
     if "skills" not in j:   # older judgments: about the whole set at once; stale as a whole when the set changed
         changed = j.get("skills-fingerprint") != skills_fingerprint(manifest, s)
         stale = {"situations": [r["situation"] for r in j.get("situations", [])] if changed else [], "unclustered": []}
@@ -605,7 +740,7 @@ def judgments_status(manifest, s, target):
         def changed(r):   # judged about text (current) or, for older judgments, about versions — each compared the way it was made
             members = r.get("members", []) + r.get("modes", [])
             if "members-text-fingerprint" in r:
-                return r["members-text-fingerprint"] != members_text_fingerprint(s, members)
+                return r["members-text-fingerprint"] not in (members_text_fingerprint(s, members, manifest), members_text_fingerprint(s, members, manifest, scripts=False))
             return r.get("members-fingerprint", "?") != members_fingerprint(manifest, members)
         stale = {"situations": [r["situation"] for r in j.get("situations", []) if changed(r)],
                  "unclustered": sorted(locked - set(j["skills"]))}
@@ -637,21 +772,28 @@ def cmd_judge(args):
     modes = [h for h in s["hooks"] if h["event"] == "SessionStart" and h["source"].startswith("plugin:")
              and h["source"][7:] in manifest["plugins"]]
     ident = lambda sk: "%s:%s" % (sk["plugin"], sk["name"])
+    # what the judge reads: a mode by the text it injects (the host runs its command; so does hunsu), a role by the prompt its
+    # worker is sent (`--prompt-only`) — never by a script's name. A worker inherits the project's modes, so a mode that says
+    # "ask the user" and a role that says "ask no one" is a contradiction the judge can only see with both texts in front of it.
+    mode_packets = [{"source": h["source"], "text": mode_text(h, s)[:6000], "note": "injected at SessionStart — a member of every situation"} for h in modes]
+    roles = role_prompts(manifest, s)
 
     if args.mode == "request" and not (args.groups or args.stale):
         os.makedirs(args.out, exist_ok=True)
         packet = {"artifact-type": "hunsu/judge-request@1", "stage": "cluster", "target": s["target"],
-                  "skills": [{"id": ident(sk), "description": sk["description"], "path": sk["path"]} for sk in skills],
-                  "modes": [{"source": h["source"], "command": h["command"],
-                             "note": "injects instructions at SessionStart — a member of every situation"} for h in modes],
+                  "skills": [{"id": ident(sk), "description": sk["description"], "path": sk["path"]} for sk in skills]
+                            + [{"id": r["id"], "description": r["description"], "path": r["path"]} for r in roles.values()],
+                  "modes": mode_packets,
                   "instructions": ("Group these skills by the situation they claim to handle, using each description's "
                                    "'use when' clause and, if needed, the SKILL.md at `path` (Read). A skill may be in several groups. "
-                                   "Every mode is implicitly in every group; do not list modes as members. Give each group a short "
-                                   "situation label in the project's language of work (e.g. 'reviewing a change'). Only group what "
-                                   "the text supports; a group with one member is fine and means no overlap there. Change no files.")}
+                                   "A `plugin:role` entry is a worker's prompt, not a skill a session invokes: it belongs to the situation "
+                                   "its description names (building, reviewing...). Every mode is implicitly in every group; do not list "
+                                   "modes as members. Give each group a short situation label in the project's language of work (e.g. "
+                                   "'reviewing a change'). Only group what the text supports; a group with one member is fine and means "
+                                   "no overlap there. Change no files.")}
         save_json(os.path.join(args.out, "cluster-request.json"), packet)
-        print("stage 1 packet -> %s (%d skills, %d modes). Run the judge, then `judge request --groups <its response>`"
-              % (os.path.join(args.out, "cluster-request.json"), len(skills), len(modes)))
+        print("stage 1 packet -> %s (%d skills, %d roles, %d modes). Run the judge, then `judge request --groups <its response>`"
+              % (os.path.join(args.out, "cluster-request.json"), len(skills), len(roles), len(modes)))
         return 0
 
     if args.mode == "request":
@@ -670,6 +812,7 @@ def cmd_judge(args):
         if not groups:
             raise SystemExit("%s has no groups" % args.groups)
         by_id = {ident(sk): sk for sk in skills}
+        by_id.update(roles)   # a role's prompt is judged like a skill's text; its members text is already in hand
         prior = {r["situation"]: r.get("findings", []) for r in load_json(os.path.join(target, JUDGMENTS)).get("situations", [])}
         os.makedirs(args.out, exist_ok=True)
         if args.stale:
@@ -681,19 +824,21 @@ def cmd_judge(args):
             members = [m for m in g.get("members", []) if m in by_id]
             if len(members) < 2 and not modes:
                 continue
-            def body(path):
-                text = io.open(path, encoding="utf-8").read() if os.path.exists(path) else ""
-                return text[:6000]
+            def body(m):
+                if "text" in by_id[m]:   # a role: the prompt its worker is sent
+                    return by_id[m]["text"][:6000]
+                path = by_id[m]["path"]
+                return (io.open(path, encoding="utf-8").read() if os.path.exists(path) else "")[:6000]
             packet = {"artifact-type": "hunsu/judge-request@1", "stage": "group", "situation": g.get("situation", "group %d" % i),
-                      "members": [{"id": m, "description": by_id[m]["description"], "path": by_id[m]["path"], "text": body(by_id[m]["path"])}
-                                  for m in members],
-                      "modes": [{"source": h["source"], "command": h["command"]} for h in modes],
+                      "members": [{"id": m, "description": by_id[m]["description"], "path": by_id[m]["path"], "text": body(m)} for m in members],
+                      "modes": [{"source": m["source"], "text": m["text"]} for m in mode_packets],
                       "kinds": {"overlap": "two or more claim the same work in this situation",
-                                "contradiction": "one instructs what another forbids, or a mode's standing instruction conflicts with a member",
+                                "contradiction": "one instructs what another forbids, or a mode's standing instruction conflicts with a member "
+                                                 "(a worker started by a `plugin:role` member receives the modes too)",
                                 "premise": "one assumes something another forbids (e.g. artifacts in the repo vs a clean repo)"},
                       "instructions": ("Judge only this situation. For each finding, name the members involved (a mode is named by its source), "
-                                       "quote the exact sentence from each member (or the mode's script/README, Read it if you must) that creates "
-                                       "the conflict, say why, and propose one resolution as a JSON object written as a string: {\"use\": id} | {\"deny\": [ids]} | "
+                                       "quote the exact sentence from each member's `text` (a mode's `text` is what it injects into every session) "
+                                       "that creates the conflict, say why, and propose one resolution as a JSON object written as a string: {\"use\": id} | {\"deny\": [ids]} | "
                                        "{\"order\": [ids]} | {\"accept\": reason}. No quote, no finding. Similar names are not evidence. Change no files.")}
             res = manifest.get("resolutions", {}).get(packet["situation"])
             if isinstance(res, dict):   # the situation is already resolved: the judge also says whether that resolution still fits what it finds now
@@ -713,7 +858,7 @@ def cmd_judge(args):
     existing = load_json(os.path.join(target, JUDGMENTS))
     if not cluster.get("groups") and not existing:
         raise SystemExit("no cluster-response.json with groups in %s" % d)
-    valid_ids = {ident(sk) for sk in skills} | {h["source"] for h in modes}
+    valid_ids = {ident(sk) for sk in skills} | {h["source"] for h in modes} | set(roles)
     results, rejected, verdicts = [], [], {}
     for name in sorted(os.listdir(d)):
         if not (name.startswith("group-") and name.endswith("-response.json")):
@@ -743,11 +888,11 @@ def cmd_judge(args):
         # what travels for the resolution gate: the judge's verdict on the existing resolution, the texts it could quote from, and who judged
         w = resp.get("worker") or {}
         account = " ".join(str(w[k]) for k in ("host", "model") if w.get(k)) or args.by or "unknown"
-        packed = "\n".join([str(m.get("text", "")) for m in req.get("members", [])] + [str(m.get("command", "")) for m in req.get("modes", [])])
+        packed = "\n".join([str(m.get("text", "")) for m in req.get("members", [])] + [str(m.get("text", m.get("command", ""))) for m in req.get("modes", [])])
         verdicts[req.get("situation", name)] = (resp.get("resolution_verdict"), packed, account)
         results.append({"situation": req.get("situation", name), "members": members, "modes": mode_ids,
                         "members-fingerprint": members_fingerprint(manifest, members + mode_ids),
-                        "members-text-fingerprint": members_text_fingerprint(s, members + mode_ids),
+                        "members-text-fingerprint": members_text_fingerprint(s, members + mode_ids, manifest),
                         # who judged: the worker's own account (host + model, machine-readable) when the response
                         # carries one; --by is the runner's claim, kept only as the fallback — "default model" tells
                         # a later reader nothing, "claude-code claude-opus-5[1m]" does
@@ -783,7 +928,7 @@ def cmd_judge(args):
         redone = {r["situation"] for r in results}
         results = [r for r in existing.get("situations", []) if r["situation"] not in redone] + results
         rejected = existing.get("rejected", []) + rejected
-    doc = {"artifact-type": "hunsu/judgments@1", "skills-fingerprint": skills_fingerprint(manifest, s), "skills": locked_skill_ids(manifest, s),
+    doc = {"artifact-type": "hunsu/judgments@1", "skills-fingerprint": skills_fingerprint(manifest, s), "skills": judged_ids(manifest, s),
            "judged-by": args.by or judged_by(results), "situations": results, "rejected": rejected}
     save_json(os.path.join(target, JUDGMENTS), doc)
     write_conflicts_doc(target, doc, manifest)
@@ -1047,6 +1192,11 @@ def cmd_add(args):
     args.plugin = name
     source = found["source"] if shareable(found["source"]) else "unpublished"
     manifest["plugins"][name] = {"version": found["version"], "source": source, "marketplace": found["marketplace"]}
+    if getattr(args, "take_content", None):
+        # the version's content changed under its name (a release rewritten, a history erased) and a person takes it as
+        # this version's: the reason is the manifest's, committed, and `check` accepts exactly this content — not the next edit
+        manifest["plugins"][name]["content-taken"] = {"fingerprint": tree_fingerprint(found["path"]) if os.path.isdir(found.get("path") or "") else None,
+                                                      "why": args.take_content, "at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     save_json(path, manifest)
     note = ""
     if source == "unpublished":
@@ -1200,6 +1350,8 @@ def main(argv=None):
             p.add_argument("--json", action="store_true")
         if name in ("add", "remove", "link", "unlink"):
             p.add_argument("plugin")
+        if name == "add":
+            p.add_argument("--take-content", default=None, metavar="WHY", help="the version's content changed under its name (a rewritten release): take this content as the version's, with the reason — recorded in hunsu.json")
         if name == "link":
             p.add_argument("path", nargs="?", default=None)
         if name == "install":

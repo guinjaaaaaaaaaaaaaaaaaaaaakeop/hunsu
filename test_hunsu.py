@@ -262,6 +262,15 @@ def test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host():
         write(os.path.join(root, "skills", "build", "SKILL.md"), "---\nname: build\ndescription: does build, edited after the lock\n---\n")
         errors, _, _ = hunsu.check(h.target)
         assert len(errors) == 1 and "plugin alpha: content differs from what the lock recorded for version 1.0.0" in errors[0], errors
+        # a release rewritten under its own version (a history erased): a person takes the content, with the reason, in the manifest
+        code, out = run("add", "alpha", "--take-content", "the 1.0.0 release was rewritten; this is it", "--target", h.target)
+        assert code == 0
+        errors, _, info = hunsu.check(h.target)
+        assert not errors and any("content taken under version 1.0.0 (the 1.0.0 release was rewritten" in i for i in info), (errors, info)
+        assert run("lock", "--target", h.target)[0] == 0 and not hunsu.check(h.target)[0]
+        write(os.path.join(root, "skills", "build", "SKILL.md"), "---\nname: build\ndescription: edited again after the take\n---\n")
+        assert any("content differs" in e for e in hunsu.check(h.target)[0]), "the take covers exactly that content, not the next edit"
+        write(os.path.join(root, "skills", "build", "SKILL.md"), "---\nname: build\ndescription: does build, edited after the lock\n---\n")
         write(os.path.join(root, ".claude-plugin", "plugin.json"), {"name": "alpha", "version": "1.0.1"})
         h.installed["alpha@m1"][0]["version"] = "1.0.1"; h.flush()
         errors, _, _ = hunsu.check(h.target)
@@ -402,10 +411,18 @@ def test_compose_stops_at_each_gate_then_locks():
         assert hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["judge"] == "skipped"
 
 
+MODE_HOOK = {"SessionStart": [{"hooks": [{"type": "command", "command": "%s ${CLAUDE_PLUGIN_ROOT}/mode.py" % sys.executable}]}]}
+
+
+def mode_script(root, says):
+    """A SessionStart hook the way a host runs one: reads the payload, answers additionalContext — the text a session receives."""
+    write(os.path.join(root, "mode.py"), 'import json,sys;json.load(sys.stdin);print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%r}}))' % says)
+
+
 def test_judge_packets_consume_and_situation_resolutions():
     with Host() as h:
         h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
-        h.add_plugin("m2", "beta", "2.0.0", ["review"], hooks={"SessionStart": [{"hooks": [{"type": "command", "command": "node mode.js"}]}]})
+        mode_script(h.add_plugin("m2", "beta", "2.0.0", ["review"], hooks=MODE_HOOK), "Never build before asking.")
         h.flush()
         run("init", "--target", h.target)
         run("add", "alpha", "--target", h.target)
@@ -415,6 +432,8 @@ def test_judge_packets_consume_and_situation_resolutions():
         assert code == 0 and os.path.exists(os.path.join(d, "cluster-request.json")), out
         packet = hunsu.load_json(os.path.join(d, "cluster-request.json"))
         assert {s["id"] for s in packet["skills"]} == {"alpha:critique", "alpha:build", "beta:review"} and packet["modes"][0]["source"] == "plugin:beta"
+        # a mode travels as the text it injects (hunsu ran its hook as the host does), never as its command line
+        assert packet["modes"][0]["text"] == "Never build before asking." and "command" not in packet["modes"][0], packet["modes"]
         # the judge's stage-1 answer
         write(os.path.join(d, "cluster-response.json"), {"groups": [
             {"situation": "reviewing a change", "members": ["alpha:critique", "beta:review"], "why": "both review"},
@@ -424,6 +443,7 @@ def test_judge_packets_consume_and_situation_resolutions():
         g1 = hunsu.load_json(os.path.join(d, "group-01-request.json"))
         assert g1["situation"] == "reviewing a change" and [m["id"] for m in g1["members"]] == ["alpha:critique", "beta:review"]
         assert "does critique" in g1["members"][0]["text"], "full SKILL.md text travels with stage 2"
+        assert g1["modes"] == [{"source": "plugin:beta", "text": "Never build before asking."}]
         # stage-2 answers: one good finding, one without quotes (must be rejected), one for the mode
         write(os.path.join(d, "group-01-response.json"), {"findings": [
             {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique", "beta:review": "does review"},
@@ -467,9 +487,13 @@ def test_judge_packets_consume_and_situation_resolutions():
         assert len(stale_errs) == 1 and "1 situation(s)" in stale_errs[0] and "building" in stale_errs[0], errors   # alpha:build is in one
         m["plugins"]["alpha"]["version"] = "1.0.0"; hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), m)
         h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
-        # a mode's command changed: the mode is a member of every situation, so both go stale; `--stale` re-asks just those and consume merges
+        # the mode's script changed what it says (the command line did not): the mode is a member of every situation, so both go
+        # stale; `--stale` re-asks just those and consume merges
         m["plugins"]["beta"]["version"] = "2.1.0"; hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), m)
-        h.add_plugin("m2", "beta", "2.1.0", ["review"], hooks={"SessionStart": [{"hooks": [{"type": "command", "command": "node mode2.js"}]}]}); h.flush()
+        beta21 = h.add_plugin("m2", "beta", "2.1.0", ["review"], hooks=MODE_HOOK); mode_script(beta21, "Never build before asking."); h.flush()
+        errors, _, _ = hunsu.check(h.target)
+        assert not any("judged about other text" in e for e in errors), errors   # same command, same script: the bump alone stales nothing
+        mode_script(beta21, "Never build before asking, and say so.")
         errors, _, _ = hunsu.check(h.target)
         stale_errs = [e for e in errors if "judged about other text" in e]
         assert len(stale_errs) == 1 and "2 situation(s)" in stale_errs[0], errors
@@ -529,6 +553,46 @@ def test_sentinel_allows_locked_denies_unlocked_and_resolved_away():
         assert call("")[0] == 0, "no skill name -> not ours to judge"
         os.remove(os.path.join(h.target, hunsu.LOCK))
         assert call("zeta:anything")[0] == 0, "no lock -> allow"
+
+
+def test_the_judge_reads_a_roles_prompt_and_a_modes_injected_text_not_their_scripts():
+    """A worker started by a role receives the project's modes; a mode that says "ask the user" and a role that says "ask no one"
+    is a contradiction the judge can only see with both texts in front of it — so both travel as text, asked of the scripts the
+    way their hosts ask them (`--prompt-only`, a SessionStart payload)."""
+    with Host() as h:
+        gamma = h.add_plugin("m1", "gamma", "1.0.0", ["plan"], roles={"build": [sys.executable, "{plugin:gamma}/w.py", "--request", "{request}", "--response", "{response}", "--host", "{host}"]})
+        write(os.path.join(gamma, "w.py"), 'import sys,json;req=json.load(open(sys.argv[sys.argv.index("--request")+1]));'
+              'print("You are the builder. Ask no one; decide and report. Host: " + sys.argv[sys.argv.index("--host")+1]) if "--prompt-only" in sys.argv else sys.exit(3)')
+        mode_script(h.add_plugin("m2", "delta", "1.0.0", [], hooks=MODE_HOOK), "Before any decision, ask the user.")
+        h.flush()
+        run("init", "--target", h.target); run("add", "gamma", "--target", h.target); run("add", "delta", "--target", h.target)
+        d = os.path.join(h.target, "judge")
+        code, out = run("judge", "request", "--target", h.target, "--out", d)
+        assert code == 0 and "1 roles" in out, out
+        packet = hunsu.load_json(os.path.join(d, "cluster-request.json"))
+        role = next(x for x in packet["skills"] if x["id"] == "gamma:build")
+        assert "the prompt the `build` worker is sent" in role["description"] and role["path"].endswith("/w.py"), role
+        assert packet["modes"] == [{"source": "plugin:delta", "text": "Before any decision, ask the user.", "note": packet["modes"][0]["note"]}]
+        write(os.path.join(d, "cluster-response.json"), {"groups": [{"situation": "building", "members": ["gamma:build"]}]})
+        code, out = run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))
+        assert code == 0 and "1 group packets" in out, out
+        g = hunsu.load_json(os.path.join(d, "group-01-request.json"))
+        assert g["members"][0]["text"] == "You are the builder. Ask no one; decide and report. Host: claude", g["members"]   # the worker's own answer, host resolved
+        assert g["modes"][0]["text"] == "Before any decision, ask the user."
+        # the judge quotes the injected text and the prompt — both verifiable against the packet, so the finding stands
+        write(os.path.join(d, "group-01-response.json"), {"findings": [
+            {"kind": "contradiction", "members": ["gamma:build", "plugin:delta"], "quotes": {"gamma:build": "Ask no one", "plugin:delta": "ask the user"},
+             "why": "the worker inherits the mode", "proposed": {"accept": "the worker is unattended by design"}}]})
+        code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "test")
+        assert code == 0 and "1 findings" in out and "0 rejected" in out, out
+        j = hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))
+        assert j["situations"][0]["members"] == ["gamma:build"] and j["situations"][0]["modes"] == ["plugin:delta"]
+        # the prompt changed under the same version: the situation is stale, like a SKILL.md edit
+        errors, _, _ = hunsu.check(h.target)
+        assert not any("judged about other text" in e for e in errors) and any("no resolution" in e for e in errors), errors
+        write(os.path.join(gamma, "w.py"), 'import sys;print("You are the builder. Ask the user when unsure.")')
+        errors, _, _ = hunsu.check(h.target)
+        assert any("judged about other text" in e and "building" in e for e in errors), errors
 
 
 def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them():
