@@ -43,6 +43,7 @@ And on every skill call (PreToolUse on `Skill`): a skill that is not in `hunsu.l
 | `hunsu.json` | yes | you (via `init`, `add`, and by hand for `engines`, `resolutions`, `local-hooks-ok`) |
 | `hunsu.lock.json` | yes | `lock` — the resolved snapshot: versions, skills, hooks, engine versions found, warnings |
 | `hunsu-judgments.json` | yes | the judge round's verdicts per situation, fingerprinted by the members' text — what `judge: judged` in the lock refers to; `hunsu-conflicts.md` is its rendering (`judge render`, not committed) |
+| `.claude/settings.local.json` | no (`init` and `dev` add it to `.gitignore`; `check` fails if it is committed) | `dev` — the working sources this machine runs instead of the manifest's copies |
 | `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine; by hand, `local-hooks-ok` for user-level hooks that are only yours |
 
 ## Commands
@@ -61,6 +62,7 @@ Six are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin
 | `judge request` / `judge consume` | conflict judgment — see below |
 | `install` | the second machine: for each plugin in the manifest that is missing here, `claude plugin marketplace add` + `claude plugin install <plugin>@<marketplace> --scope project`, then tells you to `check`. An `unpublished` plugin installs from its `hunsu link <plugin> <marketplace dir>` on this machine, or not at all. A plugin present at another version is reported as drift, not reinstalled. `--refresh <plugin>…` (or `all`) re-snapshots a *linked* plugin — Claude Code: uninstall + install at project scope; Codex: `plugin remove` + `plugin add` — so an edited or bumped source reaches the copy the host loads. (Claude Code loads a `directory` marketplace's plugins in place, so there the refresh only updates the host's record.) |
 | `link` / `unlink` | this machine only |
+| `dev <plugin>` / `dev --off <plugin>` | this machine only: run a plugin's working source in this project — to try an unreleased change where the committed settings install the released one. Enables `<plugin>@<local marketplace>` at local scope in `.claude/settings.local.json` (the host's machine-local settings, never committed) and switches the manifest's copy off there; recorded in `hunsu.local.json`. `check` reports it as in development, not as drift; `lock` refuses until `--off`, so a lock never names unreleased content |
 
 ## Conflicts between skills
 

@@ -665,6 +665,35 @@ def test_a_hook_that_is_only_yours_is_told_once_names_what_runs_here_and_is_ackn
         assert any(hunsu.LOCAL + " is committed" in e for e in errors), errors
 
 
+def test_a_plugin_in_development_runs_here_only_and_is_never_locked():
+    """A public project's settings install the released plugin; trying an unreleased change there must not name a local
+    marketplace in anything committed. `hunsu dev` enables the working source in .claude/settings.local.json (the host's
+    machine-local settings) and records it in hunsu.local.json; check reports it as in development, not as drift; lock refuses."""
+    with Host() as h:
+        h.add_plugin("pub", "alpha", "1.0.0", ["build"])
+        dev_root = h.add_plugin("devmarket", "alpha", "1.0.0", ["build", "extra"])
+        h.enabled.pop("alpha@devmarket"); h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)); m["engines"] = {"claude-code": ">=0.1"}; m["judge"] = "skip"
+        hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), m)
+        assert run("lock", "--target", h.target)[0] == 0
+        # what `hunsu dev alpha` leaves behind (the host's install at local scope is not run here)
+        write(os.path.join(h.target, ".claude", "settings.local.json"), {"enabledPlugins": {"alpha@devmarket": True, "alpha@pub": False}})
+        write(os.path.join(h.target, hunsu.LOCAL), {"links": {}, "dev": {"alpha": "devmarket"}})
+        srv = hunsu.survey(h.target)
+        assert hunsu.enabled(srv, "alpha", m["plugins"]["alpha"])["marketplace"] == "devmarket"
+        assert "alpha:extra" in [("%s:%s" % (x["plugin"], x["name"])) for x in srv["skills"]], "the working source's skills are what runs"
+        errors, warnings, info = hunsu.check(h.target)
+        assert not [e for e in errors if "alpha" in e and "judged" not in e], errors
+        assert any("in development here — from local marketplace devmarket" in i for i in info), info
+        assert not any("enabled here but not in manifest" in i for i in info), info
+        code, out = run("lock", "--target", h.target)
+        assert code == 1 and "in development here: alpha (from devmarket)" in out, out
+        assert "devmarket" not in io.open(os.path.join(h.target, hunsu.MANIFEST), encoding="utf-8").read(), "nothing committed names the local marketplace"
+        gi = io.open(os.path.join(h.target, ".gitignore"), encoding="utf-8").read()
+        assert hunsu.LOCAL_SETTINGS in gi and hunsu.LOCAL in gi, gi
+
+
 def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them():
     lock = {"resolutions": {"retro": "dakdol", "old": "deny",
                             "reviewing a change": {"use": "a:eyes", "deny": ["b:review"], "reviewed": True},

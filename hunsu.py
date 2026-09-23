@@ -182,9 +182,10 @@ def survey(target):
         return survey_codex(target)
     user = load_json(os.path.join(CLAUDE, "settings.json"))
     project = load_json(os.path.join(target, ".claude", "settings.json"))
+    local = load_json(os.path.join(target, ".claude", "settings.local.json"))   # this machine's, not committed: `hunsu dev` writes here
     installed = load_json(os.path.join(CLAUDE, "plugins", "installed_plugins.json")).get("plugins", {})
     markets = load_json(os.path.join(CLAUDE, "plugins", "known_marketplaces.json"))
-    enabled = {**user.get("enabledPlugins", {}), **project.get("enabledPlugins", {})}
+    enabled = {**user.get("enabledPlugins", {}), **project.get("enabledPlugins", {}), **local.get("enabledPlugins", {})}
 
     plugins, skills, hooks = {}, [], []
     for key, on in sorted(enabled.items()):
@@ -219,20 +220,25 @@ def survey(target):
     # Modes: anything injecting instructions at SessionStart changes how all work is done, without being called.
     modes = sorted({h["source"] for h in hooks if h["event"] == "SessionStart"})
     return {"host": HOST, "target": os.path.abspath(target).replace(os.sep, "/"),
-            "plugins": plugins, "skills": skills, "hooks": hooks, "modes": modes}
+            "plugins": plugins, "skills": skills, "hooks": hooks, "modes": modes, "dev": load_json(os.path.join(target, LOCAL)).get("dev", {})}
 
 
 def enabled(s, name, want):
-    """The host's entry for a manifest plugin: the one from the manifest's marketplace, not a namesake from another."""
-    return s["plugins"].get("%s@%s" % (name, (want or {}).get("marketplace")))
+    """The host's entry for a manifest plugin: the one from the manifest's marketplace, not a namesake from another — or,
+    while `hunsu dev` has it in development on this machine, the one from the local marketplace it named."""
+    have = s["plugins"].get("%s@%s" % (name, (want or {}).get("marketplace")))
+    dev = (s.get("dev") or {}).get(name)
+    return s["plugins"].get("%s@%s" % (name, dev)) if dev and not have else have
 
 
-def in_manifest(manifest, sk):
-    """A skill belongs to the project when its plugin, from its marketplace, is in the manifest (or it is the project's own)."""
+def in_manifest(manifest, sk, s=None):
+    """A skill belongs to the project when its plugin, from its marketplace, is in the manifest (or it is the project's own) —
+    or from the local marketplace `hunsu dev` put that plugin in development from, on this machine."""
     if sk["plugin"] == "project":
         return True
     m = manifest.get("plugins", {}).get(sk["plugin"])
-    return bool(m) and m.get("marketplace") == sk.get("marketplace")
+    dev = ((s or {}).get("dev") or {}).get(sk["plugin"])
+    return bool(m) and (m.get("marketplace") == sk.get("marketplace") or (dev is not None and dev == sk.get("marketplace")))
 
 
 def cmd_survey(args):
@@ -263,7 +269,7 @@ def cmd_init(args):
     # session prose no one reads back — the judgment, quotes and worker account already live in the response JSON.
     ignore = os.path.join(args.target, ".gitignore")
     lines = io.open(ignore, encoding="utf-8").read().split("\n") if os.path.exists(ignore) else []
-    missing = [e for e in (LOCAL, CONFLICTS_DOC, "*-response.transcript.jsonl") if e not in lines]
+    missing = [e for e in (LOCAL, LOCAL_SETTINGS, CONFLICTS_DOC, "*-response.transcript.jsonl") if e not in lines]
     if missing:
         with io.open(ignore, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(("" if not lines or lines[-1] == "" else "\n") + "\n".join(missing) + "\n")
@@ -398,25 +404,33 @@ def check(target):
     s = survey(target)
     errors, warnings, info = [], [], []
 
-    # 0. the local file is this machine's (links, hooks only this person runs): it must never be committed
-    if os.path.exists(os.path.join(target, LOCAL)) and os.path.isdir(os.path.join(target, ".git")):
-        import subprocess
-        try:
-            ignored = subprocess.run(["git", "check-ignore", "-q", LOCAL], cwd=target, capture_output=True).returncode == 0
-            tracked = bool(subprocess.run(["git", "ls-files", LOCAL], cwd=target, capture_output=True, text=True).stdout.strip())
-        except OSError:
-            ignored, tracked = True, False
-        if tracked:
-            errors.append("%s is committed — it holds this machine's links and hooks: `git rm --cached %s`, and add it to .gitignore" % (LOCAL, LOCAL))
-        elif not ignored:
-            warnings.append("%s is not ignored by git — it holds this machine's links and hooks; add it to .gitignore" % LOCAL)
+    # 0. the local files are this machine's (links, dev plugins, hooks only this person runs): they must never be committed
+    for local_file in (LOCAL, LOCAL_SETTINGS):
+        if os.path.exists(os.path.join(target, local_file)) and os.path.isdir(os.path.join(target, ".git")):
+            import subprocess
+            try:
+                ignored = subprocess.run(["git", "check-ignore", "-q", local_file], cwd=target, capture_output=True).returncode == 0
+                tracked = bool(subprocess.run(["git", "ls-files", local_file], cwd=target, capture_output=True, text=True).stdout.strip())
+            except OSError:
+                ignored, tracked = True, False
+            if tracked:
+                errors.append("%s is committed — it holds this machine's links and hooks: `git rm --cached %s`, and add it to .gitignore" % (local_file, local_file))
+            elif not ignored:
+                warnings.append("%s is not ignored by git — it holds this machine's links and hooks; add it to .gitignore" % local_file)
 
     # 1. manifest vs what is enabled here. A linked plugin is this machine's development copy: version drift is expected.
     linked = links(target)
+    dev = s.get("dev") or {}
     for name, want in manifest["plugins"].items():
         have = enabled(s, name, want)
         if not have:
             errors.append("plugin %s: in manifest (from %s), not enabled on this host — `hunsu install`" % (name, want.get("marketplace")))
+            continue
+        if name in dev:
+            # this machine runs the plugin's working source, unreleased: the lock's version and content are not what runs here,
+            # on purpose, and nothing about it is committed (.claude/settings.local.json, hunsu.local.json)
+            info.append("plugin %s: in development here — from local marketplace %s at %s (the manifest pins %s from %s); `hunsu dev --off %s` before locking"
+                        % (name, dev[name], have["version"], want["version"], want.get("marketplace"), name))
             continue
         if have["version"] != want["version"] and name not in linked:
             errors.append("plugin %s: manifest %s, host %s" % (name, want["version"], have["version"]))
@@ -451,6 +465,8 @@ def check(target):
             warnings.append("plugin %s: source %r — the team cannot install it until it has a shareable source" % (name, want["source"]))
     for key, p in s["plugins"].items():
         m = manifest["plugins"].get(p["name"])
+        if dev.get(p["name"]) == p["marketplace"]:
+            continue
         if not m or m.get("marketplace") != p["marketplace"]:
             info.append("plugin %s: enabled here but not in manifest — its skills are not part of this project" % key)
     if any(e.startswith("plugin ") and "not enabled" in e for e in errors):
@@ -513,7 +529,7 @@ def check(target):
     # 4. skill name overlap inside the manifest — needs a resolution
     owners = {}
     for sk in s["skills"]:
-        if in_manifest(manifest, sk):
+        if in_manifest(manifest, sk, s):
             owners.setdefault(sk["name"], []).append(sk["plugin"])
     for name, plugins in sorted(owners.items()):
         if len(plugins) > 1 and name not in manifest.get("resolutions", {}):
@@ -586,7 +602,7 @@ KINDS = ("overlap", "contradiction", "premise")
 
 
 def locked_skill_ids(manifest, s):
-    return sorted("%s:%s" % (sk["plugin"], sk["name"]) for sk in s["skills"] if in_manifest(manifest, sk))
+    return sorted("%s:%s" % (sk["plugin"], sk["name"]) for sk in s["skills"] if in_manifest(manifest, sk, s))
 
 
 def role_ids(manifest, s):
@@ -839,7 +855,7 @@ def cmd_judge(args):
         print("%s rendered from %s (a derived document — read it, do not commit it)" % (CONFLICTS_DOC, JUDGMENTS))
         return 0
     s = survey(target)
-    skills = [sk for sk in s["skills"] if in_manifest(manifest, sk)]
+    skills = [sk for sk in s["skills"] if in_manifest(manifest, sk, s)]
     modes = [h for h in s["hooks"] if h["event"] == "SessionStart" and h["source"].startswith("plugin:")
              and h["source"][7:] in manifest["plugins"]]
     ident = lambda sk: "%s:%s" % (sk["plugin"], sk["name"])
@@ -1183,6 +1199,11 @@ def policy_lines(lock):
 
 def cmd_lock(args):
     """Snapshot of the resolved environment. Written only when check has no errors; warnings are recorded, not hidden."""
+    dev = load_json(os.path.join(args.target, LOCAL)).get("dev", {})
+    if dev:
+        # a lock names released content; a working source on one machine is neither released nor the team's
+        raise SystemExit("not locked — in development here: %s. The lock names what the team installs; `hunsu dev --off %s` first"
+                         % (", ".join("%s (from %s)" % kv for kv in sorted(dev.items())), " ".join(sorted(dev))))
     errors, warnings, _ = check(args.target)
     if errors:
         for line in errors:
@@ -1281,6 +1302,7 @@ def cmd_add(args):
 # ---------------------------------------------------------------- links (this machine only)
 
 LOCAL = "hunsu.local.json"
+LOCAL_SETTINGS = ".claude/settings.local.json"   # the host's own machine-local settings: `hunsu dev` enables a working source there
 
 
 def links(target):
@@ -1335,6 +1357,62 @@ def set_link(target, plugin, path):
     else:
         doc["links"][plugin] = path.replace(os.sep, "/")
     save_json(os.path.join(target, LOCAL), doc)
+
+
+def cmd_dev(args):
+    """Run a plugin's working source in this project on this machine only — to try an unreleased change in a project whose
+    committed settings install the released one (a public project cannot name a local marketplace). `.claude/settings.local.json`
+    (the host's machine-local settings, never committed) enables `<plugin>@<local marketplace>` at local scope and turns the
+    manifest's copy off; `hunsu.local.json` remembers it. Nothing committed changes; `lock` refuses until `--off`."""
+    import subprocess
+    target, name = args.target, args.plugin
+    manifest = load_json(os.path.join(target, MANIFEST))
+    want = manifest.get("plugins", {}).get(name)
+    if not want:
+        raise SystemExit("%s is not in %s — `hunsu add` it first; dev replaces a declared plugin, it does not add one" % (name, MANIFEST))
+    doc = load_json(os.path.join(target, LOCAL)) or {"links": {}}
+    settings_path = os.path.join(target, LOCAL_SETTINGS)
+    settings = load_json(settings_path)
+    ep = settings.setdefault("enabledPlugins", {})
+    run = lambda *a: subprocess.run(["claude", "plugin", *a], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if args.off:
+        market = doc.get("dev", {}).pop(name, None)
+        if not market:
+            raise SystemExit("%s is not in development here" % name)
+        run("uninstall", "%s@%s" % (name, market), "--scope", "local")
+        ep.pop("%s@%s" % (name, market), None)
+        ep.pop("%s@%s" % (name, want["marketplace"]), None)
+        if not doc["dev"]:
+            doc.pop("dev")
+    else:
+        markets = load_json(os.path.join(CLAUDE, "plugins", "known_marketplaces.json"))
+        market = args.market or next((m for m, rec in markets.items() if (rec.get("source") or {}).get("source") == "directory"
+                                      and os.path.isdir(os.path.join((rec.get("source") or {}).get("path", ""), name))), None)
+        if not market or market not in markets:
+            raise SystemExit("no local (directory) marketplace with %s is known here — `claude plugin marketplace add <dir>`, or --market NAME" % name)
+        done = run("install", "%s@%s" % (name, market), "--scope", "local")
+        if done.returncode:
+            raise SystemExit("installing %s@%s at local scope failed: %s" % (name, market, (done.stderr or done.stdout).strip()[-300:]))
+        settings = load_json(settings_path)   # the host wrote its own entry; keep it and add the switch-off
+        ep = settings.setdefault("enabledPlugins", {})
+        ep["%s@%s" % (name, market)] = True
+        ep["%s@%s" % (name, want["marketplace"])] = False
+        doc.setdefault("dev", {})[name] = market
+    save_json(settings_path, settings)
+    save_json(os.path.join(target, LOCAL), doc)
+    ensure_ignored(target, [LOCAL, LOCAL_SETTINGS])
+    print(("%s back to %s — the manifest's copy runs here again" % (name, want["marketplace"])) if args.off else
+          "%s in development here: %s@%s at local scope (%s, not committed); `lock` refuses until `hunsu dev --off %s`" % (name, name, market, LOCAL_SETTINGS, name))
+    return 0
+
+
+def ensure_ignored(target, entries):
+    path = os.path.join(target, ".gitignore")
+    lines = io.open(path, encoding="utf-8").read().split("\n") if os.path.exists(path) else []
+    missing = [e for e in entries if e not in lines]
+    if missing:
+        with io.open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(("" if not lines or lines[-1] == "" else "\n") + "\n".join(missing) + "\n")
 
 
 def cmd_link(args):
@@ -1415,15 +1493,18 @@ def cmd_compose(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="hunsu", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("survey", "init", "add", "remove", "check", "link", "unlink", "lock", "compose", "install", "judge"):
+    for name in ("survey", "init", "add", "remove", "check", "link", "unlink", "dev", "lock", "compose", "install", "judge"):
         p = sub.add_parser(name)
         if name == "check":
             p.add_argument("--findings", action="store_true", help="print drift and unread resolutions as dwitbuk/findings@1 JSON")
         p.add_argument("--target", default=".")
         if name == "survey":
             p.add_argument("--json", action="store_true")
-        if name in ("add", "remove", "link", "unlink"):
+        if name in ("add", "remove", "link", "unlink", "dev"):
             p.add_argument("plugin")
+        if name == "dev":
+            p.add_argument("--market", default=None, help="the local (directory) marketplace holding the working source; default: the one that has the plugin")
+            p.add_argument("--off", action="store_true", help="back to the manifest's copy")
         if name == "add":
             p.add_argument("--take-content", default=None, metavar="WHY", help="the version's content changed under its name (a rewritten release): take this content as the version's, with the reason — recorded in hunsu.json")
         if name == "link":
@@ -1439,7 +1520,7 @@ def main(argv=None):
             p.add_argument("--by", default=None, help="consume: who judged — default: what the workers' own `worker` records say (host and model)")
     args = parser.parse_args(argv)
     return {"survey": cmd_survey, "init": cmd_init, "add": cmd_add, "check": cmd_check,
-            "link": cmd_link, "unlink": cmd_unlink, "lock": cmd_lock, "compose": cmd_compose,
+            "link": cmd_link, "unlink": cmd_unlink, "dev": cmd_dev, "lock": cmd_lock, "compose": cmd_compose,
             "install": cmd_install, "judge": cmd_judge, "remove": cmd_remove}[args.cmd](args)
 
 
