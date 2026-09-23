@@ -457,7 +457,10 @@ def check(target):
     for key, group in seen.items():
         if len(group) > 1:
             warnings.append("hook %s %s: registered %d times (%s)" % (key[0], os.path.basename(key[2]), len(group), ", ".join(sorted({g["source"] for g in group}))))
-    ok = set(manifest.get("local-hooks-ok", []))
+    # a user-level hook is the person's, not the team's: it may be acknowledged in the team's manifest, or — when it is only this
+    # person's tool (an observer, a terminal app's agent hooks) — in hunsu.local.json, which is not committed, so one person's
+    # setup never becomes part of the project's record
+    ok = set(manifest.get("local-hooks-ok", [])) | set(load_json(os.path.join(target, LOCAL)).get("local-hooks-ok", []))
     for h in s["hooks"]:
         if h["source"] == "user" and not any(tag in h["command"] for tag in ok):
             kind = "mode instruction" if h["event"] == "SessionStart" else "hook"
@@ -1359,7 +1362,7 @@ def cmd_compose(args):
     user_hooks = [w for w in warnings if w.startswith("user ")]
     if user_hooks:
         # Acknowledged = listed in local-hooks-ok. One mechanism; no separate "reviewed" flag.
-        return stop("user-level hooks run here but are not the project's: move each into the project's settings, list its script name in `local-hooks-ok` (it is yours, not the team's), or remove it from your own settings — then re-run compose",
+        return stop("user-level hooks run here but are not the project's: move each into the project's settings; list its script name in `local-hooks-ok` — in hunsu.local.json when it is only yours (not committed), in hunsu.json when the whole team runs it; or remove it from your own settings — then re-run compose",
                     *user_hooks)
     return cmd_lock(args)
 

@@ -625,6 +625,21 @@ def test_role_prompts_are_asked_until_answered_and_no_machine_path_reaches_the_j
         assert eps not in json.dumps(json.loads(packet)["modes"]), "no plugin root in what a judge may quote"
 
 
+def test_a_hook_that_is_only_yours_is_acknowledged_in_the_local_file_never_the_manifest():
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.user_hooks = {"Stop": [{"hooks": [{"type": "command", "command": "sh ~/.tool/agent-hooks/claude-hook.cmd"}]}]}
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        errors, warnings, _ = hunsu.check(h.target)
+        assert any("claude-hook.cmd" in w for w in warnings), warnings
+        write(os.path.join(h.target, hunsu.LOCAL), {"local-hooks-ok": ["claude-hook.cmd"]})
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not any("claude-hook.cmd" in w for w in warnings), warnings
+        assert "claude-hook.cmd" not in io.open(os.path.join(h.target, hunsu.MANIFEST), encoding="utf-8").read()
+        assert hunsu.LOCAL in io.open(os.path.join(h.target, ".gitignore"), encoding="utf-8").read()   # the local file is never committed
+
+
 def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them():
     lock = {"resolutions": {"retro": "dakdol", "old": "deny",
                             "reviewing a change": {"use": "a:eyes", "deny": ["b:review"], "reviewed": True},

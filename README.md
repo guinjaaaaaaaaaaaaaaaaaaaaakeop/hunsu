@@ -43,7 +43,7 @@ And on every skill call (PreToolUse on `Skill`): a skill that is not in `hunsu.l
 | `hunsu.json` | yes | you (via `init`, `add`, and by hand for `engines`, `resolutions`, `local-hooks-ok`) |
 | `hunsu.lock.json` | yes | `lock` — the resolved snapshot: versions, skills, hooks, engine versions found, warnings |
 | `hunsu-judgments.json` | yes | the judge round's verdicts per situation, fingerprinted by the members' text — what `judge: judged` in the lock refers to; `hunsu-conflicts.md` is its rendering (`judge render`, not committed) |
-| `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine |
+| `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine; by hand, `local-hooks-ok` for user-level hooks that are only yours |
 
 ## Commands
 
@@ -101,7 +101,7 @@ A first judgment is rough by design; refine when a real conflict shows up. Modes
   `deny` and `use`-on-a-name reach the lock's `denied` list, which the PreToolUse hook enforces. `order` and `accept` are facts for the agent, not enforced. A member may also be a role's prompt (`hacheong:build`, judged as `plugin:role`): naming one is a fact for the agent too — the hook guards skill calls, not the workers a runner starts.
   `"reviewed": false` marks a proposal applied without a human reading it — allowed, never hidden.
 - `judge: "skip"` — lock without a conflict judgment. Recorded in the lock as `judge: skipped`.
-- `local-hooks-ok` — script names of user-level hooks that may run here without being part of the project (observers).
+- `local-hooks-ok` — script names of user-level hooks that may run here without being part of the project (observers). A hook that is only yours — a terminal app's agent hooks, a personal logger — goes in `hunsu.local.json` under the same key instead: acknowledged on this machine, never committed.
 - `settings` — the team's switches for its products, carried into the lock unread by hunsu (e.g. `{"dwitbuk": {"stop-eyes": true}}`).
 - `reporters` — name → argv of the commands that report findings for the reviewer (`dwitbuk/findings@1`), e.g. `["python", "{plugin:chongdae}/chongdae.py", "report", "--since", "{since}"]`. Locked; dwitbuk reads them from the lock. hunsu's own is `check --findings` (drift, unread resolutions).
 
