@@ -594,6 +594,19 @@ def members_fingerprint(manifest, members):
 _MODE_TEXT = {}
 
 
+def machine_neutral(text, s):
+    """A text a judge will quote, with this machine taken out: each plugin's root -> `<plugin:NAME>`, the project -> `.`, the
+    home directory -> `~`. What a mode injects and what a worker is sent carry absolute paths (chongdae's line names its
+    engine's file); quoted verbatim into hunsu-judgments.json they would publish the machine's layout in a committed record,
+    and make the same judgment read differently on every machine that checks it."""
+    for p in sorted(s["plugins"].values(), key=lambda p: -len(p.get("path") or "")):
+        if p.get("path"):
+            text = text.replace(p["path"], "<plugin:%s>" % p["name"]).replace(p["path"].replace("/", os.sep), "<plugin:%s>" % p["name"])
+    text = text.replace(s["target"], ".").replace(s["target"].replace("/", os.sep), ".")
+    home = os.path.expanduser("~")
+    return text.replace(home, "~") if home and home != "~" else text
+
+
 def mode_text(h, s):
     """What a SessionStart hook injects: run its command the way the host does (a synthetic payload on stdin, `${CLAUDE_PLUGIN_ROOT}`
     resolved to the plugin's root) and read `hookSpecificOutput.additionalContext` — the text the session actually receives.
@@ -625,7 +638,7 @@ def mode_text(h, s):
             text = "<hook exited %d: %s>" % (done.returncode, (done.stderr or "").strip()[-200:])
     except (OSError, subprocess.SubprocessError) as err:
         text = "<hook did not run: %s>" % err
-    _MODE_TEXT[key] = text
+    _MODE_TEXT[key] = text = machine_neutral(text, s)
     return text
 
 
@@ -650,10 +663,11 @@ def role_prompts(manifest, s):
             fixed = [str(a) for a in argv if not re.fullmatch(r"\{(request|response|host|base|since)\}", str(a))]
             assigned = next((k for k, v in manifest.get("roles", {}).items()
                              if v == mid or (isinstance(v, list) and all(t in [str(x) for x in v] for t in fixed))), None)
-            stage = {"verifier": "verify", "implementer": "build"}.get(assigned, "build" if role == "build" else role)
-            save_json(req, {"artifact-type": "chongdae/request@1", "stage": stage, "run": "hunsu-judge", "task": "sample", "role": "verifier" if stage == "verify" else role,
-                            "target": s["target"], "goal": "<the project's goal>", "brief": "<the task's brief>", "closes": ["Q-sample"],
-                            "contract": {"Q-sample": "## Q-sample\n\n<an acceptance sentence>"}, "checks": [["python3", "-m", "unittest"]], "response": "<the response file>"})   # nothing of the temp dir in the prompt: the text must be the same on every probe
+            # the stage a runner would send: from the manifest's assignment when there is one (verifier -> verify), else the
+            # role's own name — and when the worker refuses that, the runner's other stages in turn: a project that has not
+            # assigned its roles yet still gets each worker's real prompt judged, not its refusal
+            first = {"verifier": "verify", "implementer": "build"}.get(assigned, "build" if role == "build" else role)
+            stages = [first] + [x for x in ("verify", "build") if x != first]
             host = {"claude-code": "claude"}.get(HOST, HOST)
             cmd = [str(a).replace("{plugin:%s}" % name, have.get("path", "")).replace("{request}", req).replace("{response}", os.path.join(tmp, "response.json")).replace("{host}", host)
                    for a in argv] + ["--prompt-only"]
@@ -665,12 +679,24 @@ def role_prompts(manifest, s):
             key = (mid, have.get("path", ""), named_files_fingerprint(cmd, have.get("path", "")))   # asked once per script content
             if key in _ROLE_PROMPT:
                 out[mid] = _ROLE_PROMPT[key]
+                shutil.rmtree(tmp, ignore_errors=True)
                 continue
-            try:
-                done = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, cwd=s["target"])
-                text = (done.stdout or "").strip() if done.returncode == 0 else "<worker exited %d: %s>" % (done.returncode, (done.stderr or "").strip()[-200:])
-            except (OSError, subprocess.SubprocessError) as err:
-                text = "<worker did not run: %s>" % err
+            text = None
+            for stage in stages:
+                save_json(req, {"artifact-type": "chongdae/request@1", "stage": stage, "run": "hunsu-judge", "task": "sample", "role": "verifier" if stage == "verify" else role,
+                                "target": s["target"], "goal": "<the project's goal>", "brief": "<the task's brief>", "closes": ["Q-sample"],
+                                "contract": {"Q-sample": "## Q-sample\n\n<an acceptance sentence>"}, "checks": [["python3", "-m", "unittest"]], "response": "<the response file>"})
+                try:
+                    done = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, cwd=s["target"])
+                except (OSError, subprocess.SubprocessError) as err:
+                    text = "<worker did not run: %s>" % type(err).__name__
+                    break
+                if done.returncode == 0 and (done.stdout or "").strip():
+                    text = done.stdout.strip()
+                    break
+            if text is None:   # a stable text: the temp request's path would make every check a different member
+                text = "<worker printed no prompt for a sample request at stage %s>" % " / ".join(stages)
+            text = machine_neutral(text.replace(tmp, "<tmp>"), s)
             shutil.rmtree(tmp, ignore_errors=True)
             script = next((c for c in cmd if os.path.isfile(c) and c.endswith((".py", ".js", ".sh"))), cmd[1] if len(cmd) > 1 else cmd[0])
             _ROLE_PROMPT[key] = out[mid] = {"id": mid, "plugin": name, "role": role, "path": script.replace(os.sep, "/"), "text": text,

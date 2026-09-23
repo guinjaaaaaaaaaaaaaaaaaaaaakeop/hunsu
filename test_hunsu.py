@@ -595,6 +595,36 @@ def test_the_judge_reads_a_roles_prompt_and_a_modes_injected_text_not_their_scri
         assert any("judged about other text" in e and "building" in e for e in errors), errors
 
 
+def test_role_prompts_are_asked_until_answered_and_no_machine_path_reaches_the_judge():
+    """A worker that only answers a `verify` request still has its real prompt judged when the manifest has not assigned it;
+    a worker that answers nothing is recorded by a text that is the same on every probe (else its situation is stale on every
+    check); and a mode that names its own file carries no path of this machine into the packet."""
+    with Host() as h:
+        eps = h.add_plugin("m1", "eps", "1.0.0", ["plan"], roles={
+            "eyes": [sys.executable, "{plugin:eps}/eyes.py", "--request", "{request}", "--response", "{response}"],
+            "mute": [sys.executable, "{plugin:eps}/mute.py", "--request", "{request}"]},
+            hooks={"SessionStart": [{"hooks": [{"type": "command", "command": "%s ${CLAUDE_PLUGIN_ROOT}/mode.py" % sys.executable}]}]})
+        write(os.path.join(eps, "eyes.py"), 'import sys,json;r=json.load(open(sys.argv[sys.argv.index("--request")+1]))\n'
+              'if r["stage"]!="verify": sys.exit("not a verify request: "+sys.argv[sys.argv.index("--request")+1])\n'
+              'print("You verify. Project: "+r["target"])')
+        write(os.path.join(eps, "mute.py"), 'import sys;sys.exit("refused "+sys.argv[-1])')
+        mode_script(eps, "Run %s/engine.py first; notes live in %s." % (eps, os.path.expanduser("~")))
+        h.flush()
+        run("init", "--target", h.target); run("add", "eps", "--target", h.target)
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)); srv = hunsu.survey(h.target)
+        roles = hunsu.role_prompts(m, srv)
+        assert roles["eps:eyes"]["text"] == "You verify. Project: .", roles["eps:eyes"]   # asked again at `verify`; the project is `.`
+        assert roles["eps:mute"]["text"].startswith("<worker printed no prompt"), roles["eps:mute"]
+        hunsu._ROLE_PROMPT.clear()
+        assert hunsu.role_prompts(m, srv)["eps:mute"]["text"] == roles["eps:mute"]["text"], "a refusal must read the same on every probe"
+        text = hunsu.mode_text(next(x for x in srv["hooks"] if x["event"] == "SessionStart"), srv)
+        assert text == "Run <plugin:eps>/engine.py first; notes live in ~.", text
+        d = os.path.join(h.target, "judge")
+        run("judge", "request", "--target", h.target, "--out", d)
+        packet = io.open(os.path.join(d, "cluster-request.json"), encoding="utf-8").read()
+        assert eps not in json.dumps(json.loads(packet)["modes"]), "no plugin root in what a judge may quote"
+
+
 def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them():
     lock = {"resolutions": {"retro": "dakdol", "old": "deny",
                             "reviewing a change": {"use": "a:eyes", "deny": ["b:review"], "reviewed": True},
