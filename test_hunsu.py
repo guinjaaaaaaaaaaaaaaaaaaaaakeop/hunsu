@@ -374,7 +374,8 @@ def test_runtime_missing_and_duplicate_and_user_hook_warnings():
         errors, warnings, info = hunsu.check(h.target)
         wt = "\n".join(warnings)
         assert "hook PostToolUse guard.py: registered 2 times (user)" in wt, wt
-        assert "user hook PostToolUse (guard.py)" in wt and "user mode instruction SessionStart (watch.py)" in wt, wt
+        assert "user hook guard.py: runs for this project on 1 event(s) (PostToolUse)" in wt, wt   # one line per script, not per registration
+        assert "user hook watch.py" in wt and "SessionStart among them, so it can add instructions to every session" in wt, wt
         assert any("absolute path" in i for i in info)
         manifest(h.target, **{"local-hooks-ok": ["guard.py", "watch.py"]})
         _, warnings, _ = hunsu.check(h.target)
@@ -625,19 +626,43 @@ def test_role_prompts_are_asked_until_answered_and_no_machine_path_reaches_the_j
         assert eps not in json.dumps(json.loads(packet)["modes"]), "no plugin root in what a judge may quote"
 
 
-def test_a_hook_that_is_only_yours_is_acknowledged_in_the_local_file_never_the_manifest():
+def test_a_hook_that_is_only_yours_is_told_once_names_what_runs_here_and_is_acknowledged_locally():
+    """A terminal app registers one wrapper on many events; the wrapper runs a PowerShell script on Windows (base64-encoded)
+    and a shell script elsewhere. The person hears about it once, with the file this machine runs, and acknowledges it in
+    the local file — never in the team's manifest — and the local file is guarded from being committed."""
+    import base64, subprocess
     with Host() as h:
         h.add_plugin("m1", "alpha", "1.0.0", ["build"])
-        h.user_hooks = {"Stop": [{"hooks": [{"type": "command", "command": "sh ~/.tool/agent-hooks/claude-hook.cmd"}]}]}
+        script = os.path.join(h.home, ".tool", "agent-hooks", "claude-hook.sh")
+        write(script, "#!/bin/sh\nprintf '{}'\n")
+        ps = base64.b64encode("& $HOME\\.tool\\agent-hooks\\claude-hook.cmd".encode("utf-16le")).decode()
+        cmd = ('case "$OSTYPE" in msys*) powershell.exe -NoProfile -EncodedCommand %s ;; *) /bin/sh "%s" ;; esac' % (ps, script))
+        h.user_hooks = {e: [{"hooks": [{"type": "command", "command": cmd}]}] for e in ("SessionStart", "Stop", "PreToolUse")}
         h.flush()
         run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
         errors, warnings, _ = hunsu.check(h.target)
-        assert any("claude-hook.cmd" in w for w in warnings), warnings
-        write(os.path.join(h.target, hunsu.LOCAL), {"local-hooks-ok": ["claude-hook.cmd"]})
+        mine = [w for w in warnings if w.startswith("user hook")]
+        assert len(mine) == 1 and "claude-hook.sh: runs for this project on 3 event(s)" in mine[0], mine   # the script that runs here, once
+        assert script in mine[0] or script.replace(os.path.expanduser("~"), "~") in mine[0], mine
+        assert "claude-hook.cmd" in hunsu.plain_command(cmd) and script in hunsu.plain_command(cmd)   # decoded in place, both halves kept
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)); m["engines"] = {"claude-code": ">=0.1"}; m["judge"] = "skip"
+        hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), m)
+        code, out = run("compose", "--target", h.target)
+        assert code == 2 and "Tell the person first" in out and "claude-hook.sh" in out, out
+        write(os.path.join(h.target, hunsu.LOCAL), {"local-hooks-ok": ["claude-hook.sh"]})
         errors, warnings, _ = hunsu.check(h.target)
         assert not any("claude-hook.cmd" in w for w in warnings), warnings
         assert "claude-hook.cmd" not in io.open(os.path.join(h.target, hunsu.MANIFEST), encoding="utf-8").read()
         assert hunsu.LOCAL in io.open(os.path.join(h.target, ".gitignore"), encoding="utf-8").read()   # the local file is never committed
+        subprocess.run(["git", "init", "-q"], cwd=h.target, check=True)
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not any("is not ignored by git" in w for w in warnings), warnings
+        write(os.path.join(h.target, ".gitignore"), "")   # someone dropped the line
+        errors, warnings, _ = hunsu.check(h.target)
+        assert any(hunsu.LOCAL + " is not ignored by git" in w for w in warnings), warnings
+        subprocess.run(["git", "add", "-f", hunsu.LOCAL], cwd=h.target, check=True)
+        errors, warnings, _ = hunsu.check(h.target)
+        assert any(hunsu.LOCAL + " is committed" in e for e in errors), errors
 
 
 def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them():

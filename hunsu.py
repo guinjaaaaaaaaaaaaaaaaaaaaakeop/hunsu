@@ -57,15 +57,17 @@ def frontmatter(path):
 
 
 def plain_command(command):
-    """PowerShell -EncodedCommand hides the real script behind base64(UTF-16LE). Decode it so check can see it."""
-    m = re.search(r"-EncodedCommand\s+([A-Za-z0-9+/=]+)", command)
-    if not m:
-        return command
+    """PowerShell -EncodedCommand hides the real script behind base64(UTF-16LE). Decode it in place so check can see it —
+    in place, not instead: a hook written for several systems carries the PowerShell for Windows beside the shell for
+    everything else, and replacing the whole command with the decoded part hid the script this machine actually runs."""
     import base64
-    try:
-        return base64.b64decode(m.group(1)).decode("utf-16le")
-    except (ValueError, UnicodeDecodeError):
-        return command
+
+    def decoded(m):
+        try:
+            return "-Command {%s}" % base64.b64decode(m.group(1)).decode("utf-16le")
+        except (ValueError, UnicodeDecodeError):
+            return m.group(0)
+    return re.sub(r"-EncodedCommand\s+([A-Za-z0-9+/=]+)", decoded, command)
 
 
 def hook_entries(hooks, source):
@@ -365,12 +367,49 @@ def hook_key(h):
     return (h["event"], h["matcher"], script if "/" in script else os.path.basename(script))
 
 
+def user_hook_groups(s):
+    """User-level hooks, one entry per script: a tool that registers one script on thirteen events is one thing to tell a
+    person about, not thirteen. `runs` is what the command names that exists on this machine (with $HOME / ~ expanded) —
+    the file to read to know what the hook does, since a wrapper often picks a script per system."""
+    home = os.path.expanduser("~")
+    groups = {}
+    for h in s["hooks"]:
+        if h["source"] != "user":
+            continue
+        named = re.findall(r"[\w./\\:$\{\}~-]+\.(?:py|js|sh|cmd|ps1|bat|rb|pl)\b", h["command"])
+        exist = []
+        for n in named:
+            path = re.sub(r"\$\{HOME-?\}|\$HOME\b|^~", lambda m: home, n.replace("\\", "/"))
+            if os.path.isfile(path) and path not in exist:
+                exist.append(path)
+        key = os.path.basename(exist[0]) if exist else os.path.basename(hook_key(h)[2])
+        g = groups.setdefault(key, {"events": [], "runs": [], "hooks": []})
+        g["hooks"].append(h)
+        if h["event"] not in g["events"]:
+            g["events"].append(h["event"])
+        g["runs"] += [x.replace(home, "~") for x in exist if x.replace(home, "~") not in g["runs"]]
+    return groups
+
+
 def check(target):
     manifest = load_json(os.path.join(target, MANIFEST))
     if not manifest:
         raise SystemExit("no %s — run `hunsu init` first" % MANIFEST)
     s = survey(target)
     errors, warnings, info = [], [], []
+
+    # 0. the local file is this machine's (links, hooks only this person runs): it must never be committed
+    if os.path.exists(os.path.join(target, LOCAL)) and os.path.isdir(os.path.join(target, ".git")):
+        import subprocess
+        try:
+            ignored = subprocess.run(["git", "check-ignore", "-q", LOCAL], cwd=target, capture_output=True).returncode == 0
+            tracked = bool(subprocess.run(["git", "ls-files", LOCAL], cwd=target, capture_output=True, text=True).stdout.strip())
+        except OSError:
+            ignored, tracked = True, False
+        if tracked:
+            errors.append("%s is committed — it holds this machine's links and hooks: `git rm --cached %s`, and add it to .gitignore" % (LOCAL, LOCAL))
+        elif not ignored:
+            warnings.append("%s is not ignored by git — it holds this machine's links and hooks; add it to .gitignore" % LOCAL)
 
     # 1. manifest vs what is enabled here. A linked plugin is this machine's development copy: version drift is expected.
     linked = links(target)
@@ -461,10 +500,13 @@ def check(target):
     # person's tool (an observer, a terminal app's agent hooks) — in hunsu.local.json, which is not committed, so one person's
     # setup never becomes part of the project's record
     ok = set(manifest.get("local-hooks-ok", [])) | set(load_json(os.path.join(target, LOCAL)).get("local-hooks-ok", []))
+    for name, g in user_hook_groups(s).items():
+        if not any(tag in h["command"] for h in g["hooks"] for tag in ok):
+            warnings.append("user hook %s: runs for this project on %d event(s) (%s) and is not the project's%s%s — tell the person, offer to read what it does, "
+                            "then list it in local-hooks-ok (hunsu.local.json when it is only theirs, hunsu.json when the team runs it) or remove it from their settings"
+                            % (name, len(g["events"]), ", ".join(g["events"]), "; on this machine it runs " + ", ".join(g["runs"]) if g["runs"] else "",
+                               "; SessionStart among them, so it can add instructions to every session" if "SessionStart" in g["events"] else ""))
     for h in s["hooks"]:
-        if h["source"] == "user" and not any(tag in h["command"] for tag in ok):
-            kind = "mode instruction" if h["event"] == "SessionStart" else "hook"
-            warnings.append("user %s %s (%s): runs for this project but is not in the manifest — move to project settings, or list in local-hooks-ok" % (kind, h["event"], os.path.basename(hook_key(h)[2])))
         if re.search(r"[A-Za-z]:\\|/Users/|/home/", h["command"]) and "${CLAUDE_PLUGIN_ROOT}" not in h["command"]:
             info.append("hook %s (%s): command has an absolute path — bound to this machine" % (h["event"], h["source"]))
 
@@ -1362,7 +1404,10 @@ def cmd_compose(args):
     user_hooks = [w for w in warnings if w.startswith("user ")]
     if user_hooks:
         # Acknowledged = listed in local-hooks-ok. One mechanism; no separate "reviewed" flag.
-        return stop("user-level hooks run here but are not the project's: move each into the project's settings; list its script name in `local-hooks-ok` — in hunsu.local.json when it is only yours (not committed), in hunsu.json when the whole team runs it; or remove it from your own settings — then re-run compose",
+        return stop("user-level hooks run here and are not the project's. Tell the person first, one line per hook below, and ask whether they want "
+                    "one looked into — if so, read the file it runs on this machine and say what it takes in, where it sends it, and whether it can "
+                    "change the session. Then ask where it belongs: `local-hooks-ok` in hunsu.local.json (only theirs, not committed), in hunsu.json "
+                    "(the whole team runs it), or removed from their settings — then re-run compose",
                     *user_hooks)
     return cmd_lock(args)
 
