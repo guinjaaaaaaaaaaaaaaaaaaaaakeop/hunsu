@@ -259,6 +259,8 @@ def test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host():
         fp = hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["plugins"]["alpha"]["fingerprint"]
         assert fp and len(fp) == 12
         assert not hunsu.check(h.target)[0]
+        write(os.path.join(root, ".in_use"), "")   # the host marks a copy it runs; that is not the plugin's content
+        assert not hunsu.check(h.target)[0], "a host's in-use marker is not an edit"
         write(os.path.join(root, "skills", "build", "SKILL.md"), "---\nname: build\ndescription: does build, edited after the lock\n---\n")
         errors, _, _ = hunsu.check(h.target)
         assert len(errors) == 1 and "plugin alpha: content differs from what the lock recorded for version 1.0.0" in errors[0], errors
