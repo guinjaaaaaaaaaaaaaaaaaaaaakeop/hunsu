@@ -8,12 +8,10 @@ and must answer with one JSON object matching the schema for the packet's stage.
 import argparse
 import json
 import os
-import re
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hostcall import run_claude, run_codex, claude_answer, worker_record  # noqa: E402  (vendored: the same file in each plugin of this family)
 
 SCHEMAS = {
     "cluster": {"type": "object", "additionalProperties": False, "required": ["groups"],
@@ -36,117 +34,23 @@ PROMPT = ("This is a hunsu judge request. Change no files. Follow the packet's `
 
 
 def claude(packet, schema, roots, args):
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
-           "--setting-sources", "", "--strict-mcp-config", "--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob",
-           "--max-turns", str(args.max_turns), "--json-schema", json.dumps(schema)]
-    if args.model:
-        cmd += ["--model", args.model]
-    if args.effort:
-        cmd += ["--effort", args.effort]
-    for r in roots:
-        cmd += ["--add-dir", r]
-    done = subprocess.run(cmd, input=(PROMPT + json.dumps(packet, ensure_ascii=False)).encode("utf-8"), capture_output=True,
-                          env=dict(os.environ, CLAUDE_CODE_DISABLE_AUTO_MEMORY="1", AGENT_WORKER="1"))
-    stdout = done.stdout.decode("utf-8", "replace")
+    code, stdout, stderr = run_claude(PROMPT + json.dumps(packet, ensure_ascii=False), schema, add_dirs=roots, model=args.model, effort=args.effort, max_turns=args.max_turns)
     worker = worker_record(stdout, args.response, "claude-code", args.model)
-    if done.returncode:
-        raise SystemExit("claude exited %d: %s" % (done.returncode, done.stderr.decode("utf-8", "replace")[-500:]))
-    result = None
-    for line in stdout.split("\n"):
-        if line.strip():
-            try:
-                event = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(event, dict) and event.get("type") == "result":
-                result = event
-    if not result:
-        raise SystemExit("no result event from claude")
-    if result.get("is_error"):
-        raise SystemExit("claude error: %s" % result.get("subtype"))
-    out = result.get("structured_output")
-    out = out if out is not None else json.loads(result["result"].strip())
+    if code:
+        raise SystemExit("claude exited %d: %s" % (code, stderr[-500:]))
+    out, why = claude_answer(stdout)
+    if out is None:
+        raise SystemExit(why)
     out["worker"] = worker
     return out
 
 
-def worker_record(stdout_text, response_path, host, model=None, stderr_text=None):
-    """Who did this call, from the host's own account of the session — model, turns, cost — with the whole stream kept next
-    to the response as `<response>.transcript.jsonl`. The runner copies this into `performed_by`; an answer whose procedure is
-    not on disk cannot be audited (a verdict of "accept, no findings" says nothing about what was read).
-    Claude Code says it in its stream (`init`: model; `result`: turns, cost, session). Codex says it in the header it prints
-    on stderr (`model:`, `session id:`, `reasoning effort:`); its stream is `--json` items on stdout."""
-    rec = {"host": host, "model": model}
-    if host == "codex":
-        # `--json` gives the item stream and the thread id, not the header; the model is in the rollout Codex keeps for
-        # that thread (~/.codex/sessions/**/rollout-*-<thread id>.jsonl, `turn_context.model`)
-        m = re.search(r'"thread_id":\s*"([^"]+)"', stdout_text or "")
-        if m:
-            rec["session"] = m.group(1)
-            home = os.environ.get("HUNSU_CODEX_DIR") or os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
-            for dirpath, _, files in os.walk(os.path.join(home, "sessions")):
-                for f in files:
-                    if f.endswith(m.group(1) + ".jsonl"):
-                        with open(os.path.join(dirpath, f), encoding="utf-8", errors="replace") as fh:
-                            for line in fh:
-                                mm = re.search(r'"turn_context".*?"model":\s*"([^"]+)"', line)
-                                if mm:
-                                    rec["model"] = rec["model"] or mm.group(1)
-                                    ee = re.search(r'"effort":\s*"([^"]+)"', line)
-                                    if ee:
-                                        rec["effort"] = ee.group(1)
-                                    break
-        for key, name in (("model", "model"), ("session id", "session"), ("reasoning effort", "effort")):   # the header, when a host prints one
-            mh = re.search(r"^%s:\s*(.+?)\s*$" % re.escape(key), stderr_text or "", re.M)
-            if mh and not rec.get(name):
-                rec[name] = mh.group(1)
-        kept = "".join(x for x in (stderr_text, stdout_text) if x)
-        if kept:
-            path = re.sub(r"\.json$", "", response_path) + ".transcript.jsonl"
-            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-            with open(path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(kept if kept.endswith("\n") else kept + "\n")
-            rec["transcript"] = os.path.basename(path)
-        return rec
-    if stdout_text is None:
-        return rec
-    for line in stdout_text.split("\n"):
-        try:
-            event = json.loads(line) if line.strip() else None
-        except ValueError:
-            continue
-        if not isinstance(event, dict):
-            continue
-        if event.get("type") == "system" and event.get("subtype") == "init":
-            rec["model"] = event.get("model") or model
-        elif event.get("type") == "result":
-            rec["turns"], rec["cost_usd"], rec["session"] = event.get("num_turns"), event.get("total_cost_usd"), event.get("session_id")
-    path = re.sub(r"\.json$", "", response_path) + ".transcript.jsonl"
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(stdout_text if stdout_text.endswith("\n") else stdout_text + "\n")
-    rec["transcript"] = os.path.basename(path)
-    return rec
-
-
 def codex(packet, schema, roots, args):
-    tmp = tempfile.mkdtemp(prefix="hunsu-judge-")
-    schema_path, out_path = os.path.join(tmp, "schema.json"), os.path.join(tmp, "last.txt")
-    Path(schema_path).write_text(json.dumps(schema), encoding="utf-8")
-    cmd = [shutil.which("codex") or "codex", "exec", "--json", "-s", os.environ.get("AGENT_CODEX_SANDBOX", "read-only"), "--skip-git-repo-check", "--output-schema", schema_path, "-o", out_path,
-           "-C", packet.get("target", os.getcwd())]
-    if args.model:
-        cmd += ["-m", args.model]
-    if args.effort:
-        cmd += ["-c", "model_reasoning_effort=%s" % json.dumps(args.effort)]
-    for r in roots:
-        cmd += ["--add-dir", r]
-    cmd.append("-")
-    done = subprocess.run(cmd, input=(PROMPT + json.dumps(packet, ensure_ascii=False)).encode("utf-8"), capture_output=True, env=dict(os.environ, AGENT_WORKER="1"))
-    if done.returncode:
-        raise SystemExit("codex exited %d: %s" % (done.returncode, done.stderr.decode("utf-8", "replace")[-500:]))
-    out = json.loads(Path(out_path).read_text(encoding="utf-8").strip())
-    out["worker"] = worker_record(done.stdout.decode("utf-8", "replace"), args.response, "codex", args.model, done.stderr.decode("utf-8", "replace"))
+    code, stdout, stderr, last = run_codex(PROMPT + json.dumps(packet, ensure_ascii=False), schema, packet.get("target", os.getcwd()), add_dirs=roots, model=args.model, effort=args.effort)
+    if code:
+        raise SystemExit("codex exited %d: %s" % (code, stderr[-500:]))
+    out = json.loads((last or "").strip())
+    out["worker"] = worker_record(stdout, args.response, "codex", args.model, stderr)
     return out
 
 

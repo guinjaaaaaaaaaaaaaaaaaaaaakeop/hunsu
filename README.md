@@ -250,6 +250,9 @@ says so (`session: sandboxed …`) when the lock's roles are commands. Codex sna
   `exec --dangerously-bypass-hook-trust`). The survey reads Codex's own registry (`config.toml`: marketplaces,
   plugins, the user's hooks) and its plugin cache.
 
+- `judge_worker.py` starts its host session through `hostcall.py` — one host call for every worker of this family (hunsu's judge, mangsang's judge, dwitbuk's eyes,
+  hacheong's members), vendored: the same file in each plugin, since a plugin imports no other plugin. The umbrella checkout's `tools/same-file.py` says when the copies drift.
+
 ## Versioning
 
 Semver, and a version names one content: every change to the source — code, skill or command text, hooks, this README
