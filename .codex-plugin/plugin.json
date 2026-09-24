@@ -1,6 +1,6 @@
 {
   "name": "hunsu",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "engines": {
     "python": ">=3.11"
   },

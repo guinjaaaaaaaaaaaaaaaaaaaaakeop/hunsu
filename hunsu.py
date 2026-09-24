@@ -398,12 +398,28 @@ def user_hook_groups(s):
 
 
 def check(target):
+    """Everything `check` asks of a project, in order: the machine-local files, the plugins against the manifest (the rest
+    waits until every plugin is here), the session, the engines, the hooks, skill-name overlap, the roles, the judgments.
+    Each step is a function below; all append to one (errors, warnings, info)."""
     manifest = load_json(os.path.join(target, MANIFEST))
     if not manifest:
         raise SystemExit("no %s — run `hunsu init` first" % MANIFEST)
     s = survey(target)
-    errors, warnings, info = [], [], []
+    found = ([], [], [])
+    check_local_files(target, found)
+    if check_plugins(target, manifest, s, found):
+        return found
+    check_session(manifest, found)
+    check_engines(manifest, s, found)
+    check_hooks(target, manifest, s, found)
+    check_skill_overlap(manifest, s, found)
+    check_roles(manifest, s, found)
+    check_judgments(target, manifest, s, found)
+    return found
 
+
+def check_local_files(target, found):
+    errors, warnings, info = found
     # 0. the local files are this machine's (links, dev plugins, hooks only this person runs): they must never be committed
     for local_file in (LOCAL, LOCAL_SETTINGS):
         if os.path.exists(os.path.join(target, local_file)) and os.path.isdir(os.path.join(target, ".git")):
@@ -418,6 +434,10 @@ def check(target):
             elif not ignored:
                 warnings.append("%s is not ignored by git — it holds this machine's links and hooks; add it to .gitignore" % local_file)
 
+
+def check_plugins(target, manifest, s, found):
+    """True when a plugin is missing here: the checks that read skills, hooks, roles and judgments wait for it."""
+    errors, warnings, info = found
     # 1. manifest vs what is enabled here. A linked plugin is this machine's development copy: version drift is expected.
     linked = links(target)
     dev = s.get("dev") or {}
@@ -471,14 +491,22 @@ def check(target):
             info.append("plugin %s: enabled here but not in manifest — its skills are not part of this project" % key)
     if any(e.startswith("plugin ") and "not enabled" in e for e in errors):
         info.append("skills, hooks, roles and judgments are checked once every plugin is here")
-        return errors, warnings, info
+        return True
+    return False
 
+
+def check_session(manifest, found):
+    errors, warnings, info = found
     # 1b. the session this check runs in: a sandboxed Codex session cannot start the roles' workers (a nested `codex exec` dies
     # at "app-server client: Operation not permitted"), so a lock with command-provider roles cannot be run from here
     if os.environ.get("CODEX_SANDBOX") and any(isinstance(v, list) for v in manifest.get("roles", {}).values()):
         warnings.append("session: sandboxed (CODEX_SANDBOX=%s) — the roles' workers (%s) are `codex exec` processes and cannot start from inside a sandboxed session; "
                         "run a session that drives them with --dangerously-bypass-approvals-and-sandbox (the write guard is then the guard), or run the workers outside it"
                         % (os.environ["CODEX_SANDBOX"], ", ".join(r for r, v in manifest["roles"].items() if isinstance(v, list))))
+
+
+def check_engines(manifest, s, found):
+    errors, warnings, info = found
     # 2. engines — the floor the team requires, checked against what this machine actually has
     for engine, spec in manifest.get("engines", {}).items():
         found = version_of(HOST_EXE.get(engine, engine))
@@ -505,6 +533,9 @@ def check(target):
         if base in ("python", "node") and base not in manifest.get("engines", {}):
             warnings.append("engine %s: hooks call it but the manifest does not require it — add to `engines`" % base)
 
+
+def check_hooks(target, manifest, s, found):
+    errors, warnings, info = found
     # 3. hooks: duplicates, outside the manifest, machine-bound commands
     seen = {}
     for h in s["hooks"]:
@@ -526,6 +557,9 @@ def check(target):
         if re.search(r"[A-Za-z]:\\|/Users/|/home/", h["command"]) and "${CLAUDE_PLUGIN_ROOT}" not in h["command"]:
             info.append("hook %s (%s): command has an absolute path — bound to this machine" % (h["event"], h["source"]))
 
+
+def check_skill_overlap(manifest, s, found):
+    errors, warnings, info = found
     # 4. skill name overlap inside the manifest — needs a resolution
     owners = {}
     for sk in s["skills"]:
@@ -535,6 +569,9 @@ def check(target):
         if len(plugins) > 1 and name not in manifest.get("resolutions", {}):
             errors.append("skill %s: provided by %s — set resolutions[%r] to one of them or \"deny\"" % (name, ", ".join(plugins), name))
 
+
+def check_roles(manifest, s, found):
+    errors, warnings, info = found
     # 5. roles — a human declaration (role -> provider). hunsu does not assign roles; it checks the declaration is real and runnable:
     # `session`, an argv, or `plugin:role` where that plugin declares the role's argv in its plugin.json (`roles`) — a skill is text
     # for the session agent, not something a runner can spawn, so a skill id is not a provider.
@@ -546,6 +583,9 @@ def check(target):
         if why:
             errors.append("role %s: provider %r — %s" % (role, provider, why))
 
+
+def check_judgments(target, manifest, s, found):
+    errors, warnings, info = found
     # 6. judged conflicts — every situation with findings needs a resolution; judgments about another set are stale
     judged, stale = judgments_status(manifest, s, target)
     if judged is None:
@@ -570,7 +610,6 @@ def check(target):
         for x in named:
             if ":" in x and x not in judged and not x.startswith("plugin:"):
                 warnings.append("resolutions[%r] names %s, which is not a locked skill or a declared role" % (key, x))
-    return errors, warnings, info
 
 
 def cmd_check(args):
@@ -847,13 +886,27 @@ def cmd_judge(args):
     if not manifest:
         raise SystemExit("no %s" % MANIFEST)
     if args.mode == "render":
-        # the conflicts doc is a rendering of the judgments — regenerable on demand, so it is not committed
-        doc = load_json(os.path.join(target, JUDGMENTS))
-        if not doc:
-            raise SystemExit("no %s — nothing to render" % JUDGMENTS)
-        write_conflicts_doc(target, doc, manifest)
-        print("%s rendered from %s (a derived document — read it, do not commit it)" % (CONFLICTS_DOC, JUDGMENTS))
-        return 0
+        return judge_render(target, manifest)
+    j = judge_context(target, manifest)
+    if args.mode == "request" and not (args.groups or args.stale):
+        return judge_cluster_request(args, j)
+    if args.mode == "request":
+        return judge_group_requests(args, target, manifest, j)
+    return judge_consume(args, target, manifest, j)
+
+
+def judge_render(target, manifest):
+    # the conflicts doc is a rendering of the judgments — regenerable on demand, so it is not committed
+    doc = load_json(os.path.join(target, JUDGMENTS))
+    if not doc:
+        raise SystemExit("no %s — nothing to render" % JUDGMENTS)
+    write_conflicts_doc(target, doc, manifest)
+    print("%s rendered from %s (a derived document — read it, do not commit it)" % (CONFLICTS_DOC, JUDGMENTS))
+    return 0
+
+
+def judge_context(target, manifest):
+    """What every judge stage reads: the survey, the locked skills, the modes and their injected text, the roles' prompts."""
     s = survey(target)
     skills = [sk for sk in s["skills"] if in_manifest(manifest, sk, s)]
     modes = [h for h in s["hooks"] if h["event"] == "SessionStart" and h["source"].startswith("plugin:")
@@ -864,81 +917,94 @@ def cmd_judge(args):
     # "ask the user" and a role that says "ask no one" is a contradiction the judge can only see with both texts in front of it.
     mode_packets = [{"source": h["source"], "text": mode_text(h, s)[:6000], "note": "injected at SessionStart — a member of every situation"} for h in modes]
     roles = role_prompts(manifest, s)
+    return {"s": s, "skills": skills, "modes": modes, "ident": ident, "mode_packets": mode_packets, "roles": roles}
 
-    if args.mode == "request" and not (args.groups or args.stale):
-        os.makedirs(args.out, exist_ok=True)
-        packet = {"artifact-type": "hunsu/judge-request@1", "stage": "cluster", "target": s["target"],
-                  "skills": [{"id": ident(sk), "description": sk["description"], "path": sk["path"]} for sk in skills]
-                            + [{"id": r["id"], "description": r["description"], "path": r["path"]} for r in roles.values()],
-                  "modes": mode_packets,
-                  "instructions": ("Group these skills by the situation they claim to handle, using each description's "
-                                   "'use when' clause and, if needed, the SKILL.md at `path` (Read). A skill may be in several groups. "
-                                   "A `plugin:role` entry is a worker's prompt, not a skill a session invokes: it belongs to the situation "
-                                   "its description names (building, reviewing...). Every mode is implicitly in every group; do not list "
-                                   "modes as members. Give each group a short situation label in the project's language of work (e.g. "
-                                   "'reviewing a change'). Only group what the text supports; a group with one member is fine and means "
-                                   "no overlap there. Change no files.")}
-        save_json(os.path.join(args.out, "cluster-request.json"), packet)
-        print("stage 1 packet -> %s (%d skills, %d roles, %d modes). Run the judge, then `judge request --groups <its response>`"
-              % (os.path.join(args.out, "cluster-request.json"), len(skills), len(roles), len(modes)))
-        return 0
 
-    if args.mode == "request":
-        if args.stale:
-            j, stale = judgments_status(manifest, s, target)
-            if not j:
-                raise SystemExit("no %s — nothing is stale; start with `judge request --out DIR`" % JUDGMENTS)
-            if stale.get("unclustered"):
-                raise SystemExit("new skills no situation has seen (%s) — a cluster round is needed: `judge request --out DIR`" % ", ".join(stale["unclustered"]))
-            groups = [{"situation": r["situation"], "members": r["members"]} for r in j["situations"] if r["situation"] in stale.get("situations", [])]
-            if not groups:
-                print("nothing stale")
-                return 0
-        else:
-            groups = load_json(args.groups).get("groups", [])
+def judge_cluster_request(args, j):
+    """Stage 1 packet: names and descriptions; the judge groups skills (and roles' prompts) by the situation they claim."""
+    s, skills, modes, ident, mode_packets, roles = j["s"], j["skills"], j["modes"], j["ident"], j["mode_packets"], j["roles"]
+    os.makedirs(args.out, exist_ok=True)
+    packet = {"artifact-type": "hunsu/judge-request@1", "stage": "cluster", "target": s["target"],
+              "skills": [{"id": ident(sk), "description": sk["description"], "path": sk["path"]} for sk in skills]
+                        + [{"id": r["id"], "description": r["description"], "path": r["path"]} for r in roles.values()],
+              "modes": mode_packets,
+              "instructions": ("Group these skills by the situation they claim to handle, using each description's "
+                               "'use when' clause and, if needed, the SKILL.md at `path` (Read). A skill may be in several groups. "
+                               "A `plugin:role` entry is a worker's prompt, not a skill a session invokes: it belongs to the situation "
+                               "its description names (building, reviewing...). Every mode is implicitly in every group; do not list "
+                               "modes as members. Give each group a short situation label in the project's language of work (e.g. "
+                               "'reviewing a change'). Only group what the text supports; a group with one member is fine and means "
+                               "no overlap there. Change no files.")}
+    save_json(os.path.join(args.out, "cluster-request.json"), packet)
+    print("stage 1 packet -> %s (%d skills, %d roles, %d modes). Run the judge, then `judge request --groups <its response>`"
+          % (os.path.join(args.out, "cluster-request.json"), len(skills), len(roles), len(modes)))
+    return 0
+
+
+def judge_group_requests(args, target, manifest, j):
+    """Stage 2 packets: one per group with the members' full text — or, with --stale, only the situations whose members' text
+    changed since they were judged."""
+    s, skills, modes, ident, mode_packets, roles = j["s"], j["skills"], j["modes"], j["ident"], j["mode_packets"], j["roles"]
+    if args.stale:
+        j, stale = judgments_status(manifest, s, target)
+        if not j:
+            raise SystemExit("no %s — nothing is stale; start with `judge request --out DIR`" % JUDGMENTS)
+        if stale.get("unclustered"):
+            raise SystemExit("new skills no situation has seen (%s) — a cluster round is needed: `judge request --out DIR`" % ", ".join(stale["unclustered"]))
+        groups = [{"situation": r["situation"], "members": r["members"]} for r in j["situations"] if r["situation"] in stale.get("situations", [])]
         if not groups:
-            raise SystemExit("%s has no groups" % args.groups)
-        by_id = {ident(sk): sk for sk in skills}
-        by_id.update(roles)   # a role's prompt is judged like a skill's text; its members text is already in hand
-        prior = {r["situation"]: r.get("findings", []) for r in load_json(os.path.join(target, JUDGMENTS)).get("situations", [])}
-        os.makedirs(args.out, exist_ok=True)
-        if args.stale:
-            for name in os.listdir(args.out):   # a stale round writes only its own packets; older responses must not be consumed again
-                if name.startswith("group-") or name.startswith("cluster-"):
-                    os.remove(os.path.join(args.out, name))
-        n = 0
-        for i, g in enumerate(groups, 1):
-            members = [m for m in g.get("members", []) if m in by_id]
-            if len(members) < 2 and not modes:
-                continue
-            def body(m):
-                if "text" in by_id[m]:   # a role: the prompt its worker is sent
-                    return by_id[m]["text"][:6000]
-                path = by_id[m]["path"]
-                return (io.open(path, encoding="utf-8").read() if os.path.exists(path) else "")[:6000]
-            packet = {"artifact-type": "hunsu/judge-request@1", "stage": "group", "situation": g.get("situation", "group %d" % i),
-                      "members": [{"id": m, "description": by_id[m]["description"], "path": by_id[m]["path"], "text": body(m)} for m in members],
-                      "modes": [{"source": m["source"], "text": m["text"]} for m in mode_packets],
-                      "kinds": {"overlap": "two or more claim the same work in this situation",
-                                "contradiction": "one instructs what another forbids, or a mode's standing instruction conflicts with a member "
-                                                 "(a worker started by a `plugin:role` member receives the modes too)",
-                                "premise": "one assumes something another forbids (e.g. artifacts in the repo vs a clean repo)"},
-                      "instructions": ("Judge only this situation. For each finding, name the members involved (a mode is named by its source), "
-                                       "quote the exact sentence from each member's `text` (a mode's `text` is what it injects into every session) "
-                                       "that creates the conflict, say why, and propose one resolution as a JSON object written as a string: {\"use\": id} | {\"deny\": [ids]} | "
-                                       "{\"order\": [ids]} | {\"accept\": reason}. No quote, no finding. Similar names are not evidence. Change no files.")}
-            res = manifest.get("resolutions", {}).get(packet["situation"])
-            if isinstance(res, dict):   # the situation is already resolved: the judge also says whether that resolution still fits what it finds now
-                packet["existing_resolution"] = {"resolution": res, **({"prior_findings": prior[packet["situation"]]} if packet["situation"] in prior else {})}
-                packet["instructions"] += (" This situation already has a resolution (`existing_resolution`; the findings it was written about are its "
-                                           "`prior_findings`). Additionally answer `resolution_verdict`: does that resolution still fit your findings? "
-                                           "`verdict` is still-fits | does-not-fit | cannot-tell, with `why` and `quote` — a verbatim sentence from the "
-                                           "member texts above grounding the verdict. No verbatim quote, no still-fits.")
-            save_json(os.path.join(args.out, "group-%02d-request.json" % i), packet)
-            n += 1
-        print("stage 2: %d group packets -> %s. Run the judge on each, then `judge consume --dir %s`" % (n, args.out, args.out))
-        return 0
+            print("nothing stale")
+            return 0
+    else:
+        groups = load_json(args.groups).get("groups", [])
+    if not groups:
+        raise SystemExit("%s has no groups" % args.groups)
+    by_id = {ident(sk): sk for sk in skills}
+    by_id.update(roles)   # a role's prompt is judged like a skill's text; its members text is already in hand
+    prior = {r["situation"]: r.get("findings", []) for r in load_json(os.path.join(target, JUDGMENTS)).get("situations", [])}
+    os.makedirs(args.out, exist_ok=True)
+    if args.stale:
+        for name in os.listdir(args.out):   # a stale round writes only its own packets; older responses must not be consumed again
+            if name.startswith("group-") or name.startswith("cluster-"):
+                os.remove(os.path.join(args.out, name))
+    n = 0
+    for i, g in enumerate(groups, 1):
+        members = [m for m in g.get("members", []) if m in by_id]
+        if len(members) < 2 and not modes:
+            continue
+        def body(m):
+            if "text" in by_id[m]:   # a role: the prompt its worker is sent
+                return by_id[m]["text"][:6000]
+            path = by_id[m]["path"]
+            return (io.open(path, encoding="utf-8").read() if os.path.exists(path) else "")[:6000]
+        packet = {"artifact-type": "hunsu/judge-request@1", "stage": "group", "situation": g.get("situation", "group %d" % i),
+                  "members": [{"id": m, "description": by_id[m]["description"], "path": by_id[m]["path"], "text": body(m)} for m in members],
+                  "modes": [{"source": m["source"], "text": m["text"]} for m in mode_packets],
+                  "kinds": {"overlap": "two or more claim the same work in this situation",
+                            "contradiction": "one instructs what another forbids, or a mode's standing instruction conflicts with a member "
+                                             "(a worker started by a `plugin:role` member receives the modes too)",
+                            "premise": "one assumes something another forbids (e.g. artifacts in the repo vs a clean repo)"},
+                  "instructions": ("Judge only this situation. For each finding, name the members involved (a mode is named by its source), "
+                                   "quote the exact sentence from each member's `text` (a mode's `text` is what it injects into every session) "
+                                   "that creates the conflict, say why, and propose one resolution as a JSON object written as a string: {\"use\": id} | {\"deny\": [ids]} | "
+                                   "{\"order\": [ids]} | {\"accept\": reason}. No quote, no finding. Similar names are not evidence. Change no files.")}
+        res = manifest.get("resolutions", {}).get(packet["situation"])
+        if isinstance(res, dict):   # the situation is already resolved: the judge also says whether that resolution still fits what it finds now
+            packet["existing_resolution"] = {"resolution": res, **({"prior_findings": prior[packet["situation"]]} if packet["situation"] in prior else {})}
+            packet["instructions"] += (" This situation already has a resolution (`existing_resolution`; the findings it was written about are its "
+                                       "`prior_findings`). Additionally answer `resolution_verdict`: does that resolution still fit your findings? "
+                                       "`verdict` is still-fits | does-not-fit | cannot-tell, with `why` and `quote` — a verbatim sentence from the "
+                                       "member texts above grounding the verdict. No verbatim quote, no still-fits.")
+        save_json(os.path.join(args.out, "group-%02d-request.json" % i), packet)
+        n += 1
+    print("stage 2: %d group packets -> %s. Run the judge on each, then `judge consume --dir %s`" % (n, args.out, args.out))
+    return 0
 
+
+def judge_consume(args, target, manifest, j):
+    """Every response validated (quotes required, known members, a known kind); the judgments written with fingerprints of
+    what was judged; a resolution whose findings changed is kept only on the judge's grounded still-fits, else marked for a person."""
+    s, skills, modes, ident, mode_packets, roles = j["s"], j["skills"], j["modes"], j["ident"], j["mode_packets"], j["roles"]
     # consume
     d = args.dir
     cluster = load_json(os.path.join(d, "cluster-response.json"))
