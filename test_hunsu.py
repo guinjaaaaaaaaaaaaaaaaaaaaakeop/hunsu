@@ -696,6 +696,21 @@ def test_a_plugin_in_development_runs_here_only_and_is_never_locked():
         assert hunsu.LOCAL_SETTINGS in gi and hunsu.LOCAL in gi, gi
 
 
+def test_dev_settings_are_the_trials_overlay_and_are_taken_back():
+    """The project declares what a trial changes (`dev-settings`, like dev dependencies); `dev` makes it this machine's
+    settings overlay, the last `dev --off` takes back what it applied — and keeps what the person set themselves."""
+    manifest = {"dev-settings": {"chongdae": {"commit-records": False}}}
+    doc = {"links": {}, "dev": {"alpha": "devmarket"}, "settings": {"dwitbuk": {"stop-eyes": True}}}
+    hunsu.apply_dev_settings(doc, manifest)
+    assert doc["settings"] == {"dwitbuk": {"stop-eyes": True}, "chongdae": {"commit-records": False}}, doc
+    doc["dev"]["beta"] = "devmarket"; hunsu.apply_dev_settings(doc, manifest)   # a second plugin: applied once, still
+    assert doc["settings"]["chongdae"] == {"commit-records": False} and doc["dev-settings-applied"] == manifest["dev-settings"]
+    doc["dev"] = {}; doc.pop("dev"); hunsu.apply_dev_settings(doc, manifest)
+    assert doc["settings"] == {"dwitbuk": {"stop-eyes": True}} and "dev-settings-applied" not in doc, doc
+    doc = {"dev": {"alpha": "m"}}; hunsu.apply_dev_settings(doc, {})
+    assert "settings" not in doc and "dev-settings-applied" not in doc, "no declaration, nothing applied"
+
+
 def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them():
     lock = {"resolutions": {"retro": "dakdol", "old": "deny",
                             "reviewing a change": {"use": "a:eyes", "deny": ["b:review"], "reviewed": True},

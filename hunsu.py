@@ -1399,12 +1399,37 @@ def cmd_dev(args):
         ep["%s@%s" % (name, market)] = True
         ep["%s@%s" % (name, want["marketplace"])] = False
         doc.setdefault("dev", {})[name] = market
+    apply_dev_settings(doc, manifest)
     save_json(settings_path, settings)
     save_json(os.path.join(target, LOCAL), doc)
     ensure_ignored(target, [LOCAL, LOCAL_SETTINGS])
     print(("%s back to %s — the manifest's copy runs here again" % (name, want["marketplace"])) if args.off else
           "%s in development here: %s@%s at local scope (%s, not committed); `lock` refuses until `hunsu dev --off %s`" % (name, name, market, LOCAL_SETTINGS, name))
     return 0
+
+
+def apply_dev_settings(doc, manifest):
+    """While any plugin runs from a working source here, the manifest's `dev-settings` — the team's declaration of what a
+    trial changes, like a package's dev dependencies — are this machine's settings overlay (`settings` in hunsu.local.json,
+    which products read over hunsu.json's). After the last `dev --off` the values it applied are taken back, unless the
+    person changed one since. hunsu names no product: which settings a trial needs is the project's to say."""
+    local = doc.get("settings") or {}
+    for product, keys in (doc.pop("dev-settings-applied", None) or {}).items():
+        for k, v in keys.items():
+            if (local.get(product) or {}).get(k) == v:
+                local[product].pop(k)
+        if product in local and not local[product]:
+            local.pop(product)
+    want = manifest.get("dev-settings") or {}
+    if doc.get("dev") and want:
+        for product, keys in want.items():
+            local.setdefault(product, {}).update(keys)
+        doc["dev-settings-applied"] = json.loads(json.dumps(want))
+    if local:
+        doc["settings"] = local
+    else:
+        doc.pop("settings", None)
+    return doc
 
 
 def ensure_ignored(target, entries):
