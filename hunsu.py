@@ -1340,7 +1340,7 @@ def tree_fingerprint(root):
     import hashlib
     h = hashlib.sha256()
     for dirpath, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in ("__pycache__", ".git"))
+        dirs[:] = sorted(d for d in dirs if d not in ("__pycache__", ".git", ".in_use"))   # the host's marker is a file on some versions, a folder of pids on others
         for f in sorted(files):
             if f.endswith(".pyc") or f in (".DS_Store", ".in_use"):
                 continue
