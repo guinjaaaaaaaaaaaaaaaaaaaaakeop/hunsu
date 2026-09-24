@@ -25,7 +25,7 @@ import sys
 
 HOME = os.path.expanduser("~")
 CLAUDE = os.environ.get("HUNSU_CLAUDE_DIR") or os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")   # the host honors CLAUDE_CONFIG_DIR; HUNSU_CLAUDE_DIR is for tests
-CODEX = os.environ.get("HUNSU_CODEX_DIR") or os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex")
+CODEX = os.environ.get("HUNSU_CODEX_DIR") or os.environ.get("AGENT_CODEX_HOME") or os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex")
 HOST = "codex" if os.environ.get("AGENT_HOST") == "codex" else "claude-code"   # which host this machine's survey reads; a runner on Codex sets AGENT_HOST
 HOST_EXE = {"claude-code": "claude", "codex": "codex"}   # engine name in the manifest -> the executable whose --version is the floor
 MANIFEST = "hunsu.json"
@@ -123,7 +123,7 @@ def survey_codex(target):
         src = re.sub(r"^//\?/", "", str(m.get("source", "")).replace("\\", "/"))   # Codex writes Windows paths as \\?\\C:\\... — a link is C:/...
         source = src if m.get("source_type") == "local" else ("github:" + src.split("github.com/")[-1].removesuffix(".git") if "github.com" in src else src or "unknown")
         plugins[key] = {"name": name, "version": manifest.get("version") or (versions[-1] if versions else None), "source": source, "marketplace": market,
-                        "path": root.replace(os.sep, "/"), "engines": manifest.get("engines") or {}, "roles": manifest.get("roles") or {}}
+                        "path": root.replace(os.sep, "/"), "engines": manifest.get("engines") or {}, "roles": manifest.get("roles") or {}, "records": manifest.get("records") or []}
         skills_dir = os.path.join(root, "skills")
         if os.path.isdir(skills_dir):
             for d in sorted(os.listdir(skills_dir)):
@@ -197,7 +197,7 @@ def survey(target):
         manifest = load_json(os.path.join(root, ".claude-plugin", "plugin.json"))
         plugins[key] = {"name": name, "version": manifest.get("version") or inst.get("version"),
                         "source": source_id(markets.get(market)), "marketplace": market, "path": root, "loaded-from": loaded_from,
-                        "engines": manifest.get("engines") or {}, "roles": manifest.get("roles") or {}}
+                        "engines": manifest.get("engines") or {}, "roles": manifest.get("roles") or {}, "records": manifest.get("records") or []}
         skills_dir = os.path.join(root, "skills")
         if os.path.isdir(skills_dir):
             for d in sorted(os.listdir(skills_dir)):
@@ -1293,6 +1293,10 @@ def cmd_lock(args):
             "reporters": manifest.get("reporters", {}),   # name -> argv ({plugin:NAME}, {since}): who reports findings for the reviewer
             "settings": manifest.get("settings", {}),     # the team's switches for its products (e.g. dwitbuk stop-eyes) — hunsu carries, products read their own
             "resolutions": manifest.get("resolutions", {}),
+            # where each product keeps its records (`records` in its plugin.json: directories end with `/`, files do not) — so a
+            # product that must leave the others' records alone (a runner's touched files, a reviewer's diff, a builder's tree
+            # check) reads one list here instead of naming its siblings
+            "record-paths": {name: sorted(enabled(s, name, want).get("records") or []) for name, want in manifest["plugins"].items()},
             "judge": "skipped" if manifest.get("judge") == "skip" else ("none" if judgments_status(manifest, s, args.target)[0] is None else "judged"),
             "warnings": warnings}
     save_json(os.path.join(args.target, LOCK), lock)

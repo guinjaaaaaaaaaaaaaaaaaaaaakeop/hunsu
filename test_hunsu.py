@@ -22,9 +22,9 @@ def write(path, data):
         fh.write(json.dumps(data, ensure_ascii=False, indent=1) if not isinstance(data, str) else data)
 
 
-def plugin(cache, market, name, version, skills, hooks=None, engines=None, roles=None):
+def plugin(cache, market, name, version, skills, hooks=None, engines=None, roles=None, records=None):
     root = os.path.join(cache, market, name, version)
-    write(os.path.join(root, ".claude-plugin", "plugin.json"), {"name": name, "version": version, **({"engines": engines} if engines else {}), **({"roles": roles} if roles else {})})
+    write(os.path.join(root, ".claude-plugin", "plugin.json"), {"name": name, "version": version, **({"engines": engines} if engines else {}), **({"roles": roles} if roles else {}), **({"records": records} if records else {})})
     for sk in skills:
         write(os.path.join(root, "skills", sk, "SKILL.md"), "---\nname: %s\ndescription: does %s\n---\n" % (sk, sk))
     if hooks:
@@ -43,8 +43,8 @@ class Host:
         os.makedirs(self.target)
         self.enabled, self.installed, self.markets, self.user_hooks = {}, {}, {}, {}
 
-    def add_plugin(self, market, name, version, skills, hooks=None, source=None, engines=None, roles=None):
-        root = plugin(self.cache, market, name, version, skills, hooks, engines, roles)
+    def add_plugin(self, market, name, version, skills, hooks=None, source=None, engines=None, roles=None, records=None):
+        root = plugin(self.cache, market, name, version, skills, hooks, engines, roles, records)
         key = "%s@%s" % (name, market)
         self.enabled[key] = True
         self.installed[key] = [{"installPath": root, "version": version}]
@@ -95,7 +95,7 @@ def test_survey_lists_plugins_skills_hooks_and_modes():
         h.user_hooks = {"Stop": [{"hooks": [{"type": "command", "command": "python3 /home/FIXTURE/observe.py"}]}]}
         h.flush()
         s = hunsu.survey(h.target)
-        assert s["plugins"]["alpha@m1"] == {"name": "alpha", "version": "1.0.0", "source": "github:org/m1", "marketplace": "m1", "path": s["plugins"]["alpha@m1"]["path"], "loaded-from": "install", "engines": {}, "roles": {}}
+        assert s["plugins"]["alpha@m1"] == {"name": "alpha", "version": "1.0.0", "source": "github:org/m1", "marketplace": "m1", "path": s["plugins"]["alpha@m1"]["path"], "loaded-from": "install", "engines": {}, "roles": {}, "records": []}
         assert [sk["name"] for sk in s["skills"]] == ["build"]
         assert {(x["event"], x["source"]) for x in s["hooks"]} == {("SessionStart", "plugin:alpha"), ("Stop", "user")}
         assert s["modes"] == ["plugin:alpha"]
@@ -200,7 +200,7 @@ def test_a_role_provider_is_what_the_plugin_declares_and_the_lock_carries_argv()
     the role's argv (`roles`). A skill id is not a provider: a skill is text the session agent reads; a runner spawns argv.
     `lock` materializes `plugin:role` to the declared argv with `{host}` filled, and keeps the declaration beside it."""
     with Host() as h:
-        h.add_plugin("m1", "alpha", "1.0.0", ["build"], roles={"build": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "{host}"]})
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"], roles={"build": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "{host}"]}, records=[".alpha/", "alpha.json"])
         h.add_plugin("m2", "beta", "1.0.0", ["review"])
         h.flush()
         run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("add", "beta", "--target", h.target)
@@ -221,6 +221,8 @@ def test_a_role_provider_is_what_the_plugin_declares_and_the_lock_carries_argv()
         assert lock["roles"]["verifier"] == {"native": lock["roles"]["implementer"]} and lock["roles-declared"]["verifier"] == "native:alpha:build", lock["roles"]
         assert lock["roles"]["planner"] == "session" and lock["roles"]["coherence"] == ["python3", "x.py", "{base}"]
         assert lock["roles-declared"]["implementer"] == "alpha:build"
+        # where each product keeps its records, from its plugin.json — so the others read one list instead of naming siblings
+        assert lock["record-paths"] == {"alpha": [".alpha/", "alpha.json"], "beta": []}, lock["record-paths"]
 
 
 def test_survey_describes_what_the_host_runs_a_directory_marketplace_plugin_in_place():

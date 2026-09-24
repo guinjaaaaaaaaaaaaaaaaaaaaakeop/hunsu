@@ -102,7 +102,7 @@ def worker_record(stdout_text, response_path, host, model=None, stderr_text=None
         m = re.search(r'"thread_id":\s*"([^"]+)"', stdout_text or "")
         if m:
             rec["session"] = m.group(1)
-            home = os.environ.get("HUNSU_CODEX_DIR") or os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+            home = os.environ.get("AGENT_CODEX_HOME") or os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")   # AGENT_*: the family's own names, no product's
             for dirpath, _, files in os.walk(os.path.join(home, "sessions")):
                 for f in files:
                     if f.endswith(m.group(1) + ".jsonl"):

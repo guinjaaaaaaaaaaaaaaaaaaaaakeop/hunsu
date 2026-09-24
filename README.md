@@ -253,6 +253,12 @@ says so (`session: sandboxed …`) when the lock's roles are commands. Codex sna
 - `judge_worker.py` starts its host session through `hostcall.py` — one host call for every worker of this family (hunsu's judge, mangsang's judge, dwitbuk's eyes,
   hacheong's members), vendored: the same file in each plugin, since a plugin imports no other plugin. The umbrella checkout's `tools/same-file.py` says when the copies drift.
 
+- **Where each product keeps its records.** A plugin's plugin.json may declare `records`: the paths it writes in a project
+  (directories end with `/`, files do not — chongdae `[".chongdae/"]`, mangsang `["mangsang/", ".mangsang/"]`, dwitbuk
+  `["reviews/", ".dwitbuk/"]`, hunsu its own five files). `lock` carries them as `record-paths: {plugin: [paths]}`, so a
+  product that must leave the others' records alone — a runner's touched files, a reviewer's diff, a builder's tree check —
+  reads one list from the lock instead of naming its siblings.
+
 ## Versioning
 
 Semver, and a version names one content: every change to the source — code, skill or command text, hooks, this README

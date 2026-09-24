@@ -1,9 +1,16 @@
 {
   "name": "hunsu",
-  "version": "1.4.4",
+  "version": "1.5.0",
   "engines": {
     "python": ">=3.11"
   },
+  "records": [
+    "hunsu.json",
+    "hunsu.lock.json",
+    "hunsu-judgments.json",
+    "hunsu-conflicts.md",
+    "hunsu.local.json"
+  ],
   "description": "Locks a project's agent environment the way a package manager locks dependencies.",
   "author": {
     "name": "guineeeeeeeeeeeeeeeeeeeeeeeerm"
