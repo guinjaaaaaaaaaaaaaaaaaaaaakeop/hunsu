@@ -619,7 +619,7 @@ def cmd_check(args):
         findings = [{"kind": "drift", "where": e.split(":")[0], "text": e} for e in errors]
         findings += [{"kind": "unreviewed", "where": "hunsu.json resolutions[%r]" % k, "text": "applied from the judge's proposal, marked reviewed: false"}
                      for k, r in manifest.get("resolutions", {}).items() if isinstance(r, dict) and r.get("reviewed") is False]
-        print(json.dumps({"artifact-type": "dwitbuk/findings@1", "source": "hunsu", "findings": findings}, ensure_ascii=False, indent=1))
+        print(json.dumps({"artifact-type": "dwitbuk/findings@1", "source": "hunsu", "standing": True, "findings": findings}, ensure_ascii=False, indent=1))
         return 1 if errors else 0
     for label, items in (("error", errors), ("warn", warnings), ("info", info)):
         for line in items:

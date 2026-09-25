@@ -476,6 +476,7 @@ def test_judge_packets_consume_and_situation_resolutions():
         code, out = run("check", "--findings", "--target", h.target)
         doc = json.loads(out)
         assert code == 0 and doc["source"] == "hunsu" and [f["kind"] for f in doc["findings"]] == ["unreviewed"], out
+        assert doc["standing"] is True, "check reads the environment as it is now: a drift it stops reporting is gone"
         manifest(h.target, resolutions={"reviewing a change": {"deny": ["beta:review"], "reviewed": True}, "building": {"order": ["alpha:build", "plugin:beta"]}})
         manifest(h.target, engines={"claude-code": ">=0.0", "node": ">=0.0"})
         assert run("lock", "--target", h.target)[0] == 0

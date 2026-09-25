@@ -214,7 +214,8 @@ with a mode every group is judged (cost: 1 + groups calls).
   `.env`): a product reads its own from hunsu.json and lets this machine's override it.
 - `reporters` — name → argv of the commands that report findings for the reviewer (`dwitbuk/findings@1`), e.g.
   `["python", "{plugin:chongdae}/chongdae.py", "report", "--since", "{since}"]`. Locked; dwitbuk reads them from the
-  lock. hunsu's own is `check --findings` (drift, unread resolutions).
+  lock. hunsu's own is `check --findings` (drift, unread resolutions), marked `"standing": true`: it reads the
+  environment as it is now, so a drift it stops reporting is gone, not owed.
 
 ## Codex and the sandbox
 
