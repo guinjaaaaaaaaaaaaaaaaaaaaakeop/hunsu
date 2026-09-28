@@ -331,8 +331,26 @@ def test_check_error_branches_each_fire():
         errors, warnings, info = hunsu.check(h.target)
         text = "\n".join(errors)
         for needle in ("plugin alpha: manifest 1.0.1, host 1.0.0",
-                       "engine python: requires >=99.0", "skill retro: provided by alpha, gamma", "role implementer: provider 'alpha:nope' — plugin alpha declares no role 'nope'"):
+                       "engine python: requires >=99.0", "role implementer: provider 'alpha:nope' — plugin alpha declares no role 'nope'"):
             assert needle in text, (needle, text)
+        # a shared name is the judge's question, not an error: calling is never ambiguous (`plugin:skill`), and a name is a weak
+        # proxy for a shared situation — `design:review` and `code:review` share a name and nothing else
+        assert "skill retro" not in text and any(i.startswith("skill retro: provided by alpha, gamma — the judge round decides") and "accept" in i for i in info), (text, info)
+        s = hunsu.survey(h.target)
+        def judged(findings):
+            members = ["alpha:build", "alpha:retro", "gamma:retro"]
+            hunsu.save_json(os.path.join(h.target, hunsu.JUDGMENTS), {"artifact-type": "hunsu/judgments@1", "skills": members, "situations": [
+                {"situation": "looking back", "members": members, "modes": [], "findings": findings,
+                 "members-text-fingerprint": hunsu.members_text_fingerprint(s, members, hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)))}]})
+            return hunsu.check(h.target)
+        errors, _, info = judged([])
+        assert not any("retro" in e for e in errors) and any("judged, no conflict between them; both stay" in i for i in info), (errors, info)
+        errors, _, info = judged([{"kind": "overlap", "members": ["alpha:retro", "gamma:retro"], "quotes": {}, "why": "both claim it"}])
+        assert any("situation 'looking back': 1 finding(s) for a person, no resolution" in e for e in errors) and not any(e.startswith("skill retro") for e in errors), errors
+        os.remove(os.path.join(h.target, hunsu.JUDGMENTS))
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)); m["judge"] = "skip"; hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), m)
+        errors, _, _ = hunsu.check(h.target)
+        assert any(e.startswith("skill retro: provided by alpha, gamma, and this project locks without a judge") and '{"accept"' in e for e in errors), errors
         assert not any("nonexistent-runtime-xyz" in e for e in errors), "unknown first tokens are not runtimes we judge"
         code, out = run("lock", "--target", h.target)
         assert code != 0 and "not locked" in out, out
@@ -427,6 +445,121 @@ def mode_script(root, says):
     write(os.path.join(root, "mode.py"), 'import json,sys;json.load(sys.stdin);print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%r}}))' % says)
 
 
+def test_a_finding_the_members_text_settles_needs_no_resolution_and_one_resolution_covers_a_repeat():
+    """The rubric. Ten findings on two walk-through projects were all resolved by a person with accept/order — nearly all one
+    mode ("writes go through a run") against a skill that writes, repeated per situation. A finding now carries a class; only
+    `authority` asks a person, a settled class stands on a sentence hunsu finds in a member's text, and anything else — no
+    class, an unknown one, a sentence not there — is authority. The same finding in two situations is resolved once."""
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
+        mode_script(h.add_plugin("m2", "beta", "2.0.0", ["review"], hooks=MODE_HOOK), "Edit and Write are refused until a run starts; writes go through a run.")
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("add", "beta", "--target", h.target)
+        d = os.path.join(h.target, "judge")
+        assert run("judge", "request", "--target", h.target, "--out", d)[0] == 0
+        write(os.path.join(d, "cluster-response.json"), {"groups": [
+            {"situation": "building", "members": ["alpha:build"], "why": "alone"},
+            {"situation": "reviewing", "members": ["alpha:critique", "beta:review"], "why": "both review"},
+            {"situation": "critiquing a build", "members": ["alpha:critique", "alpha:build", "beta:review"], "why": "after a build"}]})
+        assert run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))[0] == 0
+        g1 = hunsu.load_json(os.path.join(d, "group-01-request.json"))
+        assert set(g1["classes"]) == {"authority", "sequenced", "not-co-active", "duplicate"} and "class_quote" in g1["instructions"], g1["instructions"]
+        mode_q = "writes go through a run"
+        write(os.path.join(d, "group-01-response.json"), {"findings": [   # the mode against a writing skill, settled by the mode's own sentence
+            {"kind": "contradiction", "members": ["alpha:build", "plugin:beta"], "quotes": {"alpha:build": "does build", "plugin:beta": "Edit and Write are refused"},
+             "why": "build writes; the mode refuses writes", "proposed": {"order": ["plugin:beta", "alpha:build"]},
+             "class": "sequenced", "class_quote": {"member": "plugin:beta", "quote": mode_q}}]})
+        write(os.path.join(d, "group-02-response.json"), {"findings": [
+            # a real overlap: authority, needs a person
+            {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique", "beta:review": "does review"},
+             "why": "same work", "proposed": {"use": "alpha:critique"}, "class": "authority", "class_quote": {"member": "", "quote": ""}},
+            # a settled class claimed on a sentence the text does not hold: authority
+            {"kind": "contradiction", "members": ["alpha:critique", "plugin:beta"], "quotes": {"alpha:critique": "does critique", "plugin:beta": "Edit and Write are refused"},
+             "why": "critique may write notes", "proposed": {}, "class": "not-co-active", "class_quote": {"member": "plugin:beta", "quote": "only during a run"}}]})
+        write(os.path.join(d, "group-03-response.json"), {"findings": [   # the same overlap again, in another situation; and one with no class at all
+            {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does  critique", "beta:review": "does review"},
+             "why": "same work again", "proposed": {}, "class": "authority", "class_quote": {"member": "", "quote": ""}},
+            {"kind": "contradiction", "members": ["alpha:build", "plugin:beta"], "quotes": {"alpha:build": "does build", "plugin:beta": "Edit and Write are refused"},
+             "why": "an answer from before the rubric", "proposed": {}}]})
+        code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "test")
+        assert code == 0 and "5 findings (1 settled by the members' text, 4 for a person)" in out and "0 rejected" in out, out
+        j = hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))
+        by = {r["situation"]: r["findings"] for r in j["situations"]}
+        assert by["building"][0]["class"] == "sequenced" and by["building"][0]["class_quote"]["quote"] == mode_q
+        refused = by["reviewing"][1]
+        assert refused["class"] == "authority" and "not-co-active claimed" in refused["class-refused"], refused
+        doc = io.open(os.path.join(h.target, hunsu.CONFLICTS_DOC), encoding="utf-8").read()
+        assert "## building — settled by the members' text" in doc and "settled by `plugin:beta`: “writes go through a run”" in doc and "class refused" in doc, doc
+        assert hunsu.quote_norm('a `\\"reviewed\\": false` b') == hunsu.quote_norm('a `"reviewed": false`  b')   # a JSON escape in a quote is no difference
+        errors, warnings, info = hunsu.check(h.target)
+        assert not any("rejected" in w for w in warnings), warnings
+        sit_errors = sorted(e for e in errors if e.startswith("situation"))
+        assert len(sit_errors) == 2 and not any("'building'" in e for e in sit_errors), sit_errors   # settled: no resolution asked
+        assert any("1 finding(s) settled by the members' own text" in i for i in info), info
+        # one resolution of the overlap covers its repeat in the other situation (whitespace in a quote is no difference);
+        # the refused class still asks for its own situation's resolution — which is the same situation here
+        manifest(h.target, resolutions={"reviewing": {"use": "alpha:critique"}})
+        errors, _, _ = hunsu.check(h.target)
+        left = [e for e in errors if e.startswith("situation")]
+        assert left == ["situation 'critiquing a build': 1 finding(s) for a person, no resolution — see hunsu-conflicts.md"], left   # the unclassed one, not the repeat
+
+
+def test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated():
+    """The person's own skills (~/.claude/skills) were invisible to survey and let through by the sentinel as "no prefix = a
+    host built-in"; a plugin enabled here but not in hunsu.json had its skills refused and its hooks running, noted as info;
+    the project's CLAUDE.md and AGENTS.md put standing text into every session and no judge read it."""
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        mode_script(h.add_plugin("m9", "zeta", "1.0.0", ["helper"], hooks=MODE_HOOK), "Always ask before writing.")   # enabled, never added
+        write(os.path.join(h.claude, "skills", "mine", "SKILL.md"), "---\nname: mine\ndescription: my own habit\n---\nCommit after every edit.\n")
+        write(os.path.join(h.claude, "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: mine too\n---\n")
+        write(os.path.join(h.target, ".claude", "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: the project's\n---\n")
+        write(os.path.join(h.target, "CLAUDE.md"), "Never commit on main.\n")
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        errors, warnings, info = hunsu.check(h.target)
+        assert any(w.startswith("user skill mine: in ") and "the sentinel refuses it" in w for w in warnings), warnings
+        assert not any(w.startswith("user skill shared") for w in warnings) and any(i.startswith("user skill shared: the project has its own") for i in info)
+        zeta = [w for w in warnings if w.startswith("unmanaged plugin zeta")]
+        assert len(zeta) == 1 and "SessionStart among them" in zeta[0], warnings
+        manifest(h.target, engines={"claude-code": ">=0.0", "node": ">=0.0", "python": ">=0.0"}, judge="skip")
+        code, out = run("compose", "--target", h.target)
+        assert "user skill mine" in out and "unmanaged plugin zeta" in out and "Tell the person first" in out, out
+        # the sentinel: the person's skill is refused until acknowledged; a built-in and the project's own are not touched
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"skills": ["alpha:build"], "denied": []})
+        hook = os.path.join(HERE, "hooks", "pre_skill.py")
+        def call(skill):
+            env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
+            done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": h.target, "tool_name": "Skill", "tool_input": {"skill": skill}}),
+                                  capture_output=True, text=True, encoding="utf-8", env=env)
+            return done.returncode, done.stderr
+        code, why = call("mine")
+        assert code == 2 and "your own skill" in why and "local-skills-ok" in why, why
+        assert call("simplify")[0] == 0 and call("shared")[0] == 0
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCAL), {"local-skills-ok": ["mine"], "local-hooks-ok": ["plugin:zeta"]})
+        assert call("mine")[0] == 0
+        errors, warnings, info = hunsu.check(h.target)
+        assert not any(w.startswith(("user skill mine", "unmanaged plugin")) for w in warnings), warnings
+        # the project's CLAUDE.md is a mode: in every judge packet, and its text is part of what a judgment is about
+        j = hunsu.judge_context(h.target, hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)))
+        assert {"source": "file:CLAUDE.md", "text": "Never commit on main.\n"}.items() <= next(m for m in j["mode_packets"] if m["source"] == "file:CLAUDE.md").items()
+        assert not any(m["source"] == "plugin:zeta" for m in j["mode_packets"]), "an unmanaged plugin's mode is warned about, not judged as the project's"
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))
+        before = hunsu.members_text_fingerprint(j["s"], ["alpha:build", "file:CLAUDE.md"], m)
+        write(os.path.join(h.target, "CLAUDE.md"), "Commit on main is fine.\n")
+        assert hunsu.members_text_fingerprint(hunsu.survey(h.target), ["alpha:build", "file:CLAUDE.md"], m) != before
+        # a judgment made before CLAUDE.md was a mode — or before any new mode — is stale: no judge has read that text
+        sv = hunsu.survey(h.target)
+        hunsu.save_json(os.path.join(h.target, hunsu.JUDGMENTS), {"artifact-type": "hunsu/judgments@1", "skills": ["alpha:build", "project:shared"], "situations": [
+            {"situation": "building", "members": ["alpha:build"], "modes": [], "findings": [], "members-text-fingerprint": hunsu.members_text_fingerprint(sv, ["alpha:build"], m)}]})
+        _, stale = hunsu.judgments_status(m, sv, h.target)
+        assert stale["situations"] == ["building"], stale
+        j2 = hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS)); j2["situations"][0]["modes"] = ["file:CLAUDE.md"]
+        j2["situations"][0]["members-text-fingerprint"] = hunsu.members_text_fingerprint(sv, ["alpha:build", "file:CLAUDE.md"], m)
+        hunsu.save_json(os.path.join(h.target, hunsu.JUDGMENTS), j2)
+        assert hunsu.judgments_status(m, sv, h.target)[1] == {}, "judged with the modes a session gets now: fresh"
+
+
 def test_judge_packets_consume_and_situation_resolutions():
     with Host() as h:
         h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
@@ -456,12 +589,17 @@ def test_judge_packets_consume_and_situation_resolutions():
         write(os.path.join(d, "group-01-response.json"), {"findings": [
             {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique", "beta:review": "does review"},
              "why": "same work", "proposed": {"use": "alpha:critique"}},
-            {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "x"}, "why": "no quote for beta", "proposed": {}}]})
+            {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "x"}, "why": "no quote for beta", "proposed": {}},
+            # a quote the text does not contain — paraphrased or made up — is no evidence, whatever else the finding says
+            {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique", "beta:review": "reviews every change"},
+             "why": "same work", "proposed": {}}]})
         write(os.path.join(d, "group-02-response.json"), {"findings": [
-            {"kind": "contradiction", "members": ["alpha:build", "plugin:beta"], "quotes": {"alpha:build": "build it", "plugin:beta": "don't"},
+            {"kind": "contradiction", "members": ["alpha:build", "plugin:beta"], "quotes": {"alpha:build": "does build", "plugin:beta": "Never   build before asking"},
              "why": "mode says otherwise", "proposed": '{"order": ["alpha:build", "plugin:beta"]}'}]})   # as text, the way Codex's strict schema carries it
         code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "test")
-        assert code == 0 and "2 findings" in out and "1 rejected" in out, out
+        assert code == 0 and "2 findings" in out and "2 rejected" in out, out
+        assert "quote not in the text of beta:review" in io.open(os.path.join(h.target, hunsu.CONFLICTS_DOC), encoding="utf-8").read()
+        assert any("2 judge finding(s) were rejected" in w for w in hunsu.check(h.target)[1])   # a rejected finding may be real: said, not buried
         j = hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))
         assert next(r for r in j["situations"] if r["situation"] == "building")["findings"][0]["proposed"] == {"order": ["alpha:build", "plugin:beta"]}
         doc = io.open(os.path.join(h.target, hunsu.CONFLICTS_DOC), encoding="utf-8").read()
@@ -510,7 +648,7 @@ def test_judge_packets_consume_and_situation_resolutions():
         assert code == 0 and "2 group packets" in out and not os.path.exists(os.path.join(d, "cluster-response.json")), out
         write(os.path.join(d, "group-01-response.json"), {"findings": []})   # the new beta no longer overlaps
         write(os.path.join(d, "group-02-response.json"), {"findings": [
-            {"kind": "contradiction", "members": ["alpha:build", "plugin:beta"], "quotes": {"alpha:build": "build it", "plugin:beta": "still don't"},
+            {"kind": "contradiction", "members": ["alpha:build", "plugin:beta"], "quotes": {"alpha:build": "does build", "plugin:beta": "and say so"},
              "why": "mode still says otherwise", "proposed": {"order": ["alpha:build", "plugin:beta"]}}]})
         code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "test2")
         assert code == 0 and "2 situations" in out and "1 findings" in out, out

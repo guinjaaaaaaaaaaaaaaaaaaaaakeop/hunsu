@@ -207,6 +207,15 @@ def survey(target):
                     skills.append({"name": fm.get("name", d), "plugin": name, "marketplace": market, "description": fm.get("description", ""), "path": sk.replace(os.sep, "/")})
         hooks += hook_entries(plugin_hooks(root, manifest), "plugin:" + name)
 
+    # the person's own skills (~/.claude/skills): the host offers them in every project, called without a plugin prefix — the
+    # sentinel read "no prefix" as a host built-in and let them through, and nothing else saw them
+    user_skills = os.path.join(CLAUDE, "skills")
+    if os.path.isdir(user_skills):
+        for d in sorted(os.listdir(user_skills)):
+            sk = os.path.join(user_skills, d, "SKILL.md")
+            if os.path.isfile(sk):
+                fm = frontmatter(sk)
+                skills.append({"name": fm.get("name", d), "plugin": "user", "description": fm.get("description", ""), "path": sk.replace(os.sep, "/")})
     proj_skills = os.path.join(target, ".claude", "skills")
     if os.path.isdir(proj_skills):
         for d in sorted(os.listdir(proj_skills)):
@@ -413,7 +422,8 @@ def check(target):
     check_session(manifest, found)
     check_engines(manifest, s, found)
     check_hooks(target, manifest, s, found)
-    check_skill_overlap(manifest, s, found)
+    check_local_skills(target, manifest, s, found)
+    check_skill_overlap(target, manifest, s, found)
     check_roles(manifest, s, found)
     check_judgments(target, manifest, s, found)
     return found
@@ -554,21 +564,75 @@ def check_hooks(target, manifest, s, found):
                             "then list it in local-hooks-ok (hunsu.local.json when it is only theirs, hunsu.json when the team runs it) or remove it from their settings"
                             % (name, len(g["events"]), ", ".join(g["events"]), "; on this machine it runs " + ", ".join(g["runs"]) if g["runs"] else "",
                                "; SessionStart among them, so it can add instructions to every session" if "SessionStart" in g["events"] else ""))
+    # a plugin enabled on this host but not in the manifest: its skills are refused (not in the lock), its hooks are not — they
+    # run for this project like a user hook, and a SessionStart one adds instructions to every session nobody judged
+    outside = {}
+    for h in s["hooks"]:
+        name = h["source"][7:] if h["source"].startswith("plugin:") else None
+        if name and name not in manifest.get("plugins", {}) and name not in (s.get("dev") or {}) and h["source"] not in ok \
+                and not any(tag in h["command"] for tag in ok):
+            outside.setdefault(name, []).append(h["event"])
+    for name, events in sorted(outside.items()):
+        events = sorted(set(events))
+        warnings.append("unmanaged plugin %s: enabled here but not in hunsu.json, and its hooks run for this project on %s%s — add it (`hunsu add %s`), "
+                        "disable it for this project, or list `plugin:%s` in local-hooks-ok"
+                        % (name, ", ".join(events), "; SessionStart among them, so it adds instructions to every session and no judge has read them" if "SessionStart" in events else "", name, name))
     for h in s["hooks"]:
         if re.search(r"[A-Za-z]:\\|/Users/|/home/", h["command"]) and "${CLAUDE_PLUGIN_ROOT}" not in h["command"]:
             info.append("hook %s (%s): command has an absolute path — bound to this machine" % (h["event"], h["source"]))
 
 
-def check_skill_overlap(manifest, s, found):
+def check_local_skills(target, manifest, s, found):
+    """What the host brings into this project that is nobody's decision in it: the person's own skills (~/.claude/skills) and
+    their own CLAUDE.md. A skill is refused at call time until it is listed in `local-skills-ok` — hunsu.local.json when it is
+    only theirs, hunsu.json when the team uses it — the same mechanism as a user hook. The person's CLAUDE.md is said, not
+    judged: its text is theirs and would otherwise be quoted into a committed record."""
     errors, warnings, info = found
-    # 4. skill name overlap inside the manifest — needs a resolution
+    ok = set(manifest.get("local-skills-ok", [])) | set(load_json(os.path.join(target, LOCAL)).get("local-skills-ok", []))
+    project = {sk["name"] for sk in s["skills"] if sk["plugin"] == "project"}
+    for sk in s["skills"]:
+        if sk["plugin"] != "user" or sk["name"] in ok:
+            continue
+        if sk["name"] in project:
+            info.append("user skill %s: the project has its own skill of that name; the project's is the one this project means" % sk["name"])
+            continue
+        warnings.append("user skill %s: in %s, offered to every session here as `%s` and not the project's — the sentinel refuses it; tell the person, "
+                        "then list it in local-skills-ok (hunsu.local.json when it is only theirs, hunsu.json when the team uses it) or leave it refused"
+                        % (sk["name"], os.path.dirname(sk["path"]).replace(os.path.expanduser("~"), "~"), sk["name"]))
+    if os.path.isfile(os.path.join(CLAUDE, "CLAUDE.md")):
+        info.append("the person's own CLAUDE.md (%s) is read into every session here; it is theirs and not judged against the project's skills"
+                    % os.path.join(CLAUDE, "CLAUDE.md").replace(os.path.expanduser("~"), "~"))
+
+
+def check_skill_overlap(target, manifest, s, found):
+    """4. Two plugins shipping a skill of the same name. Calling is never ambiguous (`plugin:skill`); what can collide is the
+    situation — a request both skills claim. That is the judge's question, and a name is a weak proxy for it: `design:review` and
+    `code:review` share a name and no situation, `pr-check` and `review` share a situation and no name. So the judge decides:
+    a fresh judgment that found no conflict between them needs no resolution; one that did is `check_judgments`' error. Only
+    a project locked without a judge (`"judge": "skip"`) has nothing else to ask, and there the name is an error, as before."""
+    errors, warnings, info = found
     owners = {}
     for sk in s["skills"]:
         if in_manifest(manifest, sk, s):
             owners.setdefault(sk["name"], []).append(sk["plugin"])
-    for name, plugins in sorted(owners.items()):
-        if len(plugins) > 1 and name not in manifest.get("resolutions", {}):
-            errors.append("skill %s: provided by %s — set resolutions[%r] to one of them or \"deny\"" % (name, ", ".join(plugins), name))
+    overlaps = {name: plugins for name, plugins in sorted(owners.items()) if len(plugins) > 1 and name not in manifest.get("resolutions", {})}
+    if not overlaps:
+        return
+    how = "set resolutions[%r] to one of them, \"deny\", or {\"accept\": \"why both apply\"} when they serve different situations"
+    if manifest.get("judge") == "skip":
+        for name, plugins in overlaps.items():
+            errors.append(("skill %s: provided by %s, and this project locks without a judge — " + how) % (name, ", ".join(plugins), name))
+        return
+    judged, stale = judgments_status(manifest, s, target)
+    for name, plugins in overlaps.items():
+        ids = {"%s:%s" % (p, name) for p in plugins}
+        if judged is None or stale:
+            info.append(("skill %s: provided by %s — the judge round decides whether they claim the same situation (or " + how + ")") % (name, ", ".join(plugins), name))
+            continue
+        together = [r["situation"] for r in judged.get("situations", []) for f in r.get("findings", []) if len(ids & set(f.get("members", []))) > 1]
+        if not together:
+            info.append("skill %s: provided by %s — judged, no conflict between them; both stay" % (name, ", ".join(plugins)))
+        # else: a finding names both — check_judgments asks for that situation's resolution
 
 
 def check_roles(manifest, s, found):
@@ -598,9 +662,22 @@ def check_judgments(target, manifest, s, found):
             errors.append("%d situation(s) were judged about other text of their members (%s) — `hunsu judge request --out DIR --stale`, judge those packets, `consume`"
                           % (len(stale["situations"]), "; ".join(stale["situations"])))
     else:
+        res = manifest.get("resolutions", {})
+        # a finding repeated across situations (the same members, the same sentences) is one conflict: a resolution of any
+        # situation that holds it covers the others — a person wrote the same answer ten times before this
+        covered = {finding_signature(f) for r in judged.get("situations", []) if r["situation"] in res for f in r["findings"]}
+        settled = 0
         for r in judged.get("situations", []):
-            if r["findings"] and r["situation"] not in manifest.get("resolutions", {}):
-                errors.append("situation %r: %d finding(s), no resolution — see %s" % (r["situation"], len(r["findings"]), CONFLICTS_DOC))
+            if r["situation"] in res:
+                continue
+            open_ = [f for f in r["findings"] if finding_class(f) == "authority" and finding_signature(f) not in covered]
+            settled += sum(finding_class(f) in SETTLED for f in r["findings"])
+            if open_:
+                errors.append("situation %r: %d finding(s) for a person, no resolution — see %s" % (r["situation"], len(open_), CONFLICTS_DOC))
+        if judged.get("rejected"):
+            warnings.append("%d judge finding(s) were rejected (no quote, a quote not in the text, an unknown member or kind) — a real conflict may be among them; read them in %s" % (len(judged["rejected"]), CONFLICTS_DOC))
+        if settled:
+            info.append("%d finding(s) settled by the members' own text (sequenced / not co-active / duplicate, each on a verified sentence) — no resolution needed; see %s" % (settled, CONFLICTS_DOC))
         known = {r["situation"] for r in judged.get("situations", [])} | {sid.split(":", 1)[1] for sid in judged_ids(manifest, s)}
         for key in manifest.get("resolutions", {}):   # a cluster round names situations anew; a resolution about an old name decides nothing
             if key not in known:
@@ -639,6 +716,35 @@ def cmd_check(args):
 JUDGMENTS = "hunsu-judgments.json"
 CONFLICTS_DOC = "hunsu-conflicts.md"
 KINDS = ("overlap", "contradiction", "premise")
+# How much a finding asks of a person. Only `authority` needs a resolution; the others are settled by the members' own text,
+# and each must be grounded by a quote that hunsu finds in that text — else the finding is `authority` (fail closed).
+# Measured before this rubric: 10 findings on two walk-through projects, all resolved by a person with accept/order, none with
+# deny/use, nearly all one pattern (a mode that refuses writes outside a run × a skill that writes) repeated per situation.
+CLASSES = {"authority": "the members diverge on who decides, a person's confirmation, or an action hard to undo (commit, delete, publish, "
+                        "install, spend) — a person must resolve it",
+           "sequenced": "one member's text already says how it yields or in what order both apply (\"writes go through a run\"); "
+                        "class_quote is that sentence",
+           "not-co-active": "the two never apply in the same moment (a worker that only runs inside a run vs a mode's no-run branch); "
+                            "class_quote is the condition that keeps them apart",
+           "duplicate": "following either gives the same result — two ways to do one thing, nothing contradicts; class_quote is "
+                        "the sentence showing the second one does the same"}
+SETTLED = ("sequenced", "not-co-active", "duplicate")
+
+
+def quote_norm(t):
+    """What a quote is compared as: whitespace collapsed, and a JSON escape undone — a judge writing JSON inside JSON quoted
+    `"reviewed": false` as `\\"reviewed\\": false`, and a real finding was rejected for it (measured, 2026-09-28)."""
+    return " ".join(str(t).replace('\\"', '"').replace("\\'", "'").split())
+
+
+def finding_class(f):
+    """A finding without a class (judged before the rubric) asks for a resolution, as it always did."""
+    return f.get("class") if f.get("class") in CLASSES else "authority"
+
+
+def finding_signature(f):
+    """The same conflict found again in another situation: same kind, same members, same quotes. One resolution covers it."""
+    return json.dumps([f.get("kind"), sorted(f.get("members", [])), sorted((m, " ".join(str(q).split())) for m, q in (f.get("quotes") or {}).items())])
 
 
 def locked_skill_ids(manifest, s):
@@ -682,6 +788,20 @@ def denied_skills(manifest, skill_ids):
         if use and same_name and ":" not in use:
             denied.update(sid for sid in same_name if sid.split(":", 1)[0] != use)
     return sorted(denied)
+
+
+INSTRUCTION_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md")
+
+
+def instruction_files(target):
+    """The project's committed standing instructions — CLAUDE.md (Claude Code), AGENTS.md (Codex): read into every session like
+    a mode's injected text, so they are members of every situation, as `file:<path>`."""
+    out = []
+    for rel in INSTRUCTION_FILES:
+        path = os.path.join(target, rel)
+        if os.path.isfile(path):
+            out.append({"source": "file:" + rel, "path": path.replace(os.sep, "/"), "text": io.open(path, encoding="utf-8").read().replace("\r\n", "\n")})
+    return out
 
 
 def members_fingerprint(manifest, members):
@@ -840,6 +960,8 @@ def member_texts(s, manifest=None, scripts=True):
     if manifest is not None:
         for mid, r in role_prompts(manifest, s).items():
             texts[mid] = r["text"]
+    for f in instruction_files(s["target"]):   # a file: its content is its identity
+        texts[f["source"]] = f["text"]
     return {k: "\n".join(sorted(v)) if isinstance(v, list) else v for k, v in texts.items()}
 
 
@@ -864,7 +986,14 @@ def judgments_status(manifest, s, target):
         changed = j.get("skills-fingerprint") != skills_fingerprint(manifest, s)
         stale = {"situations": [r["situation"] for r in j.get("situations", [])] if changed else [], "unclustered": []}
     else:
+        # the modes a situation was judged with must be the modes a session gets now: a new one (a plugin's SessionStart hook, the
+        # project's CLAUDE.md) was read by no judge, a removed one leaves a judgment about a session that no longer happens
+        now_modes = {h["source"] for h in s["hooks"] if h["event"] == "SessionStart" and h["source"].startswith("plugin:")
+                     and h["source"][7:] in manifest.get("plugins", {})} | {f["source"] for f in instruction_files(target)}
+
         def changed(r):   # judged about text (current) or, for older judgments, about versions — each compared the way it was made
+            if "members-text-fingerprint" in r and set(r.get("modes", [])) != now_modes:
+                return True
             members = r.get("members", []) + r.get("modes", [])
             if "members-text-fingerprint" in r:
                 return r["members-text-fingerprint"] not in (members_text_fingerprint(s, members, manifest), members_text_fingerprint(s, members, manifest, scripts=False))
@@ -916,7 +1045,11 @@ def judge_context(target, manifest):
     # what the judge reads: a mode by the text it injects (the host runs its command; so does hunsu), a role by the prompt its
     # worker is sent (`--prompt-only`) — never by a script's name. A worker inherits the project's modes, so a mode that says
     # "ask the user" and a role that says "ask no one" is a contradiction the judge can only see with both texts in front of it.
-    mode_packets = [{"source": h["source"], "text": mode_text(h, s)[:6000], "note": "injected at SessionStart — a member of every situation"} for h in modes]
+    # whole, as members are: the judge quotes from this text
+    mode_packets = [{"source": h["source"], "text": mode_text(h, s), "note": "injected at SessionStart — a member of every situation"} for h in modes]
+    for f in instruction_files(target):
+        modes.append({"source": f["source"], "event": "SessionStart", "command": "", "matcher": "*"})
+        mode_packets.append({"source": f["source"], "text": f["text"], "note": "read into every session (a committed instruction file) — a member of every situation"})
     roles = role_prompts(manifest, s)
     return {"s": s, "skills": skills, "modes": modes, "ident": ident, "mode_packets": mode_packets, "roles": roles}
 
@@ -974,10 +1107,12 @@ def judge_group_requests(args, target, manifest, j):
         if len(members) < 2 and not modes:
             continue
         def body(m):
+            # whole: a cut at 6000 characters hid the second half of the longest skills (mangsang operate is 10.5k), and the
+            # judge is told to quote from this text — a conflict in the tail could not be found, or quoted
             if "text" in by_id[m]:   # a role: the prompt its worker is sent
-                return by_id[m]["text"][:6000]
+                return by_id[m]["text"]
             path = by_id[m]["path"]
-            return (io.open(path, encoding="utf-8").read() if os.path.exists(path) else "")[:6000]
+            return io.open(path, encoding="utf-8").read() if os.path.exists(path) else ""
         packet = {"artifact-type": "hunsu/judge-request@1", "stage": "group", "situation": g.get("situation", "group %d" % i),
                   "members": [{"id": m, "description": by_id[m]["description"], "path": by_id[m]["path"], "text": body(m)} for m in members],
                   "modes": [{"source": m["source"], "text": m["text"]} for m in mode_packets],
@@ -985,10 +1120,15 @@ def judge_group_requests(args, target, manifest, j):
                             "contradiction": "one instructs what another forbids, or a mode's standing instruction conflicts with a member "
                                              "(a worker started by a `plugin:role` member receives the modes too)",
                             "premise": "one assumes something another forbids (e.g. artifacts in the repo vs a clean repo)"},
+                  "classes": CLASSES,
                   "instructions": ("Judge only this situation. For each finding, name the members involved (a mode is named by its source), "
                                    "quote the exact sentence from each member's `text` (a mode's `text` is what it injects into every session) "
-                                   "that creates the conflict, say why, and propose one resolution as a JSON object written as a string: {\"use\": id} | {\"deny\": [ids]} | "
-                                   "{\"order\": [ids]} | {\"accept\": reason}. No quote, no finding. Similar names are not evidence. Change no files.")}
+                                   "that creates the conflict (verbatim: hunsu checks each quote against that text and drops a finding whose quote is not there), say why, and propose one resolution as a JSON object written as a string: {\"use\": id} | {\"deny\": [ids]} | "
+                                   "{\"order\": [ids]} | {\"accept\": reason}. No quote, no finding. Similar names are not evidence. "
+                                   "Then give the finding a `class` from `classes`: how much it asks of a person. `authority` unless the members' own "
+                                   "text settles it — and for any other class, `class_quote` is {member, quote}: the verbatim sentence from that member's "
+                                   "text that settles it (hunsu checks it; a class whose sentence is not there is treated as authority). When unsure, "
+                                   "authority. Change no files.")}
         res = manifest.get("resolutions", {}).get(packet["situation"])
         if isinstance(res, dict):   # the situation is already resolved: the judge also says whether that resolution still fits what it finds now
             packet["existing_resolution"] = {"resolution": res, **({"prior_findings": prior[packet["situation"]]} if packet["situation"] in prior else {})}
@@ -1019,6 +1159,12 @@ def judge_consume(args, target, manifest, j):
             continue
         req = load_json(os.path.join(d, name.replace("-response", "-request")))
         resp = load_json(os.path.join(d, name))
+        # a finding's quote is checked against the text it claims to quote — the member's text as packed, or the mode's injected
+        # text — whitespace-normalized. "No quote, no finding" was checked for presence only: a sentence the judge paraphrased or
+        # made up passed, and a person was asked to resolve a conflict no text contains.
+        norm = quote_norm
+        texts = {m.get("id"): norm(m.get("text", "")) for m in req.get("members", [])}
+        texts.update({m.get("source"): norm(m.get("text", "")) for m in req.get("modes", [])})
         findings = []
         for f in resp.get("findings", []):
             members = f.get("members", [])
@@ -1027,8 +1173,10 @@ def judge_consume(args, target, manifest, j):
                 quotes = {q.get("member"): q.get("quote") for q in quotes if isinstance(q, dict)}
             bad = (f.get("kind") not in KINDS or len(members) < 2 or any(m not in valid_ids for m in members)
                    or any(not str(quotes.get(m, "")).strip() for m in members) or not f.get("why"))
-            if bad:
-                rejected.append("%s: %s" % (name, json.dumps(f, ensure_ascii=False)[:160]))
+            unquoted = [] if bad else [m for m in members if norm(quotes.get(m, "")) not in texts.get(m, "")]
+            if bad or unquoted:
+                rejected.append("%s: %s%s" % (name, "quote not in the text of %s — " % ", ".join(unquoted) if unquoted else "",
+                                              json.dumps(f, ensure_ascii=False)[:160]))
                 continue
             proposed = f.get("proposed") or {}
             if isinstance(proposed, str):   # Codex's strict schema carries it as text
@@ -1036,7 +1184,17 @@ def judge_consume(args, target, manifest, j):
                     proposed = json.loads(proposed) if proposed.strip() else {}
                 except ValueError:
                     proposed = {"accept": proposed}
-            findings.append({"kind": f["kind"], "members": members, "quotes": quotes, "why": f["why"], "proposed": proposed if isinstance(proposed, dict) else {}})
+            finding = {"kind": f["kind"], "members": members, "quotes": quotes, "why": f["why"], "proposed": proposed if isinstance(proposed, dict) else {}}
+            # the class: a settled one stands only on a sentence found in the text of one of the finding's members; else authority
+            claimed, cq = f.get("class"), f.get("class_quote") if isinstance(f.get("class_quote"), dict) else {}
+            if claimed in SETTLED:
+                if cq.get("member") in members and norm(cq.get("quote", "")) and norm(cq.get("quote", "")) in texts.get(cq.get("member"), ""):
+                    finding.update({"class": claimed, "class_quote": {"member": cq["member"], "quote": cq["quote"]}})
+                else:
+                    finding.update({"class": "authority", "class-refused": "%s claimed; its sentence is not in %s's text" % (claimed, cq.get("member") or "a member")})
+            else:
+                finding["class"] = "authority"
+            findings.append(finding)
         members = [m["id"] for m in req.get("members", [])]
         mode_ids = [m["source"] for m in req.get("modes", [])]   # a mode is a member of every situation; its plugin's version counts too
         # what travels for the resolution gate: the judge's verdict on the existing resolution, the texts it could quote from, and who judged
@@ -1066,7 +1224,7 @@ def judge_consume(args, target, manifest, j):
         verdict, packed, account = verdicts.get(sit) or (None, "", args.by)
         v = verdict if isinstance(verdict, dict) else {}
         quote = str(v.get("quote") or "")
-        if v.get("verdict") == "still-fits" and quote.strip() and quote in packed:
+        if v.get("verdict") == "still-fits" and quote.strip() and quote_norm(quote) in quote_norm(packed):
             # whole: a record cut at 200 kept half a sentence in the manifest and the lock (guin-site, 2026-09-28); where a line must be
             # short, it is cut where it is printed, not where it is stored
             manifest["resolutions"][sit]["reviewed"] = {"delegated": "judge %s: %s" % (account, str(v.get("why") or ""))}
@@ -1089,13 +1247,14 @@ def judge_consume(args, target, manifest, j):
     save_json(os.path.join(target, JUDGMENTS), doc)
     write_conflicts_doc(target, doc, manifest)
     n_find = sum(len(r["findings"]) for r in results)
-    print("judgments: %d situations · %d findings · %d rejected (no quote / unknown member / bad kind) -> %s, %s"
-          % (len(results), n_find, len(rejected), JUDGMENTS, CONFLICTS_DOC))
+    n_settled = sum(finding_class(f) in SETTLED for r in results for f in r["findings"])
+    print("judgments: %d situations · %d findings (%d settled by the members' text, %d for a person) · %d rejected (no quote / quote not in the text / unknown member / bad kind) -> %s, %s"
+          % (len(results), n_find, n_settled, n_find - n_settled, len(rejected), JUDGMENTS, CONFLICTS_DOC))
     if unread:
         print("findings changed under %d existing resolution(s) — marked reviewed: false until a human re-reads: %s" % (len(unread), "; ".join(unread)))
     if delegated:
         print("findings changed under %d existing resolution(s) — the judge confirmed each still fits; delegation recorded: %s" % (len(delegated), "; ".join(delegated)))
-    print("next: for each situation with findings, write resolutions[<situation>] in %s, then `hunsu check`" % MANIFEST)
+    print("next: for each situation with an authority finding, write resolutions[<situation>] in %s, then `hunsu check`" % MANIFEST)
     return 0
 
 
@@ -1103,12 +1262,18 @@ def write_conflicts_doc(target, doc, manifest):
     """The human-readable side of the judgments: what was found, the evidence, and what the judge proposed."""
     res = manifest.get("resolutions", {})
     lines = ["# hunsu — conflicts", "", "Judged by %s for skill set `%s`. A situation with findings needs an entry in `hunsu.json` `resolutions` "
-             "keyed by the situation label; `check` fails until it has one." % (doc.get("judged-by", "?"), doc["skills-fingerprint"]), ""]
+             "keyed by the situation label when a finding is `authority`; `check` fails until it has one. A finding the members' own text settles "
+             "(`sequenced`, `not-co-active`, `duplicate`, each on a sentence hunsu found in that text) needs none." % (doc.get("judged-by", "?"), doc["skills-fingerprint"]), ""]
     for r in doc["situations"]:
-        state = "resolved" if r["situation"] in res else ("needs a resolution" if r["findings"] else "no conflict")
+        authority = [f for f in r["findings"] if finding_class(f) == "authority"]
+        state = "resolved" if r["situation"] in res else ("needs a resolution" if authority else ("settled by the members' text" if r["findings"] else "no conflict"))
         lines += ["## %s — %s" % (r["situation"], state), "", "members: " + ", ".join("`%s`" % m for m in r["members"]), ""]
         for f in r["findings"]:
-            lines += ["- **%s** between %s" % (f["kind"], ", ".join("`%s`" % m for m in f["members"])), "  - why: %s" % f["why"]]
+            lines += ["- **%s** (%s) between %s" % (f["kind"], finding_class(f), ", ".join("`%s`" % m for m in f["members"])), "  - why: %s" % f["why"]]
+            if f.get("class_quote"):
+                lines.append("  - settled by `%s`: “%s”" % (f["class_quote"]["member"], str(f["class_quote"]["quote"]).strip()))
+            if f.get("class-refused"):
+                lines.append("  - class refused: %s" % f["class-refused"])
             for m, q in f["quotes"].items():
                 lines.append("  - `%s`: “%s”" % (m, str(q).strip()))
             if f["proposed"]:
@@ -1578,10 +1743,10 @@ def cmd_compose(args):
     judged, _ = judgments_status(manifest, s, target)
     if judged is None and manifest.get("judge") != "skip":
         return stop("no conflict judgment yet: run `hunsu judge request --out DIR`, the judge on each packet (judge_worker.py), `hunsu judge consume --dir DIR`, then resolutions — or set \"judge\": \"skip\" in hunsu.json to lock without one (recorded)")
-    user_hooks = [w for w in warnings if w.startswith("user ")]
+    user_hooks = [w for w in warnings if w.startswith(("user ", "unmanaged plugin "))]
     if user_hooks:
         # Acknowledged = listed in local-hooks-ok. One mechanism; no separate "reviewed" flag.
-        return stop("user-level hooks run here and are not the project's. Tell the person first, one line per hook below, and ask whether they want "
+        return stop("user-level hooks and skills, and plugins outside the manifest, run here and are not the project's. Tell the person first, one line per item below, and ask whether they want "
                     "one looked into — if so, read the file it runs on this machine and say what it takes in, where it sends it, and whether it can "
                     "change the session. Then ask where it belongs: `local-hooks-ok` in hunsu.local.json (only theirs, not committed), in hunsu.json "
                     "(the whole team runs it), or removed from their settings — then re-run compose",

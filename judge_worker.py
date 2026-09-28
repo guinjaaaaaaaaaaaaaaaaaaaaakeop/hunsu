@@ -21,13 +21,16 @@ SCHEMAS = {
                                    "why": {"type": "string"}}}}}},
     "group": {"type": "object", "additionalProperties": False, "required": ["findings"],
               "properties": {"findings": {"type": "array", "items": {
-                  "type": "object", "additionalProperties": False, "required": ["kind", "members", "quotes", "why", "proposed"],
+                  "type": "object", "additionalProperties": False, "required": ["kind", "members", "quotes", "why", "proposed", "class", "class_quote"],
                   "properties": {"kind": {"enum": ["overlap", "contradiction", "premise"]},
                                  "members": {"type": "array", "items": {"type": "string"}},
                                  "quotes": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["member", "quote"],
                                                                         "properties": {"member": {"type": "string"}, "quote": {"type": "string"}}}},   # a list, not a map: Codex's strict schemas (0.155) refuse an object with open keys; the worker folds it back to {member: quote}
                                  "why": {"type": "string"},
-                                 "proposed": {"type": "string"}}}}}},   # a JSON object as text: {"use": id} | {"deny": [ids]} | {"order": [ids]} | {"accept": why} — Codex's strict schemas refuse an open object
+                                 "proposed": {"type": "string"},
+                                 "class": {"enum": ["authority", "sequenced", "not-co-active", "duplicate"]},
+                                 "class_quote": {"type": "object", "additionalProperties": False, "required": ["member", "quote"],
+                                                 "properties": {"member": {"type": "string"}, "quote": {"type": "string"}}}}}}}},   # empty for authority   # a JSON object as text: {"use": id} | {"deny": [ids]} | {"order": [ids]} | {"accept": why} — Codex's strict schemas refuse an open object
 }
 PROMPT = ("This is a hunsu judge request. Change no files. Follow the packet's `instructions` exactly. "
           "Read a member's `path` when the description is not enough. Output one JSON object only, no prose, no code fence.\n")

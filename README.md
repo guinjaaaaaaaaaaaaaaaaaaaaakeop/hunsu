@@ -76,9 +76,13 @@ manifest, and `check` accepts exactly that content
 ### `check`
 
 manifest vs this machine. `error`: missing/wrong-version plugin, engine below floor, runtime a hook needs is not on
-PATH, a skill name provided by two plugins with no resolution. `warn`: unpublished source, duplicate hook
+PATH, a skill name provided by two plugins with no resolution *when the project locks without a judge* (`"judge":
+"skip"`) — otherwise a shared name is the judge's question: calling is never ambiguous (`plugin:skill`), and a name is a
+weak proxy for a shared situation (`design:review` and `code:review` share a name and nothing else); a fresh judgment
+that found no conflict between them needs no resolution, and one that did asks for its situation's. `warn`: unpublished source, duplicate hook
 registration, user-level hook not in the manifest (one line per script however many events it is on, with the file it
-runs on this machine), `hunsu.local.json` not ignored by git (an `error` when it is committed). `info`: links, extra
+runs on this machine), a user skill (`~/.claude/skills/<name>`) not in `local-skills-ok`, a plugin enabled here but not in
+the manifest whose hooks run for this project (`unmanaged plugin`; its skills are refused, its hooks are not), `hunsu.local.json` not ignored by git (an `error` when it is committed). `info`: links, extra
 plugins, machine-bound paths. Exit 1 on errors
 
 ### `lock`
@@ -131,7 +135,7 @@ settings overlay (below); the last `--off` takes back what it applied
 ## Conflicts between skills
 
 Two skills conflict when following both in the same situation gives contradictory behavior or duplicated authority:
-**overlap** (both claim the work — two plugins each shipping a `review` skill), **contradiction** (one instructs what
+**overlap** (both claim the work in one situation — a `review` and a `pr-check` that both answer "review this"; two skills that only share a name, a design review and a code review, do not), **contradiction** (one instructs what
 the other forbids —
 a standing mode's "never stall, pick a default" against a skill's human-confirmation gate), **premise** (one assumes
 what the other forbids).
@@ -146,10 +150,21 @@ standing modes → the judge groups them by the **situation** they claim (`clust
 2. `judge request --out DIR --groups DIR/cluster-response.json` — stage 2: one packet per group with each member's
 full text → findings with **quotes from each member**, a reason, and a proposed resolution.
 3. `judge_worker.py --request F --response F [--host claude|codex]` runs one packet.
-4. `judge consume --dir DIR` — rejects findings without quotes or with unknown members, writes `hunsu-judgments.json`
+4. `judge consume --dir DIR` — rejects findings without quotes, with a quote that is not in the member's text (whitespace aside; members travel whole, never cut), or with unknown members, writes `hunsu-judgments.json`
 (each situation with a fingerprint of its members' text — a version bump that changes no text stales nothing) and
 `hunsu-conflicts.md` (what was found, the evidence, the proposals — for a human to read).
-5. You write `resolutions[<situation>]`. `check` fails for a situation with findings and no resolution. `lock` carries
+5. Each finding carries a `class` — how much it asks of a person. `authority`: the members diverge on who decides, a
+person's confirmation, or an action hard to undo (commit, delete, publish, install, spend). `sequenced`: one member's text
+already says how it yields ("writes go through a run"). `not-co-active`: the two never apply in the same moment.
+`duplicate`: either gives the same result. Every class but `authority` stands on `class_quote`, a sentence hunsu finds
+in that member's text; no class, an unknown one, or a sentence not there is `authority` (fail closed). Measured on
+2026-09-28: three planted conflicts (a "never commit" mode against a skill that commits its review; two differently
+named review skills; "ask before any decision" against a worker told to ask no one) all came back `authority`; of the
+six findings a person had resolved on a walk-through project, all with accept/order, four came back settled.
+You write `resolutions[<situation>]` for the `authority` ones. `check` fails for a situation with an `authority`
+finding and no resolution; the same finding (members and quotes) in another situation is covered by one resolution.
+A rejected finding (no quote, a quote not in the text — JSON escapes and whitespace aside) is a `check` warning: a real
+conflict may be among them. `lock` carries
 the resolutions, and the SessionStart hook **materializes** them: one line per situation in the session's first
 context ("reviewing a change: use dwitbuk:review; never other:review", `[unreviewed]` when a proposal was applied
 unread). `deny` is also enforced by the sentinel at call time; `use`, `order`, `accept` act through these lines.
@@ -162,7 +177,10 @@ the old ones. A plugin that brings a skill no situation has seen needs a new clu
 situation's findings differ from what its resolution was written against, `consume` marks that resolution `reviewed:
 false` — it stays, and dwitbuk lists it until a human re-reads.
 
-What the judge reads is what a session reads, never a script's name. A skill is its SKILL.md. A mode (a plugin's
+What the judge reads is what a session reads, never a script's name. A skill is its SKILL.md. The project's committed
+instruction files — `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md` — are modes (`file:<path>`, members of every
+situation, identified by their content); a situation judged with other modes than a session now gets (one added, one
+removed) is stale. A mode (a plugin's
 SessionStart hook) is the text it injects: hunsu runs the hook the way the host does — a `SessionStart` payload on
 stdin, `${CLAUDE_PLUGIN_ROOT}` resolved, `HUNSU_SURVEY=1` in the environment — and packs `additionalContext`; a hook
 that reports the project's state may answer its standing text under that variable. A role (a plugin's `roles` argv,
@@ -204,7 +222,10 @@ with a mode every group is judged (cost: 1 + groups calls).
   `deny` and `use`-on-a-name reach the lock's `denied` list, which the PreToolUse hook enforces. `order` and `accept` are facts for the agent, not enforced. A member may also be a role's prompt (`hacheong:build`, judged as `plugin:role`): naming one is a fact for the agent too — the hook guards skill calls, not the workers a runner starts.
   `"reviewed": false` marks a proposal applied without a human reading it — allowed, never hidden.
 - `judge: "skip"` — lock without a conflict judgment. Recorded in the lock as `judge: skipped`.
-- `local-hooks-ok` — script names of user-level hooks that may run here without being part of the project (observers).
+- `local-skills-ok` — names of the person's own skills (`~/.claude/skills`) that may be used here; the sentinel refuses
+  any other. In `hunsu.local.json` when it is only theirs, here when the team uses it.
+- `local-hooks-ok` — script names of user-level hooks that may run here without being part of the project (observers),
+  or `plugin:NAME` for a plugin enabled on this machine but not in the manifest.
   A hook that is only yours — a terminal app's agent hooks, a personal logger — goes in `hunsu.local.json` under the
   same key instead: acknowledged on this machine, never committed.
 - `settings` — the team's switches for its products (e.g. `{"chongdae": {"outside-runs": ["content/"]}}`). A product
@@ -235,9 +256,11 @@ says so (`session: sandboxed …`) when the lock's roles are commands. Codex sna
 
 - Hooks cannot be disabled per project on any host; user-level hooks are reported, not blocked. Project-level hooks
   are the project's and are managed here.
-- The sentinel judges plugin skills only (`plugin:name`). A host built-in (`code-review`, `simplify`, `loop`) has no
-  plugin prefix and passes — the manifest cannot describe it.
-- Skill overlap is detected by name only. Whether two differently named skills do the same thing is a human judgment.
+- The sentinel judges plugin skills (`plugin:name`) and the person's own skills, which it knows by their file
+  (`~/.claude/skills/<name>/SKILL.md`). Any other name without a prefix is a host built-in (`code-review`, `simplify`,
+  `loop`) or the project's own skill and passes — built-ins are never guessed at. The person's own CLAUDE.md is said by
+  `check`, not judged: its text is theirs and would be quoted into a committed record.
+- Without a judge round (`"judge": "skip"`), skill overlap is detected by name only: two differently named skills that do the same thing are not caught, and two same-named skills for different situations need an `accept`. With a round, the judge decides both.
 - The host CLI installs whatever version a marketplace currently has; `install` cannot pin (verified: `claude plugin
   install` takes no version). `check` reports the drift; a human either takes the new version into the manifest
   (`hunsu add <plugin>` again, then the stale situations are re-judged) or the marketplace owner pins.
@@ -245,7 +268,7 @@ says so (`session: sandboxed …`) when the lock's roles are commands. Codex sna
 - On Codex the PreToolUse hook is declared with the same `Skill` matcher; whether Codex reports skill invocations
   under that tool name is unverified.
 - `compose` stops at every human decision (exit 2). It does not decide; it refuses to advance. Its gates: plugins →
-  engines → check errors → conflict judgment (or `judge: skip`) → user-level hooks → lock.
+  engines → check errors → conflict judgment (or `judge: skip`) → user-level hooks and skills, unmanaged plugins → lock.
 - Both judge worker paths have run: Claude Code (14 calls on a 5-plugin project, 27 findings, 0 rejected) and Codex (8
   + 2 calls on the same products, 7 situations, 1 finding).
 - Hosts: Claude Code (`~/.claude`, or `CLAUDE_CONFIG_DIR`; `HUNSU_CLAUDE_DIR` for tests) and Codex
