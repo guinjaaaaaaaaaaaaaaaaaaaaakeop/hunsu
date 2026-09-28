@@ -1,7 +1,7 @@
 """hunsu — locks a project's agent environment, the way a package manager locks dependencies.
 
   survey  [--target DIR] [--json]   everything that runs for this project on this host: plugins, skills, hooks, modes
-  init    [--target DIR]            write an empty hunsu.json (hosts = this host)
+  init    [--target DIR]            write an empty hunsu.json
   add     <plugin> [--target DIR]   record a plugin (version, source) from the survey into hunsu.json
   check   [--target DIR]            manifest vs this machine: plugins, engines, hooks, skill overlaps. exit 1 on errors
   link    <plugin> [PATH]           this machine only: the plugin comes from a local checkout (hunsu.local.json, not committed)
@@ -263,7 +263,8 @@ def cmd_init(args):
     path = os.path.join(args.target, MANIFEST)
     if os.path.exists(path):
         raise SystemExit("%s exists — not overwriting" % path)
-    save_json(path, {"hosts": [HOST], "engines": {}, "plugins": {}, "roles": {}, "reporters": {}, "resolutions": {}, "local-hooks-ok": []})
+    # no `hosts` list: it was written here and read by nothing — the host a lock was taken on is the lock's `host` line
+    save_json(path, {"engines": {}, "plugins": {}, "roles": {}, "reporters": {}, "resolutions": {}, "local-hooks-ok": []})
     # The link file is this machine's state. Committed by accident, it breaks every other machine.
     # The conflicts doc is a rendering of hunsu-judgments.json (regenerate: `judge render`); worker transcripts are
     # session prose no one reads back — the judgment, quotes and worker account already live in the response JSON.
@@ -273,7 +274,7 @@ def cmd_init(args):
     if missing:
         with io.open(ignore, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(("" if not lines or lines[-1] == "" else "\n") + "\n".join(missing) + "\n")
-    print("wrote %s (hosts: %s), %s ignored. Add plugins with `hunsu add <plugin>`." % (path, HOST, LOCAL))
+    print("wrote %s, %s ignored. Add plugins with `hunsu add <plugin>`." % (path, LOCAL))
     return 0
 
 

@@ -49,7 +49,7 @@ it works on your machine and breaks on everyone else's. No lock, no enforcement.
 |---|---|---|
 | `hunsu.json` | yes | you (via `init`, `add`, and by hand for `engines`, `resolutions`, `local-hooks-ok`) |
 | `hunsu.lock.json` | yes | `lock` — the resolved snapshot: versions, skills, hooks, engine versions found, warnings |
-| `hunsu-judgments.json` | yes | the judge round's verdicts per situation, fingerprinted by the members' text — what `judge: judged` in the lock refers to; `hunsu-conflicts.md` is its rendering (`judge render`, not committed) |
+| `hunsu-judgments.json` | yes | the judge round's verdicts per situation, fingerprinted by the members' text — the file the judge gate reads (`compose` stops without it; the lock's `judge` line only records the outcome); `hunsu-conflicts.md` is its rendering (`judge render`, not committed) |
 | `.claude/settings.local.json` | no (`init` and `dev` add it to `.gitignore`; `check` fails if it is committed) | `dev` — the working sources this machine runs instead of the manifest's copies |
 | `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine; by hand, `local-hooks-ok` for user-level hooks that are only yours |
 
@@ -83,7 +83,12 @@ plugins, machine-bound paths. Exit 1 on errors
 
 ### `lock`
 
-write `hunsu.lock.json`; refuses on errors, records warnings
+write `hunsu.lock.json`; refuses on errors, records warnings. Two kinds of field in it. Code reads: `plugins.*.version`
+and `.fingerprint` (`check`, chongdae's builder), `skills` and `denied` (the pre-skill hook), `resolutions` (the
+session-start line), `roles` (chongdae), `reporters` and `record-paths` (dwitbuk, hacheong), `settings` (dwitbuk's stop
+hook, with `hunsu.json` overriding). The rest — `judge`, `warnings`, `hooks`, `engines`, `skills-fingerprint`,
+`roles-declared`, `host`, `artifact-type`, `plugins.*.source`/`marketplace`/`linked` — is for the person reading the
+lock in a diff: what was found and where it came from. Nothing decides on them; do not cite them as a mechanism.
 
 ### `compose`
 
@@ -172,7 +177,6 @@ with a mode every group is judged (cost: 1 + groups calls).
 
 ```json
 {
-  "hosts": ["claude-code"],
   "engines": {"claude-code": ">=2.1", "python": ">=3.9", "node": ">=20"},
   "plugins": {"hacheong": {"version": "1.1.0", "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hacheong"}},
   "resolutions": {"review": "dwitbuk"},
