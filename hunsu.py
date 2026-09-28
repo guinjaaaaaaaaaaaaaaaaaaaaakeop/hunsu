@@ -1067,7 +1067,9 @@ def judge_consume(args, target, manifest, j):
         v = verdict if isinstance(verdict, dict) else {}
         quote = str(v.get("quote") or "")
         if v.get("verdict") == "still-fits" and quote.strip() and quote in packed:
-            manifest["resolutions"][sit]["reviewed"] = {"delegated": "judge %s: %s" % (account, str(v.get("why") or "")[:200])}
+            # whole: a record cut at 200 kept half a sentence in the manifest and the lock (guin-site, 2026-09-28); where a line must be
+            # short, it is cut where it is printed, not where it is stored
+            manifest["resolutions"][sit]["reviewed"] = {"delegated": "judge %s: %s" % (account, str(v.get("why") or ""))}
             delegated.append(sit)
             print("situation %r: findings changed — the judge says the resolution still fits (quote verified); kept, delegation recorded" % sit)
         else:

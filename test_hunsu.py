@@ -875,7 +875,8 @@ def test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed():
         assert "still fits (quote verified); kept, delegation recorded" in out, out
         res = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["resolutions"]["reviewing a change"]
         assert res["deny"] == ["beta:review"], res
-        assert res["reviewed"]["delegated"].startswith("judge claude-code opus-x: the deny still holds:") and len(res["reviewed"]["delegated"]) <= len("judge claude-code opus-x: ") + 200, res
+        # the judge's sentence is the record, kept whole: a cut at 200 left half a sentence in guin-site's manifest and lock
+        assert res["reviewed"]["delegated"] == "judge claude-code opus-x: the deny still holds: " + "x" * 300, res
         # check treats the delegated form as reviewed: no unreviewed finding
         code, out = run("check", "--findings", "--target", h.target)
         assert not [f for f in json.loads(out)["findings"] if f["kind"] == "unreviewed"], out
