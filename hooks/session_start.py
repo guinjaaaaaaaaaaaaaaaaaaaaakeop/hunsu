@@ -33,6 +33,9 @@ def main():
                               capture_output=True, text=True, encoding="utf-8", errors="replace")
         tail = [l for l in done.stdout.strip().split("\n") if l.strip()]
         summary = tail[-1] if tail else "check produced no output"
+        behind = sum(1 for l in tail if hunsu.BEHIND in l)   # a release is waiting: said, so taking it is a choice someone sees
+        if behind:
+            summary += " · %d plugin(s) behind a release available here" % behind
         state = "environment differs from hunsu.json" if done.returncode else "environment matches hunsu.json"
         msg = "hunsu: %s (%s). `%s \"%s\" check` for the list." % (state, summary, PY, ENGINE.replace(os.sep, "/"))
         lock = hunsu.load_json(os.path.join(cwd, "hunsu.lock.json"))

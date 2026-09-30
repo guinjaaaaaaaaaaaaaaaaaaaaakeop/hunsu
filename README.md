@@ -82,7 +82,9 @@ weak proxy for a shared situation (`design:review` and `code:review` share a nam
 that found no conflict between them needs no resolution, and one that did asks for its situation's. `warn`: unpublished source, duplicate hook
 registration, user-level hook not in the manifest (one line per script however many events it is on, with the file it
 runs on this machine), a user skill (`~/.claude/skills/<name>`) not in `local-skills-ok`, a plugin enabled here but not in
-the manifest whose hooks run for this project (`unmanaged plugin`; its skills are refused, its hooks are not), `hunsu.local.json` not ignored by git (an `error` when it is committed). `info`: links, extra
+the manifest whose hooks run for this project (`unmanaged plugin`; its skills are refused, its hooks are not), `hunsu.local.json` not ignored by git (an `error` when it is committed). `info`: a pinned plugin behind a release available here (`plugin X is behind: pinned 1.12.2; the
+marketplace M lists 1.13.0 (local copy)`, or a linked checkout's version — no network: a marketplace copy is as fresh as
+its last `claude plugin marketplace update`; the session's first line counts them), links, extra
 plugins, machine-bound paths. Exit 1 on errors
 
 ### `lock`

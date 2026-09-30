@@ -417,6 +417,7 @@ def check(target):
     s = survey(target)
     found = ([], [], [])
     check_local_files(target, found)
+    check_behind(target, manifest, s, found)
     if check_plugins(target, manifest, s, found):
         return found
     check_session(manifest, found)
@@ -444,6 +445,53 @@ def check_local_files(target, found):
                 errors.append("%s is committed — it holds this machine's links and hooks: `git rm --cached %s`, and add it to .gitignore" % (local_file, local_file))
             elif not ignored:
                 warnings.append("%s is not ignored by git — it holds this machine's links and hooks; add it to .gitignore" % local_file)
+
+
+BEHIND = "is behind:"   # the phrase the SessionStart hook counts
+
+
+def _semver(v):
+    """(1, 13, 0) for "1.13.0"; None for anything else — an unknown format is skipped, never guessed at."""
+    return tuple(int(x) for x in v.split(".")) if isinstance(v, str) and re.fullmatch(r"\d+(\.\d+){0,3}", v) else None
+
+
+def marketplace_version(market, name):
+    """The version a marketplace offers for `name`, read from this machine's copy of it — no network: a git-backed
+    marketplace's copy is only as fresh as its last `claude plugin marketplace update`. The plugin's own manifest inside the
+    copy wins over the listing's `version` (the listing is written by hand and drifts). None when there is no copy."""
+    loc = (market or {}).get("installLocation")
+    if not loc or not os.path.isdir(loc):
+        return None
+    root = linked_source(loc, name)
+    v = source_version(root) if root else None
+    if not v:
+        entry = next((e for e in load_json(os.path.join(loc, ".claude-plugin", "marketplace.json")).get("plugins", []) if e.get("name") == name), {})
+        v = entry.get("version")
+    return v
+
+
+def check_behind(target, manifest, s, found):
+    """0. A pinned plugin older than what is available here. `check` compared the manifest with this machine only, so a
+    project pinned a release behind stayed green (guin-site, 2026-09-30: mangsang 1.12.2 and hunsu 1.6.2 pinned, 1.13.0 and
+    1.7.0 released). Info, not a warning: taking a release is a decision (`hunsu add`, then lock), not a drift. Sources: the
+    local copy of the plugin's marketplace, and a linked checkout (`hunsu link`) when there is one."""
+    errors, warnings, info = found
+    markets = load_json(os.path.join(CLAUDE, "plugins", "known_marketplaces.json")) if HOST != "codex" else {}
+    linked = links(target)
+    for name, want in sorted(manifest.get("plugins", {}).items()):
+        pinned = _semver(want.get("version"))
+        if pinned is None:
+            continue
+        offers = []
+        mv = marketplace_version(markets.get(want.get("marketplace")), name)
+        if _semver(mv) and _semver(mv) > pinned:
+            offers.append("the marketplace %s lists %s (local copy)" % (want.get("marketplace"), mv))
+        src = linked_source(linked[name], name) if name in linked else None
+        lv = source_version(src) if src else None
+        if _semver(lv) and _semver(lv) > pinned:
+            offers.append("the linked source %s is at %s" % (src.replace(os.path.expanduser("~"), "~"), lv))
+        if offers:
+            info.append("plugin %s %s pinned %s; %s — `hunsu add %s`, then lock, to take it" % (name, BEHIND, want["version"], "; ".join(offers), name))
 
 
 def check_plugins(target, manifest, s, found):

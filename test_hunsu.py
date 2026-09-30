@@ -308,6 +308,46 @@ def test_a_sandboxed_codex_session_is_told_its_workers_cannot_start():
                 os.environ["CODEX_SANDBOX"] = saved
 
 
+def test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here():
+    """guin-site pinned mangsang 1.12.2 and hunsu 1.6.2 while 1.13.0 and 1.7.0 were out, and `check` was green: it compared
+    the manifest with this machine only. The local copy of a plugin's marketplace (as fresh as its last update) and a linked
+    checkout both say what is available; a pin older than either is an info line, and the session's first line counts it."""
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.2.0", ["build"])
+        h.add_plugin("m2", "beta", "2.0.0", ["review"])
+        h.add_plugin("m3", "gamma", "0.9.0", ["retro"])
+        copy = os.path.join(h.home, "marketplaces", "m1")   # the marketplace's local copy has moved on: its plugin says 1.3.0
+        write(os.path.join(copy, ".claude-plugin", "marketplace.json"), {"plugins": [{"name": "alpha", "source": "./", "version": "1.2.0"}]})
+        write(os.path.join(copy, ".claude-plugin", "plugin.json"), {"name": "alpha", "version": "1.3.0"})
+        h.markets["m1"]["installLocation"] = copy
+        same = os.path.join(h.home, "marketplaces", "m2")     # a copy at the pinned version: nothing to say
+        write(os.path.join(same, ".claude-plugin", "marketplace.json"), {"plugins": [{"name": "beta", "source": "./", "version": "2.0.0"}]})
+        write(os.path.join(same, ".claude-plugin", "plugin.json"), {"name": "beta", "version": "2.0.0"})
+        h.markets["m2"]["installLocation"] = same
+        odd = os.path.join(h.home, "marketplaces", "m3")      # a version that is no semver: skipped, not guessed at
+        write(os.path.join(odd, ".claude-plugin", "plugin.json"), {"name": "gamma", "version": "nightly"})
+        h.markets["m3"]["installLocation"] = odd
+        h.flush()
+        run("init", "--target", h.target)
+        for p in ("alpha", "beta", "gamma"):
+            run("add", p, "--target", h.target)
+        errors, warnings, info = hunsu.check(h.target)
+        behind = [i for i in info if hunsu.BEHIND in i]
+        assert behind == ["plugin alpha is behind: pinned 1.2.0; the marketplace m1 lists 1.3.0 (local copy) — `hunsu add alpha`, then lock, to take it"], info
+        assert not any("alpha" in e for e in errors), "a release waiting is a choice, not a drift"
+        # a linked checkout ahead of the pin says so too
+        src = os.path.join(h.home, "src", "beta")
+        write(os.path.join(src, ".claude-plugin", "plugin.json"), {"name": "beta", "version": "2.1.0"})
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCAL), {"links": {"beta": src}})
+        info = hunsu.check(h.target)[2]
+        assert any(i.startswith("plugin beta is behind: pinned 2.0.0; the linked source") and "is at 2.1.0" in i for i in info), info
+        # the session's first line counts them
+        env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
+        out = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "session_start.py")], input=json.dumps({"cwd": h.target}),
+                             capture_output=True, text=True, encoding="utf-8", env=env).stdout
+        assert "2 plugin(s) behind a release available here" in json.loads(out)["hookSpecificOutput"]["additionalContext"], out
+
+
 def test_check_error_branches_each_fire():
     with Host() as h:
         h.add_plugin("m1", "alpha", "1.0.0", ["build", "retro"], hooks={"Stop": [{"hooks": [{"type": "command", "command": "nonexistent-runtime-xyz go"}]}]})
