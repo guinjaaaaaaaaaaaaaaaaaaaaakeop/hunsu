@@ -4,6 +4,7 @@
   init    [--target DIR]            write an empty hunsu.json
   add     <plugin> [--target DIR]   record a plugin (version, source) from the survey into hunsu.json
   check   [--target DIR]            manifest vs this machine: plugins, engines, hooks, skill overlaps. exit 1 on errors
+  policy  [--target DIR]            read-only: the resolutions by situation — the hook's line, each one's reason and who settled it
   link    <plugin> [PATH]           this machine only: the plugin comes from a local checkout (hunsu.local.json, not committed)
   unlink  <plugin>
   lock    [--target DIR]            write hunsu.lock.json from the resolved environment — only when check has no errors
@@ -123,7 +124,8 @@ def survey_codex(target):
         src = re.sub(r"^//\?/", "", str(m.get("source", "")).replace("\\", "/"))   # Codex writes Windows paths as \\?\\C:\\... — a link is C:/...
         source = src if m.get("source_type") == "local" else ("github:" + src.split("github.com/")[-1].removesuffix(".git") if "github.com" in src else src or "unknown")
         plugins[key] = {"name": name, "version": manifest.get("version") or (versions[-1] if versions else None), "source": source, "marketplace": market,
-                        "path": root.replace(os.sep, "/"), "engines": manifest.get("engines") or {}, "roles": manifest.get("roles") or {}, "records": manifest.get("records") or []}
+                        "path": root.replace(os.sep, "/"), "engines": manifest.get("engines") or {}, "roles": manifest.get("roles") or {}, "records": manifest.get("records") or [],
+                        "reads": manifest.get("reads") or {}}
         skills_dir = os.path.join(root, "skills")
         if os.path.isdir(skills_dir):
             for d in sorted(os.listdir(skills_dir)):
@@ -197,7 +199,8 @@ def survey(target):
         manifest = load_json(os.path.join(root, ".claude-plugin", "plugin.json"))
         plugins[key] = {"name": name, "version": manifest.get("version") or inst.get("version"),
                         "source": source_id(markets.get(market)), "marketplace": market, "path": root, "loaded-from": loaded_from,
-                        "engines": manifest.get("engines") or {}, "roles": manifest.get("roles") or {}, "records": manifest.get("records") or []}
+                        "engines": manifest.get("engines") or {}, "roles": manifest.get("roles") or {}, "records": manifest.get("records") or [],
+                        "reads": manifest.get("reads") or {}}
         skills_dir = os.path.join(root, "skills")
         if os.path.isdir(skills_dir):
             for d in sorted(os.listdir(skills_dir)):
@@ -1450,33 +1453,120 @@ def cmd_install(args):
     return 1 if blocked else 0
 
 
+def policy_line(key, res):
+    """One situation's resolution as the SessionStart hook says it."""
+    if isinstance(res, str):
+        return "%s: %s" % (key, "denied" if res == "deny" else "%s's" % res)
+    parts = []
+    if res.get("use"):
+        parts.append("use %s" % res["use"])
+    if res.get("deny"):
+        parts.append("never %s" % ", ".join(res["deny"]))
+    if res.get("order"):
+        parts.append("%s first, then %s" % (res["order"][0], ", ".join(res["order"][1:])) if len(res["order"]) > 1 else "%s" % res["order"][0])
+    if res.get("accept"):
+        parts.append("both apply: %s" % res["accept"][:160])
+    if res.get("note"):
+        parts.append("(%s)" % res["note"][:120])
+    line = "%s: %s" % (key, "; ".join(parts) or "no rule")
+    if res.get("reviewed") is False:
+        line += " [unreviewed — applied from the judge's proposal]"
+    elif isinstance(res.get("reviewed"), dict) and res["reviewed"].get("delegated"):
+        line += " [re-judged by delegation]"
+    return line
+
+
 def policy_lines(lock):
     """The lock's resolutions as the lines the host injects at SessionStart — the policy materialized where the agent reads,
     one line per situation. In a package manager, resolving is applying; here `deny` is applied by the sentinel and the rest by
     these lines. `reviewed: false` is shown as such, never hidden."""
+    return [policy_line(key, res) for key, res in (lock.get("resolutions") or {}).items()]
+
+
+def resolution_reasons(res):
+    """What the hook's line cut: `accept` past 160 characters, `note` past 120, whole. use/deny/order are whole in the line."""
+    if isinstance(res, str):
+        return []
+    return ["%s (whole): %s" % (field, res[field]) for field, cut in (("accept", 160), ("note", 120)) if len(res.get(field) or "") > cut]
+
+
+def settled_by(res, short=False):
+    """Who settled a resolution, as its `reviewed` records it; short: the name alone (a delegation's judge, not its reason)."""
+    rv = None if isinstance(res, str) else res.get("reviewed")
+    if rv is False:
+        return "nobody yet — the judge's proposal, applied unread (reviewed: false)"
+    if isinstance(rv, dict) and rv.get("by"):
+        return "by %s%s" % (rv["by"], (" — " + rv["why"]) if rv.get("why") else "")
+    if isinstance(rv, dict) and rv.get("delegated"):
+        return "delegated: %s" % (rv["delegated"].split(": ", 1)[0] if short else rv["delegated"])
+    if rv is True:
+        return "reviewed (no name recorded)"
+    return "no `reviewed` record — written into %s by hand" % MANIFEST
+
+
+def open_situations(manifest, judged):
+    """Judged situations with a finding for a person that no resolution covers — check_judgments' rule, read from the file."""
+    res = manifest.get("resolutions", {})
+    covered = {finding_signature(f) for r in judged.get("situations", []) if r["situation"] in res for f in r["findings"]}
     out = []
-    for key, res in (lock.get("resolutions") or {}).items():
-        if isinstance(res, str):
-            out.append("%s: %s" % (key, "denied" if res == "deny" else "%s's" % res))
+    for r in judged.get("situations", []):
+        if r["situation"] in res:
             continue
-        parts = []
-        if res.get("use"):
-            parts.append("use %s" % res["use"])
-        if res.get("deny"):
-            parts.append("never %s" % ", ".join(res["deny"]))
-        if res.get("order"):
-            parts.append("%s first, then %s" % (res["order"][0], ", ".join(res["order"][1:])) if len(res["order"]) > 1 else "%s" % res["order"][0])
-        if res.get("accept"):
-            parts.append("both apply: %s" % res["accept"][:160])
-        if res.get("note"):
-            parts.append("(%s)" % res["note"][:120])
-        line = "%s: %s" % (key, "; ".join(parts) or "no rule")
-        if res.get("reviewed") is False:
-            line += " [unreviewed — applied from the judge's proposal]"
-        elif isinstance(res.get("reviewed"), dict) and res["reviewed"].get("delegated"):
-            line += " [re-judged by delegation]"
-        out.append(line)
+        open_ = [f for f in r["findings"] if finding_class(f) == "authority" and finding_signature(f) not in covered]
+        if open_:
+            out.append((r["situation"], len(open_)))
     return out
+
+
+POLICY_HELP = ("read-only: this project's resolutions by situation — the line the SessionStart hook prints (from hunsu.lock.json), each "
+               "one's reason and who settled it (from hunsu.json; where the two differ it says so), and the judged situations that still need one")
+
+
+def cmd_policy(args):
+    """Read-only: the project's resolutions by situation — the line the SessionStart hook prints (from the lock: what was
+    locked is what sessions get), and from hunsu.json, where declarations are read, each one's reason and who settled it;
+    where the two differ, it says so. Then the judged situations that still need a resolution."""
+    manifest = load_json(os.path.join(args.target, MANIFEST))
+    lock = load_json(os.path.join(args.target, LOCK))
+    if not manifest:
+        print("no %s here — nothing declared, nothing locked (`hunsu init`, or the compose skill)" % MANIFEST)
+        return 0
+    declared, locked = manifest.get("resolutions", {}), (lock.get("resolutions") or {}) if lock else None
+    if locked is None:
+        print("hunsu policy — no %s: sessions get no policy yet. What %s declares (lines as the hook would print them after `hunsu lock`):"
+              % (LOCK, MANIFEST))
+    else:
+        print("hunsu policy — resolutions by situation. Each line is the lock's (%s), as the SessionStart hook prints it — the rule is "
+              "the reason; who settled it is %s's." % (LOCK, MANIFEST))
+    for key in list(locked or {}) + [k for k in declared if k not in (locked or {})]:
+        mine, theirs = declared.get(key), (locked or {}).get(key)
+        print("- %s" % policy_line(key, theirs if theirs is not None else mine))
+        if mine is None:
+            print("    in the lock, gone from %s — sessions still get it until `hunsu lock`" % MANIFEST)
+            mine = theirs
+        elif locked is not None and theirs is None:
+            print("    in %s, not in the lock — sessions do not get it until `hunsu lock`" % MANIFEST)
+        elif theirs is not None and theirs != mine:
+            rule = lambda r: r if isinstance(r, str) else {k: v for k, v in r.items() if k != "reviewed"}
+            if rule(theirs) != rule(mine):
+                print("    %s now says: %s — sessions get the lock's until `hunsu lock`" % (MANIFEST, policy_line(key, mine)))
+            else:
+                print("    settled again since the lock (the lock's: %s) — `hunsu lock` carries this one" % settled_by(theirs, short=True))
+        for reason in resolution_reasons(mine):
+            print("    %s" % reason)
+        print("    settled: %s" % settled_by(mine))
+    if not declared and not locked:
+        print("  (no resolutions)")
+    judged = load_json(os.path.join(args.target, JUDGMENTS))
+    if manifest.get("judge") == "skip":
+        print("judge: skipped (%s) — no judged situations to resolve" % MANIFEST)
+    elif not judged:
+        print("no conflict judgment yet (%s) — `hunsu judge request`" % JUDGMENTS)
+    else:
+        need = open_situations(manifest, judged)
+        print("still need a resolution (%s): %s" % (JUDGMENTS, "; ".join("%s (%d finding(s) for a person)" % kv for kv in need) or "none")
+              + (" — see %s" % CONFLICTS_DOC if need else "") + ". Whether the judgments are current: `hunsu check`.")
+    return 0
 
 
 def cmd_lock(args):
@@ -1513,6 +1603,8 @@ def cmd_lock(args):
             # product that must leave the others' records alone (a runner's touched files, a reviewer's diff, a builder's tree
             # check) reads one list here instead of naming its siblings
             "record-paths": {name: sorted(enabled(s, name, want).get("records") or []) for name, want in manifest["plugins"].items()},
+            # how each product's records are read (`reads` in its plugin.json: kind -> argv) — a reader takes them from here, never from a sibling
+            "reads": {name: r for name, want in manifest["plugins"].items() for r in [enabled(s, name, want).get("reads") or {}] if r},
             "judge": "skipped" if manifest.get("judge") == "skip" else ("none" if judgments_status(manifest, s, args.target)[0] is None else "judged"),
             "warnings": warnings}
     save_json(os.path.join(args.target, LOCK), lock)
@@ -1803,10 +1895,10 @@ def cmd_compose(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="hunsu", description=__doc__)
+    parser = argparse.ArgumentParser(prog="hunsu", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("survey", "init", "add", "remove", "check", "link", "unlink", "dev", "lock", "compose", "install", "judge"):
-        p = sub.add_parser(name)
+    for name in ("survey", "init", "add", "remove", "check", "policy", "link", "unlink", "dev", "lock", "compose", "install", "judge"):
+        p = sub.add_parser(name, **({"help": POLICY_HELP, "description": POLICY_HELP} if name == "policy" else {}))
         if name == "check":
             p.add_argument("--findings", action="store_true", help="print drift and unread resolutions as dwitbuk/findings@1 JSON")
         p.add_argument("--target", default=".")
@@ -1833,7 +1925,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     return {"survey": cmd_survey, "init": cmd_init, "add": cmd_add, "check": cmd_check,
             "link": cmd_link, "unlink": cmd_unlink, "dev": cmd_dev, "lock": cmd_lock, "compose": cmd_compose,
-            "install": cmd_install, "judge": cmd_judge, "remove": cmd_remove}[args.cmd](args)
+            "install": cmd_install, "judge": cmd_judge, "remove": cmd_remove, "policy": cmd_policy}[args.cmd](args)
 
 
 if __name__ == "__main__":

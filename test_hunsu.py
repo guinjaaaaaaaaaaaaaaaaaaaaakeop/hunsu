@@ -22,9 +22,9 @@ def write(path, data):
         fh.write(json.dumps(data, ensure_ascii=False, indent=1) if not isinstance(data, str) else data)
 
 
-def plugin(cache, market, name, version, skills, hooks=None, engines=None, roles=None, records=None):
+def plugin(cache, market, name, version, skills, hooks=None, engines=None, roles=None, records=None, reads=None):
     root = os.path.join(cache, market, name, version)
-    write(os.path.join(root, ".claude-plugin", "plugin.json"), {"name": name, "version": version, **({"engines": engines} if engines else {}), **({"roles": roles} if roles else {}), **({"records": records} if records else {})})
+    write(os.path.join(root, ".claude-plugin", "plugin.json"), {"name": name, "version": version, **({"engines": engines} if engines else {}), **({"roles": roles} if roles else {}), **({"records": records} if records else {}), **({"reads": reads} if reads else {})})
     for sk in skills:
         write(os.path.join(root, "skills", sk, "SKILL.md"), "---\nname: %s\ndescription: does %s\n---\n" % (sk, sk))
     if hooks:
@@ -43,8 +43,8 @@ class Host:
         os.makedirs(self.target)
         self.enabled, self.installed, self.markets, self.user_hooks = {}, {}, {}, {}
 
-    def add_plugin(self, market, name, version, skills, hooks=None, source=None, engines=None, roles=None, records=None):
-        root = plugin(self.cache, market, name, version, skills, hooks, engines, roles, records)
+    def add_plugin(self, market, name, version, skills, hooks=None, source=None, engines=None, roles=None, records=None, reads=None):
+        root = plugin(self.cache, market, name, version, skills, hooks, engines, roles, records, reads)
         key = "%s@%s" % (name, market)
         self.enabled[key] = True
         self.installed[key] = [{"installPath": root, "version": version}]
@@ -95,7 +95,7 @@ def test_survey_lists_plugins_skills_hooks_and_modes():
         h.user_hooks = {"Stop": [{"hooks": [{"type": "command", "command": "python3 /home/FIXTURE/observe.py"}]}]}
         h.flush()
         s = hunsu.survey(h.target)
-        assert s["plugins"]["alpha@m1"] == {"name": "alpha", "version": "1.0.0", "source": "github:org/m1", "marketplace": "m1", "path": s["plugins"]["alpha@m1"]["path"], "loaded-from": "install", "engines": {}, "roles": {}, "records": []}
+        assert s["plugins"]["alpha@m1"] == {"name": "alpha", "version": "1.0.0", "source": "github:org/m1", "marketplace": "m1", "path": s["plugins"]["alpha@m1"]["path"], "loaded-from": "install", "engines": {}, "roles": {}, "records": [], "reads": {}}
         assert [sk["name"] for sk in s["skills"]] == ["build"]
         assert {(x["event"], x["source"]) for x in s["hooks"]} == {("SessionStart", "plugin:alpha"), ("Stop", "user")}
         assert s["modes"] == ["plugin:alpha"]
@@ -200,7 +200,8 @@ def test_a_role_provider_is_what_the_plugin_declares_and_the_lock_carries_argv()
     the role's argv (`roles`). A skill id is not a provider: a skill is text the session agent reads; a runner spawns argv.
     `lock` materializes `plugin:role` to the declared argv with `{host}` filled, and keeps the declaration beside it."""
     with Host() as h:
-        h.add_plugin("m1", "alpha", "1.0.0", ["build"], roles={"build": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "{host}"]}, records=[".alpha/", "alpha.json"])
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"], roles={"build": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "{host}"]}, records=[".alpha/", "alpha.json"],
+                     reads={"file": ["python3", "{plugin:alpha}/a.py", "show", "{path}", "--target", "{target}"]})
         h.add_plugin("m2", "beta", "1.0.0", ["review"])
         h.flush()
         run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("add", "beta", "--target", h.target)
@@ -223,6 +224,8 @@ def test_a_role_provider_is_what_the_plugin_declares_and_the_lock_carries_argv()
         assert lock["roles-declared"]["implementer"] == "alpha:build"
         # where each product keeps its records, from its plugin.json — so the others read one list instead of naming siblings
         assert lock["record-paths"] == {"alpha": [".alpha/", "alpha.json"], "beta": []}, lock["record-paths"]
+        # and how they are read: only the plugins that declare a way
+        assert lock["reads"] == {"alpha": {"file": ["python3", "{plugin:alpha}/a.py", "show", "{path}", "--target", "{target}"]}}, lock["reads"]
 
 
 def test_survey_describes_what_the_host_runs_a_directory_marketplace_plugin_in_place():
@@ -917,10 +920,53 @@ def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_ca
             done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", env=env)
             return done.returncode, done.stdout + done.stderr
         code, out = hook("session_start.py", {"cwd": h.target})
-        assert "hunsu policy" in out and "- building: alpha:build first, then plugin:beta" in out, out
+        assert "hunsu policy" in out and "- building: alpha:build first, then plugin:beta" in out and '" policy` prints them again' in out, out
         # the sentinel lets host built-ins through: nothing outside the manifest runs, honestly scoped to plugin skills
         assert hook("pre_skill.py", {"cwd": h.target, "tool_name": "Skill", "tool_input": {"skill": "simplify"}})[0] == 0
         assert hook("pre_skill.py", {"cwd": h.target, "tool_name": "Skill", "tool_input": {"skill": "gamma:other"}})[0] == 2
+
+
+def test_policy_reads_the_resolutions_back_with_who_settled_each_and_says_where_the_lock_and_manifest_differ():
+    """A session mid-way, or a person, asks what was decided and on whose word: the hook's line (the lock's), the reason the
+    line cut, who settled it (hunsu.json's `reviewed`), which file each came from when they differ, and what still needs one."""
+    with Host() as h:
+        target = h.target
+        code, out = run("policy", "--target", target)
+        assert code == 0 and "no hunsu.json here" in out, out
+        long_accept = "both apply because " + "a" * 200
+        manifest(target, resolutions={"reviewing a change": {"use": "a:eyes", "deny": ["b:review"], "reviewed": {"by": "kim", "why": "read the conflicts doc"}},
+                                      "building": {"order": ["a:build", "plugin:b"], "reviewed": {"delegated": "judge claude-code opus-x: the order still holds"}},
+                                      "auditing": {"accept": long_accept, "reviewed": False},
+                                      "retro": "dakdol"})
+        code, out = run("policy", "--target", target)
+        assert code == 0 and "no hunsu.lock.json: sessions get no policy yet" in out, out
+        assert "- reviewing a change: use a:eyes; never b:review\n    settled: by kim — read the conflicts doc" in out, out
+        assert "settled: delegated: judge claude-code opus-x: the order still holds" in out, out
+        assert "accept (whole): " + long_accept in out and "settled: nobody yet — the judge's proposal, applied unread" in out, out
+        assert "- retro: dakdol's\n    settled: no `reviewed` record" in out, out
+        assert "no conflict judgment yet" in out, out
+        # the lock is what sessions get; hunsu.json moved on: each difference is named, and the line stays the lock's
+        lock = {"resolutions": {"reviewing a change": {"use": "a:eyes", "deny": ["b:review"], "reviewed": {"by": "kim", "why": "read the conflicts doc"}},
+                                "building": {"order": ["a:build", "plugin:b"], "reviewed": {"delegated": "judge codex gpt-y: an older reading"}},
+                                "auditing": {"accept": "the old reason", "reviewed": False},
+                                "gone": "deny"}}
+        hunsu.save_json(os.path.join(target, hunsu.LOCK), lock)
+        code, out = run("policy", "--target", target)
+        assert code == 0 and "Each line is the lock's (hunsu.lock.json)" in out, out
+        assert "- reviewing a change: use a:eyes; never b:review\n    settled: by kim" in out, out   # same in both: nothing said
+        assert "settled again since the lock (the lock's: delegated: judge codex gpt-y)" in out, out
+        assert "- auditing: both apply: the old reason [unreviewed" in out and "hunsu.json now says: auditing: both apply: both apply because" in out, out
+        assert "- gone: denied\n    in the lock, gone from hunsu.json" in out, out
+        assert "- retro: dakdol's\n    in hunsu.json, not in the lock" in out, out
+        # the situations a judgment found that no resolution covers — a repeat of a resolved finding is covered
+        f = {"kind": "contradiction", "members": ["a:x", "b:y"], "quotes": {"a:x": "q1", "b:y": "q2"}, "class": "authority"}
+        hunsu.save_json(os.path.join(target, hunsu.JUDGMENTS), {"situations": [{"situation": "building", "findings": [f]},
+                                                                               {"situation": "planning", "findings": [dict(f)]},
+                                                                               {"situation": "shipping", "findings": [dict(f, members=["a:z", "b:y"])]}]})
+        code, out = run("policy", "--target", target)
+        assert "still need a resolution (hunsu-judgments.json): shipping (1 finding(s) for a person)" in out and "planning (" not in out, out
+        manifest(target, judge="skip")
+        assert "judge: skipped" in run("policy", "--target", target)[1]
 
 
 def test_a_namesake_from_two_marketplaces_is_two_plugins():
@@ -1002,6 +1048,9 @@ def test_session_start_hook_reports_both_states():
         run("add", "alpha", "--target", h.target)
         done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": h.target}), capture_output=True, text=True, encoding="utf-8", env=env)
         assert "matches hunsu.json" in json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"], done.stdout
+        done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": h.target}), capture_output=True, text=True, encoding="utf-8",
+                              env=dict(env, AGENT_WORKER="1"))
+        assert (done.returncode, done.stdout) == (0, ""), "a worker session: silent, no check"
 
 
 def test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed():

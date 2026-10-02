@@ -38,6 +38,7 @@ Open any project. hunsu's SessionStart hook puts one line into the session:
 
 - no `hunsu.json` → "this project's environment is not locked" — the `compose` skill walks you through declaring it
 - `hunsu.json` present → `check` runs; drift between this machine and the manifest is reported before any work starts
+- a worker session (`AGENT_WORKER=1`: a judge, a builder, the eyes) → nothing; the environment is the hiring session's
 
 And on every skill call (PreToolUse on `Skill`): a skill that is not in `hunsu.lock.json`, or that `resolutions`
 denies or assigns to another plugin, is **refused** with the reason. An undeclared skill is an undeclared dependency —
@@ -55,8 +56,8 @@ it works on your machine and breaks on everyone else's. No lock, no enforcement.
 
 ## Commands
 
-Six are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin>`, `/hunsu:check`, `/hunsu:lock`,
-`/hunsu:compose`; `remove`, `judge`, `install`, `link`/`unlink` are the engine's (`python3 <plugin root>/hunsu.py …`).
+Seven are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin>`, `/hunsu:check`, `/hunsu:policy`,
+`/hunsu:lock`, `/hunsu:compose`; `remove`, `judge`, `install`, `link`/`unlink` are the engine's (`python3 <plugin root>/hunsu.py …`).
 The `compose` skill is the same flow driven by the agent.
 
 ### `survey`
@@ -86,6 +87,17 @@ the manifest whose hooks run for this project (`unmanaged plugin`; its skills ar
 marketplace M lists 1.13.0 (local copy)`, or a linked checkout's version — no network: a marketplace copy is as fresh as
 its last `claude plugin marketplace update`; the session's first line counts them), links, extra
 plugins, machine-bound paths. Exit 1 on errors
+
+### `policy`
+
+read-only: this project's resolutions by situation, for a session mid-way or a person — so nobody opens `hunsu.json`
+and `hunsu-conflicts.md` by hand to learn what was decided and on whose word. Per situation: the line the SessionStart
+hook prints (from `hunsu.lock.json` — what was locked is what sessions get; an `accept` or `note` the line cuts follows
+whole), and who settled it (from `hunsu.json`, where declarations are read: `reviewed` by a name, `delegated:` the
+judge's reason, unreviewed, or written by hand). Where the two files differ it says which it read: a resolution not yet
+locked, one gone from `hunsu.json`, a rule changed since the lock, or one settled again since. Last, the judged
+situations (`hunsu-judgments.json`) with a finding for a person and no resolution; whether those judgments are current
+is `check`'s to say. Exit 0
 
 ### `lock`
 
@@ -288,6 +300,10 @@ says so (`session: sandboxed …`) when the lock's roles are commands. Codex sna
   `["reviews/", ".dwitbuk/"]`, hunsu its own five files). `lock` carries them as `record-paths: {plugin: [paths]}`, so a
   product that must leave the others' records alone — a runner's touched files, a reviewer's diff, a builder's tree check —
   reads one list from the lock instead of naming its siblings.
+
+- **How each product's records are read.** A plugin.json may declare `reads`: question kind -> argv (`file` with `{path}`,
+  `since` with `{since}`, `decision`; `{plugin:NAME}` and `{target}` as in roles). `lock` carries the declaring plugins'
+  as `reads: {plugin: {kind: argv}}`, so a reader (jokbo) runs a product's own read command without knowing the product.
 
 ## Versioning
 

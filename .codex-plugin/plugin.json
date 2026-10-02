@@ -1,6 +1,6 @@
 {
   "name": "hunsu",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "engines": {
     "python": ">=3.11"
   },
@@ -27,5 +27,14 @@
       "Write"
     ],
     "defaultPrompt": "Use hunsu to compose this project's agent environment lock."
+  },
+  "reads": {
+    "decision": [
+      "python3",
+      "{plugin:hunsu}/hunsu.py",
+      "policy",
+      "--target",
+      "{target}"
+    ]
   }
 }
