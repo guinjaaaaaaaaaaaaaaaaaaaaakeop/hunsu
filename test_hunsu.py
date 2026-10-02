@@ -1130,6 +1130,148 @@ def test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed():
         assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["resolutions"]["reviewing a change"]["reviewed"] is False
 
 
+def test_role_add_writes_a_capability_alternate_on_another_host_and_role_list_reads_them_back():
+    """chongdae hires `<role>@<cap>` for a task that requires the capability, and asks the person whether to add one when a
+    member lacks it (guin-site: Codex's sandbox cannot bind a port, Claude's can). Saying yes is one command: ROLE's provider,
+    as argv, with --host replaced (or added to a worker), --model/--effort dropped unless given — a model named for one host
+    is not valid on another. A role with no worker to move (`session`, `native:`, a command that is not a worker) is refused."""
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["plan"], roles={"build": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "{host}", "--model", "a-model"]})
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        nitpick = ["python3", "{plugin:hacheong}/worker.py", "--member", "teujip", "--request", "{request}", "--response", "{response}", "--host", "codex", "--model", "gpt-5.6-luna", "--effort", "xhigh"]
+        manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip",
+                 roles={"nitpick": nitpick, "implementer": "alpha:build", "planner": "session", "verifier": "native:alpha:build",
+                        "coherence": ["python3", "{plugin:mangsang}/mangsang.py", "impact", "--target", "."],
+                        "newbie": ["python3", "w.py", "--request", "{request}", "--response", "{response}"],
+                        "quibble": ["python3", "w.py", "--request", "{request}", "--host=codex", "--model=m"]})
+        roles = lambda: hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["roles"]
+        code, out = run("role", "add", "nitpick@loopback", "--from", "nitpick", "--host", "claude", "--target", h.target)
+        assert code == 0, out
+        assert roles()["nitpick@loopback"] == nitpick[:9] + ["claude"], roles()
+        assert roles()["nitpick"] == nitpick   # the role it came from is untouched
+        assert "dropped --model gpt-5.6-luna --effort xhigh: a model named for codex is not valid on claude" in out, out
+        assert '"nitpick@loopback": ["python3"' in out and "next: `hunsu lock`" in out, out
+        # already there: refused, unless --force; given model and effort are written
+        code, out = run("role", "add", "nitpick@loopback", "--from", "nitpick", "--host", "claude", "--target", h.target)
+        assert code == 1 and "already in hunsu.json" in out and "--force" in out, out
+        code, out = run("role", "add", "nitpick@loopback", "--from", "nitpick", "--host", "claude", "--model", "opus", "--effort", "high", "--force", "--target", h.target)
+        assert code == 0 and out.startswith("replaced role nitpick@loopback") and "dropped" not in out, out
+        assert roles()["nitpick@loopback"][-6:] == ["--host", "claude", "--model", "opus", "--effort", "high"], roles()
+        # `plugin:role` is materialized the way the lock does, {host} filled with the new host; --from defaults to NAME's role
+        code, out = run("role", "add", "implementer@loopback+gpu", "--host", "codex", "--target", h.target)
+        assert code == 0 and "materialized from implementer (alpha:build)" in out, out
+        assert roles()["implementer@loopback+gpu"] == ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "codex"], roles()
+        assert "dropped --model a-model" in out, out
+        # a worker with no --host gets one; `--host=X` is replaced in its own form
+        assert run("role", "add", "newbie@loopback", "--host", "claude-code", "--target", h.target)[0] == 0
+        assert roles()["newbie@loopback"][-2:] == ["--host", "claude"], roles()
+        assert run("role", "add", "quibble@loopback", "--host", "claude", "--target", h.target)[0] == 0
+        assert roles()["quibble@loopback"] == ["python3", "w.py", "--request", "{request}", "--host=claude"], roles()
+        # refusals: nothing written
+        before = roles()
+        for argv, says in ((["planner@loopback"], "performed by the session itself"),
+                           (["verifier@loopback"], "the host's own subagent"),
+                           (["coherence@loopback"], "has no --host argument and is not a worker"),
+                           (["ghost@loopback"], "no role ghost in hunsu.json `roles`"),
+                           (["nitpick"], "is not an alternate"),
+                           (["x@Loopback", "--from", "nitpick"], "is not an alternate")):
+            code, out = run("role", "add", *argv, "--host", "claude", "--target", h.target)
+            assert code == 1 and says in out, (argv, out)
+        assert roles() == before
+        # the alternates lock as argv, and chongdae reads them from the lock's `roles`
+        assert run("lock", "--target", h.target)[0] == 0, run("check", "--target", h.target)
+        assert hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["roles"]["nitpick@loopback"] == roles()["nitpick@loopback"]
+        # role list: each role with its alternates under it; where hunsu.json and the lock differ, it says so
+        code, out = run("role", "list", "--target", h.target)
+        assert code == 0 and "- nitpick: {plugin:hacheong}/worker.py --member teujip --host codex --model gpt-5.6-luna --effort xhigh" in out, out
+        assert "    @loopback: {plugin:hacheong}/worker.py --member teujip --host claude --model opus --effort high" in out, out
+        assert "    @loopback+gpu: {plugin:alpha}/worker.py --host codex" in out and "- planner: session" in out and "differs" not in out, out
+        run("role", "add", "nitpick@gpu", "--host", "claude", "--target", h.target)
+        assert "differs from hunsu.lock.json: nitpick@gpu" in run("role", "list", "--target", h.target)[1]
+
+
+def test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run():
+    """Host facts are the environment's: a Codex worker's sandbox cannot bind a local port or reach the network; a Claude
+    worker's can. Whether hired hands need them is the project's decision (hunsu.json `capabilities`: `alternates` or
+    `session`), asked once — `check` warns in one line (lock is not blocked), `compose` asks it as a decision, and either
+    answer is one command: `role add <role>@<cap>` (records `alternates`) or `capability <cap> --session`."""
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["plan"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        worker = lambda member, host: ["python3", "{plugin:hacheong}/worker.py", "--member", member, "--request", "{request}", "--response", "{response}", "--host", host]
+        manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip",
+                 roles={"implementer": worker("dakdol", "codex"), "nitpick": worker("teujip", "codex"), "newbie": worker("chojja", "claude"),
+                        "planner": "session", "coherence": ["python3", "{plugin:mangsang}/mangsang.py", "impact", "--host", "codex"]})
+        line = ("roles on codex cannot bind a local port (a dev server like `wrangler dev`) or reach the network (implementer, nitpick): "
+                "decide once — `hunsu capability loopback network --alternates --host claude` (such work hired on claude) or "
+                "`hunsu capability loopback network --session` (the session does it)")
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not errors and [w for w in warnings if w.startswith("roles on")] == [line], warnings   # one line; claude and non-workers are not named
+        # compose asks it as a human decision, both answers as commands; lock itself is not blocked
+        code, out = run("compose", "--target", h.target)
+        assert code == hunsu.DECISION and "do hired hands need a local port" in out.strip().split("\n")[-1] and line in out, out
+        assert run("lock", "--target", h.target)[0] == 0
+        assert line in hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["warnings"]
+        # one answer: the session does network work; an alternate for loopback is the other answer (recorded by role add)
+        code, out = run("capability", "network", "--session", "--target", h.target)
+        assert code == 0 and "capabilities.network = session" in out, out
+        warnings = [w for w in hunsu.check(h.target)[1] if w.startswith("roles on")]
+        assert warnings == ["roles on codex cannot bind a local port (a dev server like `wrangler dev`) (implementer, nitpick): decide once — "
+                            "`hunsu capability loopback --alternates --host claude` (such work hired on claude) or `hunsu capability loopback --session` (the session does it)"], warnings
+        code, out = run("role", "add", "nitpick@loopback", "--host", "claude", "--target", h.target)
+        assert code == 0 and "capabilities: loopback = alternates" in out, out
+        assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["capabilities"] == {"network": "session", "loopback": "alternates"}
+        assert not [w for w in hunsu.check(h.target)[1] if w.startswith("roles on")]
+        code, out = run("compose", "--target", h.target)
+        assert code == 0 and "locked" in out, out
+        # an alternate on a host that lacks the capability too is said; a decision that is neither answer is warned
+        code, out = run("role", "add", "implementer@loopback", "--host", "codex", "--target", h.target)
+        assert "codex's sandbox cannot bind a local port" in out, out
+        code, out = run("capability", "loopback", "--alternates", "--target", h.target)
+        assert "alternates for loopback: implementer@loopback, nitpick@loopback" in out, out
+        manifest(h.target, capabilities={"loopback": "maybe", "network": "session"})
+        assert any(w.startswith("capabilities.loopback: 'maybe'") for w in hunsu.check(h.target)[1])
+        with contextlib.redirect_stderr(io.StringIO()):
+            assert run("capability", "gpu", "--session", "--target", h.target)[0] != 0   # only the capabilities hunsu knows a host's facts for
+
+
+def test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short():
+    """`capability CAP.. --alternates --host H` adds `<role>@<caps>` on H for every worker role on a host lacking those
+    capabilities — as `role add` would: argv copied, host swapped, model/effort dropped unless given — skips roles an
+    alternate already covers and roles whose host can, and records `alternates`. The warning's first answer is that command."""
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["plan"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        worker = lambda member, host: ["python3", "{plugin:hacheong}/worker.py", "--member", member, "--request", "{request}", "--response", "{response}", "--host", host, "--model", "gpt-x", "--effort", "xhigh"]
+        manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip",
+                 roles={"implementer": worker("dakdol", "codex"), "nitpick": worker("teujip", "codex"), "quibble": worker("sibi", "codex"),
+                        "quibble@loopback+network": worker("sibi", "claude")[:10], "newbie": worker("chojja", "claude"),
+                        "planner": "session", "coherence": ["python3", "{plugin:mangsang}/mangsang.py", "impact"]})
+        warning = [w for w in hunsu.check(h.target)[1] if w.startswith("roles on")]
+        assert len(warning) == 1 and "(implementer, nitpick)" in warning[0] and "`hunsu capability loopback network --alternates --host claude`" in warning[0], warning
+        code, out = run("capability", "network", "loopback", "--alternates", "--host", "claude", "--effort", "high", "--target", h.target)
+        assert code == 0, out
+        doc = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))
+        assert doc["capabilities"] == {"loopback": "alternates", "network": "alternates"}, doc
+        added = sorted(k for k in doc["roles"] if "@" in k)
+        assert added == ["implementer@loopback+network", "nitpick@loopback+network", "quibble@loopback+network"], added   # quibble's was kept
+        assert doc["roles"]["nitpick@loopback+network"] == worker("teujip", "codex")[:9] + ["claude", "--effort", "high"], doc["roles"]
+        assert doc["roles"]["quibble@loopback+network"] == worker("sibi", "claude")[:10]
+        assert "dropped --model gpt-x: a model named for codex is not valid on claude" in out and "next: `hunsu lock`" in out, out
+        assert not [w for w in hunsu.check(h.target)[1] if w.startswith("roles on")]
+        # again: nothing to add; a host that lacks them too, and --model with --session, are refused
+        code, out = run("capability", "loopback", "network", "--alternates", "--host", "claude", "--target", h.target)
+        assert code == 0 and "added" not in out, out
+        code, out = run("capability", "loopback", "--alternates", "--host", "codex", "--target", h.target)
+        assert code == 1 and "codex's sandbox cannot bind a local port" in out, out
+        code, out = run("capability", "loopback", "--session", "--model", "m", "--target", h.target)
+        assert code == 1 and "go with --alternates" in out, out
+        assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)) == doc
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

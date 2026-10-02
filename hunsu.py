@@ -3,8 +3,14 @@
   survey  [--target DIR] [--json]   everything that runs for this project on this host: plugins, skills, hooks, modes
   init    [--target DIR]            write an empty hunsu.json
   add     <plugin> [--target DIR]   record a plugin (version, source) from the survey into hunsu.json
-  check   [--target DIR]            manifest vs this machine: plugins, engines, hooks, skill overlaps. exit 1 on errors
+  check   [--target DIR]            manifest vs this machine: plugins, engines, hooks, skill overlaps, undecided capabilities. exit 1 on errors
   policy  [--target DIR]            read-only: the resolutions by situation — the hook's line, each one's reason and who settled it
+  role    add NAME@CAP[+CAP] --from ROLE --host claude|codex [--model M] [--effort E] [--force]
+                                    a capability alternate: ROLE's provider on another host, into hunsu.json `roles` (model/effort dropped unless given)
+  role    list                      read-only: the roles and their alternates
+  capability CAP.. --session | --alternates [--host claude [--model M] [--effort E]]
+                                    the project's answer, once: work a hired sandbox cannot do (loopback, network) is the session's, or an
+                                    alternate's — with --host, `<role>@<caps>` added for every worker role on a host lacking them
   link    <plugin> [PATH]           this machine only: the plugin comes from a local checkout (hunsu.local.json, not committed)
   unlink  <plugin>
   lock    [--target DIR]            write hunsu.lock.json from the resolved environment — only when check has no errors
@@ -337,7 +343,7 @@ def floor_covers(team, spec):
     return parts(team) >= parts(spec)
 
 
-def role_argv(manifest, s, provider):
+def role_argv(manifest, s, provider, host=None):
     """`plugin:role` -> (the argv that plugin declares for the role, None), or (None, why not). `{host}` in the declaration is
     this host's name for the workers' `--host` (claude|codex); `{plugin:NAME}`, `{request}`, `{response}` stay for the runner."""
     if not isinstance(provider, str) or provider.count(":") != 1:
@@ -352,7 +358,7 @@ def role_argv(manifest, s, provider):
         skills = {sk["name"] for sk in s["skills"] if sk["plugin"] == plugin}
         hint = " (%s is a skill of %s — a skill is read by the session agent, not spawned; the plugin must declare the role's argv in its plugin.json `roles`)" % (role, plugin) if role in skills else ""
         return None, "plugin %s declares no role %r%s; it declares: %s" % (plugin, role, hint, ", ".join(sorted(have.get("roles") or {})) or "none")
-    host = {"claude-code": "claude"}.get(HOST, HOST)
+    host = host or {"claude-code": "claude"}.get(HOST, HOST)
     return [str(a).replace("{host}", host) for a in declared], None
 
 
@@ -421,6 +427,7 @@ def check(target):
     found = ([], [], [])
     check_local_files(target, found)
     check_behind(target, manifest, s, found)
+    check_capabilities(manifest, found)   # hunsu.json and the host table only: asked even while plugins are missing
     if check_plugins(target, manifest, s, found):
         return found
     check_session(manifest, found)
@@ -1569,6 +1576,292 @@ def cmd_policy(args):
     return 0
 
 
+# ---------------------------------------------------------------- roles: capability alternates
+
+WORKER_HOSTS = ("claude", "codex")   # what the workers' `--host` takes (hacheong, dwitbuk); `claude-code` is read as `claude`
+# Host facts — the environment's, so hunsu knows them: what a worker's sandbox on each host cannot do. A Codex worker runs
+# sandboxed with no network and no local port to bind (a dev server like `wrangler dev`); a Claude worker can do both.
+# Whether hired hands need these is the project's decision, asked once: hunsu.json `capabilities`.
+CAPABILITIES = {"loopback": "bind a local port (a dev server like `wrangler dev`)", "network": "reach the network"}
+SANDBOX_LACKS = {"codex": ("loopback", "network"), "claude": ()}
+DECISIONS = ("alternates", "session")   # alternates: such work is hired on a `<role>@<cap>` role; session: the session does it
+ALTERNATE = re.compile(r"^([A-Za-z0-9_.-]+)@([a-z0-9-]+(?:\+[a-z0-9-]+)*)$")
+CAPABILITY_HELP = ("the project's answer, once: do hired hands need loopback (a local port: a dev server like `wrangler dev`) or the "
+                   "network, which a Codex worker's sandbox lacks? `--session`: the session does such work; `--alternates`: it is hired "
+                   "on a `<role>@<cap>` role. Written to hunsu.json `capabilities`")
+ROLE_HELP = ("a role's capability alternates (`<role>@<cap>[+<cap>]`, read by chongdae from the lock): `add NAME@CAP --from ROLE --host H` "
+             "copies ROLE's provider onto another host into hunsu.json; `list` (read-only) shows the roles and their alternates")
+
+
+def argv_option(argv, flag):
+    """(index of the flag, its value) for `--flag VALUE` or `--flag=VALUE` in an argv; (None, None) when absent."""
+    for i, a in enumerate(argv):
+        if a == flag and i + 1 < len(argv):
+            return i, argv[i + 1]
+        if a.startswith(flag + "="):
+            return i, a[len(flag) + 1:]
+    return None, None
+
+
+def drop_option(argv, flag):
+    """argv without `--flag VALUE` / `--flag=VALUE`, and the value dropped (None if there was none)."""
+    i, value = argv_option(argv, flag)
+    if i is None:
+        return argv, None
+    return argv[:i] + argv[i + (1 if "=" in argv[i] else 2):], value
+
+
+def alternate_argv(manifest, s, source, provider, host):
+    """(argv on `host`, from-what note) for an alternate of a role whose provider is `provider` — or (None, why not).
+    An argv is copied; `plugin:role` is materialized the way `lock` does (the argv that plugin declares, `{host}` filled with
+    the new host). `session` and `native:` run in the host's own session, so there is no worker whose host could change."""
+    if provider == "session":
+        return None, "role %s is performed by the session itself (`session`): there is no worker whose --host could change" % source
+    if isinstance(provider, str) and provider.startswith("native:"):
+        return None, ("role %s is %r — the host's own subagent at the session's hand, not a spawned worker: it runs where the session runs, "
+                      "with no --host to change" % (source, provider))
+    if isinstance(provider, list):
+        return [str(a) for a in provider], "copied from %s" % source
+    argv, why = role_argv(manifest, s, provider, host=host)
+    if not argv:
+        return None, "role %s: provider %r — %s" % (source, provider, why)
+    return argv, "materialized from %s (%s), as `hunsu lock` does" % (source, provider)
+
+
+def worker_host(provider):
+    """The host a worker role runs on: an argv on the request/response protocol with a `--host` — else None."""
+    if not isinstance(provider, list) or "{request}" not in [str(a) for a in provider]:
+        return None
+    host = argv_option([str(a) for a in provider], "--host")[1]
+    return {"claude-code": "claude"}.get(host, host)
+
+
+def undecided_capabilities(manifest):
+    """[(host, [caps], [roles])] — worker roles whose host's sandbox lacks a capability the project has not decided about
+    (hunsu.json `capabilities`) and that no `<role>@<cap>` alternate of theirs covers. Empty when everything is settled."""
+    roles, decided = manifest.get("roles") or {}, manifest.get("capabilities") or {}
+    out = {}
+    for name, provider in sorted(roles.items()):
+        if ALTERNATE.match(name):
+            continue
+        host = worker_host(provider)
+        covered = set().union(*([set(m.group(2).split("+")) for k in roles for m in [ALTERNATE.match(k)] if m and m.group(1) == name] or [set()]))
+        for cap in SANDBOX_LACKS.get(host, ()):
+            if decided.get(cap) not in DECISIONS and cap not in covered:
+                caps, names = out.setdefault(host, ([], []))
+                caps.append(cap) if cap not in caps else None
+                names.append(name) if name not in names else None
+    return [(host, caps, names) for host, (caps, names) in sorted(out.items())]
+
+
+def capable_host(caps):
+    return next((h for h in WORKER_HOSTS if not set(caps) & set(SANDBOX_LACKS.get(h, ()))), None)
+
+
+def capability_question(host, caps, names):
+    """The one line `check` warns with and `compose` asks: what the host cannot do, which roles run there, both answers."""
+    other, caps_arg = capable_host(caps), " ".join(caps)
+    return ("roles on %s cannot %s (%s): decide once — `hunsu capability %s --alternates --host %s` (such work hired on %s) or "
+            "`hunsu capability %s --session` (the session does it)"
+            % (host, " or ".join(CAPABILITIES[c] for c in caps), ", ".join(names), caps_arg, other, other, caps_arg))
+
+
+def check_capabilities(manifest, found):
+    errors, warnings, info = found
+    # 5b. capabilities — hired hands on a host whose sandbox lacks a capability: the project decides once (hunsu.json
+    # `capabilities`, or a `<role>@<cap>` alternate), so a run never stops mid-way to ask. A warning: lock is not blocked.
+    for cap, value in sorted((manifest.get("capabilities") or {}).items()):
+        if cap not in CAPABILITIES or value not in DECISIONS:
+            warnings.append("capabilities.%s: %r — capabilities are %s, each `alternates` or `session`" % (cap, value, ", ".join(sorted(CAPABILITIES))))
+    for host, caps, names in undecided_capabilities(manifest):
+        warnings.append(capability_question(host, caps, names))
+
+
+def alternates_covering(roles, role):
+    """[set of caps] of `role`'s existing `<role>@<cap>` alternates."""
+    return [set(m.group(2).split("+")) for k in roles for m in [ALTERNATE.match(k)] if m and m.group(1) == role]
+
+
+def cmd_capability(args):
+    """Record the project's answer for capabilities: `session` (the session does such work) or `alternates` (hired on a
+    `<role>@<cap>` role). With `--alternates --host H`, the alternates themselves too: `<role>@<caps>` on H for every worker
+    role on a host lacking those capabilities — the setup answer is one command. hunsu.json only."""
+    path = os.path.join(args.target, MANIFEST)
+    manifest = load_json(path)
+    if not manifest:
+        raise SystemExit("no %s — run `hunsu init` first" % MANIFEST)
+    caps = [c for c in CAPABILITIES if c in args.caps]   # one order, whatever order they were named in
+    if args.session and (args.host or args.model or args.effort):
+        raise SystemExit("--host/--model/--effort go with --alternates: they say where such work is hired; --session hires no one")
+    if not args.host and (args.model or args.effort):
+        raise SystemExit("--model/--effort need --host: the alternates' host")
+    host = {"claude-code": "claude"}.get(args.host, args.host)
+    value = "session" if args.session else "alternates"
+    roles = dict(manifest.get("roles") or {})
+    added = []
+    if host:
+        lacking = [c for c in caps if c in SANDBOX_LACKS.get(host, ())]
+        if lacking:
+            raise SystemExit("not recorded — %s's sandbox cannot %s either; name a host whose can (%s)"
+                             % (host, " or ".join(CAPABILITIES[c] for c in lacking), capable_host(caps)))
+        for role, provider in sorted(roles.items()):
+            on = worker_host(provider)
+            need = [c for c in caps if c in SANDBOX_LACKS.get(on, ())]
+            if ALTERNATE.match(role) or not need or any(set(need) <= have for have in alternates_covering(roles, role)):
+                continue   # not a worker, its host can, or an alternate already covers it
+            name = "%s@%s" % (role, "+".join(need))
+            argv, note, was, dropped = build_alternate(manifest, lambda: None, role, name, host, args.model, args.effort)
+            roles[name] = argv
+            added.append((name, argv, was, dropped))
+        manifest["roles"] = roles
+    manifest["capabilities"] = dict(manifest.get("capabilities") or {}, **{c: value for c in caps})
+    save_json(path, manifest)
+    for cap in caps:
+        print("capabilities.%s = %s in %s — %s" % (cap, value, MANIFEST,
+              "work a hired member's sandbox cannot do (%s) is done by the session" % CAPABILITIES[cap] if value == "session"
+              else "such work is hired on a `<role>@%s` role" % cap))
+    for name, argv, was, dropped in added:
+        print('  added "%s": %s' % (name, json.dumps(argv, ensure_ascii=False)))
+        if dropped:
+            print("  " + dropped_line(dropped, was, host))
+    if value == "alternates":
+        for cap in caps:
+            have = sorted(k for k in roles if ALTERNATE.match(k) and cap in ALTERNATE.match(k).group(2).split("+"))
+            print("  alternates for %s: %s" % (cap, ", ".join(have) if have else "none yet — `hunsu capability %s --alternates --host %s`; "
+                                                 "until then the session does it" % (cap, capable_host([cap]))))
+    print("next: `hunsu lock` — chongdae hires the alternates from %s `roles`" % LOCK if added
+          else "chongdae reads this from %s; no lock needed for it" % MANIFEST)
+    return 0
+
+
+def build_alternate(manifest, surveyed, source, name, host, model, effort):
+    """(argv, from-what note, the host it was on, [dropped options]) for `name`, an alternate of `source` on `host` — or
+    ValueError(why not). The argv is ROLE's, its --host replaced (or added to a worker), --model/--effort dropped unless
+    given: a model named for one host is not valid on another. `surveyed` is called only for a `plugin:role` provider."""
+    provider = (manifest.get("roles") or {})[source]
+    needs_survey = isinstance(provider, str) and provider != "session" and not provider.startswith("native:")
+    argv, note = alternate_argv(manifest, surveyed() if needs_survey else None, source, provider, host)
+    if argv is None:
+        raise ValueError(note)
+    i, was = argv_option(argv, "--host")
+    if i is None:
+        # a worker on the request/response protocol takes --host (hacheong's, dwitbuk's); anything else is a command whose
+        # arguments hunsu cannot know — appending a flag it never declared would break it, not move it
+        if "{request}" not in argv:
+            raise ValueError("role %s's provider has no --host argument and is not a worker (no {request}): %s. hunsu cannot "
+                             "tell how to run it on another host; if it can, write %s by hand in %s `roles`"
+                             % (source, json.dumps(argv, ensure_ascii=False), name, MANIFEST))
+        argv = argv + ["--host", host]
+    else:
+        argv = argv[:i] + (["--host", host] + argv[i + 2:] if argv[i] == "--host" else ["--host=" + host] + argv[i + 1:])
+    dropped = []
+    for flag, given in (("--model", model), ("--effort", effort)):
+        argv, value = drop_option(argv, flag)
+        if value is not None and given is None:
+            dropped.append("%s %s" % (flag, value))
+        if given is not None:
+            argv += [flag, given]
+    return argv, note, was, dropped
+
+
+def dropped_line(dropped, was, host):
+    return ("  dropped %s: %s Give --model/--effort to set them (or edit %s)"
+            % (" ".join(dropped), "a model named for %s is not valid on %s." % (was, host) if was and was != host
+               else "a model named for one host is not valid on another, so none is carried over.", MANIFEST))
+
+
+def cmd_role(args):
+    return cmd_role_add(args) if args.action == "add" else cmd_role_list(args)
+
+
+def cmd_role_add(args):
+    """Write `NAME@CAP` into hunsu.json `roles`: ROLE's provider as argv, on another host. Read where it is written: hunsu.json."""
+    path = os.path.join(args.target, MANIFEST)
+    manifest = load_json(path)
+    if not manifest:
+        raise SystemExit("no %s — run `hunsu init` first" % MANIFEST)
+    m = ALTERNATE.match(args.name)
+    if not m:
+        raise SystemExit("%r is not an alternate: write `<role>@<cap>[+<cap>]` (e.g. nitpick@loopback, implementer@loopback+gpu) — "
+                         "capabilities in lower case, joined by `+`" % args.name)
+    source = args.source or m.group(1)
+    host = {"claude-code": "claude"}.get(args.host, args.host)
+    roles = manifest.get("roles") or {}
+    if source not in roles:
+        raise SystemExit("no role %s in %s `roles` — it declares: %s" % (source, MANIFEST, ", ".join(sorted(roles)) or "none"))
+    if args.name in roles and not args.force:
+        raise SystemExit("%s is already in %s `roles`: %s — `--force` to replace it" % (args.name, MANIFEST, json.dumps(roles[args.name], ensure_ascii=False)))
+    if args.name == source:
+        raise SystemExit("--from %s is the alternate itself; name the role it is an alternate of" % source)
+    try:
+        argv, note, was, dropped = build_alternate(manifest, lambda: survey(args.target), source, args.name, host, args.model, args.effort)
+    except ValueError as why:
+        raise SystemExit("not added — %s" % why)
+    roles = dict(roles)
+    replaced = args.name in roles
+    roles[args.name] = argv
+    manifest["roles"] = roles
+    caps = m.group(2).split("+")
+    # adding an alternate is the project's answer for these capabilities: such work is hired there
+    manifest["capabilities"] = dict(manifest.get("capabilities") or {}, **{c: "alternates" for c in caps if c in CAPABILITIES})
+    save_json(path, manifest)
+    print("%s role %s in %s — %s, on %s%s:" % ("replaced" if replaced else "added", args.name, MANIFEST, note, host,
+                                            " (was %s)" % was if was is not None and was != host else ""))
+    print('  "%s": %s' % (args.name, json.dumps(argv, ensure_ascii=False)))
+    if dropped:
+        print(dropped_line(dropped, was, host))
+    if was == host:
+        print("  note: %s already runs on %s — an alternate on the same host gets the same sandbox" % (source, host))
+    lacking = [c for c in caps if c in SANDBOX_LACKS.get(host, ())]
+    if lacking:
+        print("  note: %s's sandbox cannot %s — this alternate will lack it too" % (host, " or ".join(CAPABILITIES[c] for c in lacking)))
+    recorded = [c for c in caps if c in CAPABILITIES]
+    if recorded:
+        print("  capabilities: %s = alternates in %s (such work is hired on an alternate)" % (", ".join(recorded), MANIFEST))
+    print("next: `hunsu lock` — chongdae reads the alternates from %s `roles`; %s is hired for a task that requires %s"
+          % (LOCK, args.name, " and ".join(m.group(2).split("+"))))
+    return 0
+
+
+def describe_provider(provider):
+    """One short line for a role's provider: who, on which host and model — not the whole argv."""
+    if not isinstance(provider, list):
+        return str(provider) if not isinstance(provider, dict) else json.dumps(provider, ensure_ascii=False)
+    parts = [next((a for a in provider if "{plugin:" in a), " ".join(provider[:3]))]
+    for flag in ("--member", "--host", "--model", "--effort"):
+        value = argv_option(provider, flag)[1]
+        if value is not None:
+            parts.append("%s %s" % (flag, value))
+    return " ".join(parts)
+
+
+def cmd_role_list(args):
+    """Read-only: hunsu.json `roles`, each with its capability alternates; where the lock differs, it says so."""
+    manifest = load_json(os.path.join(args.target, MANIFEST))
+    if not manifest:
+        print("no %s here — nothing declared (`hunsu init`, or the compose skill)" % MANIFEST)
+        return 0
+    roles = manifest.get("roles") or {}
+    lock = load_json(os.path.join(args.target, LOCK))
+    locked = lock.get("roles-declared") if lock else None
+    base = lambda k: ALTERNATE.match(k).group(1) if ALTERNATE.match(k) else k
+    print("hunsu roles — %s `roles`; an alternate `<role>@<cap>` is hired for a task that requires those capabilities (chongdae, from %s)"
+          % (MANIFEST, LOCK))
+    if not roles:
+        print("  (no roles)")
+    for name in sorted({base(k) for k in roles}):
+        print("- %s: %s" % (name, describe_provider(roles[name]) if name in roles else "(no plain role — only alternates)"))
+        for key in sorted(k for k in roles if k != name and base(k) == name):
+            print("    @%s: %s" % (key.split("@", 1)[1], describe_provider(roles[key])))
+    if locked is None:
+        print("not locked yet (no %s) — `hunsu lock`" % LOCK)
+    else:
+        diff = sorted(k for k in set(roles) | set(locked) if roles.get(k) != locked.get(k))
+        if diff:
+            print("differs from %s: %s — chongdae hires from the lock's until `hunsu lock`" % (LOCK, ", ".join(diff)))
+    return 0
+
+
 def cmd_lock(args):
     """Snapshot of the resolved environment. Written only when check has no errors; warnings are recorded, not hidden."""
     dev = load_json(os.path.join(args.target, LOCAL)).get("dev", {})
@@ -1880,6 +2173,12 @@ def cmd_compose(args):
     errors, warnings, _ = check(target)
     if errors:
         return stop("resolve these errors (resolutions[<situation>]; install missing plugins; raise engines; re-run judge if stale), then re-run compose", *errors)
+    undecided = undecided_capabilities(manifest)
+    if undecided:
+        # asked once, at setup — so the harness never stops mid-run to ask whether a hired hand may bind a port
+        return stop("do hired hands need a local port (loopback: a dev server like `wrangler dev`) or the network? answer once with one of "
+                    "the commands below for each line, then re-run compose",
+                    *(capability_question(*u) for u in undecided))
     judged, _ = judgments_status(manifest, s, target)
     if judged is None and manifest.get("judge") != "skip":
         return stop("no conflict judgment yet: run `hunsu judge request --out DIR`, the judge on each packet (judge_worker.py), `hunsu judge consume --dir DIR`, then resolutions — or set \"judge\": \"skip\" in hunsu.json to lock without one (recorded)")
@@ -1922,8 +2221,29 @@ def main(argv=None):
             p.add_argument("--stale", action="store_true", help="request: stage-2 packets for the situations whose members' text changed, from the judgments file")
             p.add_argument("--dir", default="hunsu-judge", help="consume: folder holding the responses")
             p.add_argument("--by", default=None, help="consume: who judged — default: what the workers' own `worker` records say (host and model)")
+    p = sub.add_parser("role", help=ROLE_HELP, description=ROLE_HELP)
+    rsub = p.add_subparsers(dest="action", required=True)
+    pa = rsub.add_parser("add", help="NAME@CAP[+CAP] --from ROLE --host HOST: ROLE's provider on HOST, as a new role in hunsu.json")
+    pa.add_argument("name", metavar="NAME@CAP[+CAP]")
+    pa.add_argument("--from", dest="source", default=None, metavar="ROLE", help="the role to copy (default: NAME)")
+    pa.add_argument("--host", required=True, choices=WORKER_HOSTS + ("claude-code",), help="the host the alternate runs on")
+    pa.add_argument("--model", default=None, help="the model on HOST (ROLE's is dropped: a model named for one host is not valid on another)")
+    pa.add_argument("--effort", default=None, help="the effort on HOST (ROLE's is dropped)")
+    pa.add_argument("--force", action="store_true", help="replace NAME@CAP if it exists")
+    pa.add_argument("--target", default=".")
+    pl = rsub.add_parser("list", help="read-only: the roles and their alternates")
+    pl.add_argument("--target", default=".")
+    p = sub.add_parser("capability", help=CAPABILITY_HELP, description=CAPABILITY_HELP)
+    p.add_argument("caps", nargs="+", choices=sorted(CAPABILITIES), metavar="CAP", help="loopback (bind a local port) or network")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--session", action="store_true", help="the session does work a hired member's sandbox cannot")
+    g.add_argument("--alternates", action="store_true", help="such work is hired on a `<role>@<cap>` role")
+    p.add_argument("--host", default=None, choices=WORKER_HOSTS + ("claude-code",), help="with --alternates: add `<role>@<caps>` on HOST for every worker role on a host lacking CAP (as `role add`)")
+    p.add_argument("--model", default=None, help="the alternates' model on HOST (the roles' own are dropped)")
+    p.add_argument("--effort", default=None, help="the alternates' effort on HOST")
+    p.add_argument("--target", default=".")
     args = parser.parse_args(argv)
-    return {"survey": cmd_survey, "init": cmd_init, "add": cmd_add, "check": cmd_check,
+    return {"role": cmd_role, "capability": cmd_capability, "survey": cmd_survey, "init": cmd_init, "add": cmd_add, "check": cmd_check,
             "link": cmd_link, "unlink": cmd_unlink, "dev": cmd_dev, "lock": cmd_lock, "compose": cmd_compose,
             "install": cmd_install, "judge": cmd_judge, "remove": cmd_remove, "policy": cmd_policy}[args.cmd](args)
 

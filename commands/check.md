@@ -1,5 +1,5 @@
 ---
-description: Compare this machine with hunsu.json: plugins, engines, hooks, skill overlaps
+description: Compare this machine with hunsu.json: plugins, engines, hooks, skill overlaps, capabilities nobody decided
 ---
 !`python3 "${CLAUDE_PLUGIN_ROOT}/hunsu.py" check --target .`
 

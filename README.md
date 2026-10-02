@@ -56,8 +56,8 @@ it works on your machine and breaks on everyone else's. No lock, no enforcement.
 
 ## Commands
 
-Seven are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin>`, `/hunsu:check`, `/hunsu:policy`,
-`/hunsu:lock`, `/hunsu:compose`; `remove`, `judge`, `install`, `link`/`unlink` are the engine's (`python3 <plugin root>/hunsu.py …`).
+Nine are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin>`, `/hunsu:check`, `/hunsu:policy`,
+`/hunsu:role`, `/hunsu:capability`, `/hunsu:lock`, `/hunsu:compose`; `remove`, `judge`, `install`, `link`/`unlink` are the engine's (`python3 <plugin root>/hunsu.py …`).
 The `compose` skill is the same flow driven by the agent.
 
 ### `survey`
@@ -83,7 +83,10 @@ weak proxy for a shared situation (`design:review` and `code:review` share a nam
 that found no conflict between them needs no resolution, and one that did asks for its situation's. `warn`: unpublished source, duplicate hook
 registration, user-level hook not in the manifest (one line per script however many events it is on, with the file it
 runs on this machine), a user skill (`~/.claude/skills/<name>`) not in `local-skills-ok`, a plugin enabled here but not in
-the manifest whose hooks run for this project (`unmanaged plugin`; its skills are refused, its hooks are not), `hunsu.local.json` not ignored by git (an `error` when it is committed). `info`: a pinned plugin behind a release available here (`plugin X is behind: pinned 1.12.2; the
+the manifest whose hooks run for this project (`unmanaged plugin`; its skills are refused, its hooks are not), worker
+roles (an argv with `{request}`) on a host whose sandbox lacks a capability nobody decided — neither in `capabilities` nor
+covered by a `<role>@<cap>` alternate — as one line naming the roles and both answers as commands (read from `hunsu.json`
+alone, so it shows even while plugins are missing; a warning, so `lock` is not blocked; the SessionStart line counts it), `hunsu.local.json` not ignored by git (an `error` when it is committed). `info`: a pinned plugin behind a release available here (`plugin X is behind: pinned 1.12.2; the
 marketplace M lists 1.13.0 (local copy)`, or a linked checkout's version — no network: a marketplace copy is as fresh as
 its last `claude plugin marketplace update`; the session's first line counts them), links, extra
 plugins, machine-bound paths. Exit 1 on errors
@@ -99,6 +102,37 @@ locked, one gone from `hunsu.json`, a rule changed since the lock, or one settle
 situations (`hunsu-judgments.json`) with a finding for a person and no resolution; whether those judgments are current
 is `check`'s to say. Exit 0
 
+### `role add` / `role list`
+
+a role's capability alternates. chongdae hires `<role>@<cap>[+<cap>]` from the lock's `roles` for a task that requires
+those capabilities (`nitpick@loopback`: the same member on a host whose sandbox can bind a local port — Codex's cannot,
+Claude's can), and when a member lacks one it asks the person whether to add it. Yes is one command:
+
+    hunsu role add nitpick@loopback --from nitpick --host claude [--model M] [--effort E] [--force]
+
+copies ROLE's provider from `hunsu.json` `roles` (an argv as written; `plugin:role` materialized the way `lock` does,
+`{host}` filled with HOST) into a new key, with `--host` replaced — or added, for a worker on the request/response protocol
+(`{request}` in its argv) that has none. `--model` and `--effort` are dropped unless given, and the output says so: a model
+named for one host is not valid on another. `--from` defaults to NAME's role. Refused, writing nothing: ROLE absent,
+NAME@CAP already there (unless `--force`), a `session` or `native:` role (no worker whose host could change), a command
+that is neither a worker nor has a `--host` (hunsu cannot tell how it would run elsewhere — write that one by hand).
+Writes `hunsu.json` only and prints the new entry and the next step, `hunsu lock`. `role list` (read-only): each role, a
+short line for its provider (member, host, model, effort), its alternates under it, and the keys where `hunsu.json` and
+the lock differ. Exit 0; `add` exits 1 on a refusal. `role add` is also the project's answer for those capabilities: it
+records `"capabilities": {"<cap>": "alternates"}` (see `capability`), and says so when HOST's sandbox lacks CAP too
+
+### `capability <cap>.. --session | --alternates [--host H [--model M] [--effort E]]`
+
+the project's answer, asked once at setup so a run never stops to ask: do hired hands need `loopback` (a local port: a
+dev server like `wrangler dev`) or the `network`? hunsu knows the host facts — a small table in `hunsu.py`
+(`SANDBOX_LACKS`): a Codex worker's sandbox has neither, a Claude worker's has both. `--session`: work a hired member's
+sandbox cannot do is the session's; `--alternates`: it is hired on a `<role>@<cap>` role. The setup answer is one
+command — `hunsu capability loopback network --alternates --host claude` adds `<role>@<caps>` on that host for every
+worker role on a host lacking them, by `role add`'s rules (argv copied, host swapped, `--model`/`--effort` dropped unless
+given), skipping roles an alternate already covers; without `--host` it records the decision only (`role add` records it
+too, for one role). Writes `hunsu.json` `capabilities` only — chongdae reads it there, no lock needed: undecided
+or `session` → the session does such work; `alternates` with a `<role>@<cap>` role → hired there
+
 ### `lock`
 
 write `hunsu.lock.json`; refuses on errors, records warnings. Two kinds of field in it. Code reads: `plugins.*.version`
@@ -110,8 +144,9 @@ lock in a diff: what was found and where it came from. Nothing decides on them; 
 
 ### `compose`
 
-the whole flow: init → add → engines → check → lock, stopping at each human decision with exit 2 and a `decision:`
-line. Re-run after answering. `/hunsu:compose` runs it
+the whole flow: init → add → engines → check → capabilities → judge → lock, stopping at each human decision with exit 2
+and a `decision:` line. The capability question (do hired hands need a local port or the network?) is asked here, once,
+with both answers as commands — never mid-run. Re-run after answering. `/hunsu:compose` runs it
 
 ### `remove <plugin>`
 
@@ -229,7 +264,10 @@ with a mode every group is judged (cost: 1 + groups calls).
   `native:plugin:role`: the same declared role, run by the host's own subagent at the session's hand (see chongdae's
   providers) — locked as `{"native": argv}`. A skill id is not a provider: a skill is text the session agent reads, a
   runner spawns argv. hunsu does not assign roles; `check` verifies each declaration is real, `lock` writes `roles` as
-  argv (what a runner spawns) and `roles-declared` as written.
+  argv (what a runner spawns) and `roles-declared` as written. A key `<role>@<cap>[+<cap>]` is a capability alternate of
+  `<role>` (chongdae hires it for a task that requires those capabilities); `role add` writes one from an existing role.
+- `capabilities` — the project's answer for what a hired sandbox cannot do: `{"loopback": "alternates", "network":
+  "session"}` (`capability`, `role add`). chongdae reads it from here.
 - `resolutions` — keyed by situation. Shorthand for a same-name overlap: `"retro": "dakdol"` or `"deny"`. Full form,
   for a judged situation:
   `{"use": "plugin:skill", "deny": ["plugin:skill"], "order": ["plugin:skill", "plugin:mode"], "accept": "why it is fine", "reviewed": false}`.
