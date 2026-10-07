@@ -1908,6 +1908,49 @@ def cmd_lock(args):
     return 0
 
 
+def plugin_version_at(root):
+    """The version a plugin root declares — what a hook running from that root is."""
+    for m in (os.path.join(".claude-plugin", "plugin.json"), os.path.join(".codex-plugin", "plugin.json"), "plugin.json"):
+        v = load_json(os.path.join(root, m)).get("version") if root else None
+        if v:
+            return v
+    return None
+
+
+def installed_version(target, name, market=None):
+    """What this host has installed for `target` — the copy a new session would load. Two small reads, no survey."""
+    if HOST == "codex":
+        cache = os.path.join(CODEX, "plugins", "cache", market or "", name)
+        versions = sorted(os.listdir(cache)) if market and os.path.isdir(cache) else []
+        return (plugin_version_at(os.path.join(cache, versions[-1])) or versions[-1]) if versions else None
+    installed = load_json(os.path.join(CLAUDE, "plugins", "installed_plugins.json")).get("plugins", {})
+    key = "%s@%s" % (name, market) if market else next((k for k in sorted(installed) if k.partition("@")[0] == name), None)
+    if not key or not installed.get(key):
+        return None
+    inst = install_entry(installed[key], target)
+    markets = load_json(os.path.join(CLAUDE, "plugins", "known_marketplaces.json"))
+    root, _ = host_plugin_root(markets.get(key.partition("@")[2]), name, inst)
+    return plugin_version_at(root) or inst.get("version")
+
+
+def stale_session_line(target, root):
+    """A session loads its plugins once, at start; an update mid-session says "restart to apply", and `/clear` does not reload.
+    `check` compares the lock with what is installed — not with what this session runs. hunsu's own hook knows the latter: the
+    version at its plugin root. One line when it differs from the lock's hunsu (or from what is installed here), else None.
+    Cheap enough for every prompt: the lock, the host's install record, a plugin.json or two."""
+    running = plugin_version_at(root)
+    if not running or "hunsu" in (load_json(os.path.join(target, LOCAL)).get("dev") or {}):   # a working source is run on purpose
+        return None
+    locked = ((load_json(os.path.join(target, LOCK)).get("plugins") or {}).get("hunsu") or {})
+    tail = " — the plugins updated since this session started are not loaded: restart the session (a /clear does not reload plugins)"
+    if locked.get("version") and locked["version"] != running:
+        return "hunsu: this session runs hunsu %s while hunsu.lock.json pins %s" % (running, locked["version"]) + tail
+    have = installed_version(target, "hunsu", locked.get("marketplace"))
+    if have and have != running:
+        return "hunsu: this session runs hunsu %s while hunsu %s is installed for this project" % (running, have) + tail
+    return None
+
+
 def materialize_codex_hooks(target, manifest, s):
     """Codex runs a project's .codex/hooks.json, not a plugin's own hooks. So the lock writes the locked plugins' hooks/codex.json
     there, `${PLUGIN_ROOT}` resolved to each plugin's root on this machine — a machine file, ignored by git, remade by every lock."""

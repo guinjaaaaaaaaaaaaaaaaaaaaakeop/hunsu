@@ -40,6 +40,19 @@ Open any project. hunsu's SessionStart hook puts one line into the session:
 - `hunsu.json` present → `check` runs; drift between this machine and the manifest is reported before any work starts
 - a worker session (`AGENT_WORKER=1`: a judge, a builder, the eyes) → nothing; the environment is the hiring session's
 
+And at every prompt (UserPromptSubmit), when this session runs plugins other than the ones the lock pins: a host loads
+a session's plugins once, at start — an update mid-session says "restart to apply", and `/clear` does not reload them —
+while `check` compares the lock with what is *installed*, not with what this session loaded. hunsu's own hook knows the
+version it runs from (its plugin root); when that differs from the lock's hunsu, or from what is installed for this
+project, one line goes into the prompt's context, and into the SessionStart line too:
+
+    hunsu: this session runs hunsu 1.9.0 while hunsu.lock.json pins 1.10.0 — the plugins updated since this session started are not loaded: restart the session (a /clear does not reload plugins)
+
+Nothing when they agree, nothing in a worker session or under hunsu's own probe (`HUNSU_SURVEY`), nothing while hunsu is
+in development here (`hunsu dev`). No check runs per prompt: the lock, the host's install record, a plugin.json. It is
+said from hunsu's version alone — the one plugin whose running copy hunsu can see — and a session behind on hunsu was
+started before the update, so the rest it runs are as old.
+
 And on every skill call (PreToolUse on `Skill`): a skill that is not in `hunsu.lock.json`, or that `resolutions`
 denies or assigns to another plugin, is **refused** with the reason. An undeclared skill is an undeclared dependency —
 it works on your machine and breaks on everyone else's. No lock, no enforcement.
@@ -319,6 +332,9 @@ says so (`session: sandboxed …`) when the lock's roles are commands. Codex sna
 - `install` has been exercised on a fresh host (`CLAUDE_CONFIG_DIR`).
 - On Codex the PreToolUse hook is declared with the same `Skill` matcher; whether Codex reports skill invocations
   under that tool name is unverified.
+- On Codex the UserPromptSubmit hook (`hooks/codex.json`, materialized by `lock`) is declared the same way; that Codex runs
+  it and takes its `additionalContext` is unverified. There `${PLUGIN_ROOT}` is resolved at lock time, so the hook runs from
+  the copy this machine locked; a lock pulled from someone else that pins another hunsu is said the same way.
 - `compose` stops at every human decision (exit 2). It does not decide; it refuses to advance. Its gates: plugins →
   engines → check errors → conflict judgment (or `judge: skip`) → user-level hooks and skills, unmanaged plugins → lock.
 - Both judge worker paths have run: Claude Code (14 calls on a 5-plugin project, 27 findings, 0 rejected) and Codex (8
@@ -361,4 +377,4 @@ copy under one version; `hunsu install --refresh <plugin>` recopies after the bu
 ## Self-check
 
 `python test_hunsu.py` — a fake host under a temp dir; every `check` error branch, `compose`'s gates, the sentinel's
-allow/deny, and both SessionStart states fire once.
+allow/deny, both SessionStart states, and the stale-session line (mismatch, match, worker) fire once.

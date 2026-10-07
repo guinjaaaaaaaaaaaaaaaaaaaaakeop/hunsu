@@ -1053,6 +1053,41 @@ def test_session_start_hook_reports_both_states():
         assert (done.returncode, done.stdout) == (0, ""), "a worker session: silent, no check"
 
 
+def test_a_session_running_other_plugins_than_the_lock_pins_is_told_at_every_prompt():
+    """guin-site, 10-02 -> 10-06: plugins updated mid-session, the host said "restart to apply", nobody restarted (and `/clear`
+    does not reload), so two sessions ran old copies for days while `check` said the environment matched. hunsu's hook knows
+    the version it runs from (its plugin root): differing from the lock's hunsu, or from what is installed here -> one line,
+    at every prompt and in the SessionStart line; agreeing -> nothing; a worker or hunsu's own probe -> nothing."""
+    with Host() as h:
+        h.add_plugin("m1", "hunsu", "1.0.0", [])
+        h.flush()
+        old = plugin(os.path.join(h.home, "session-copy"), "m1", "hunsu", "0.9.0", [])   # what this session loaded, days ago
+        env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
+        env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)
+        def hook(name, root, **extra):
+            done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps({"cwd": h.target}), capture_output=True,
+                                  text=True, encoding="utf-8", env=dict(env, CLAUDE_PLUGIN_ROOT=root, **extra))
+            assert done.returncode == 0, done.stderr
+            return json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] if done.stdout.strip() else ""
+        # no lock: the session is compared with what is installed for this project
+        assert hook("prompt_submit.py", old) == ("hunsu: this session runs hunsu 0.9.0 while hunsu 1.0.0 is installed for this project — the plugins "
+                                                 "updated since this session started are not loaded: restart the session (a /clear does not reload plugins)")
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": "1.0.0", "marketplace": "m1"}}})
+        line = ("hunsu: this session runs hunsu 0.9.0 while hunsu.lock.json pins 1.0.0 — the plugins updated since this session started are not "
+                "loaded: restart the session (a /clear does not reload plugins)")
+        assert hook("prompt_submit.py", old) == line
+        assert hook("session_start.py", old).split("\n")[0] == line   # a /clear fires SessionStart too, and still runs the old copy
+        # agreeing: silent at the prompt, and the SessionStart line carries no such line
+        assert hook("prompt_submit.py", h.installed["hunsu@m1"][0]["installPath"]) == ""
+        assert "restart the session" not in hook("session_start.py", h.installed["hunsu@m1"][0]["installPath"])
+        # a worker, hunsu's own probe, a working source in development: silent
+        assert hook("prompt_submit.py", old, AGENT_WORKER="1") == ""
+        assert hook("prompt_submit.py", old, HUNSU_SURVEY="1") == ""
+        assert hook("session_start.py", old, AGENT_WORKER="1") == ""
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCAL), {"dev": {"hunsu": "local"}})
+        assert hook("prompt_submit.py", old) == ""
+
+
 def test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed():
     """When a re-judged situation's findings change under an existing resolution, the stale packet carries the resolution
     (`existing_resolution` + `prior_findings`) and the judge answers `resolution_verdict`. consume keeps the resolution only

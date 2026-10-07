@@ -4,6 +4,8 @@ Reads the hook payload (stdin JSON with `cwd`) and puts into the session's first
   no hunsu.json   -> one line: offer to lock the environment (the compose skill does it)
   hunsu.json      -> one line: run check; report errors/warnings so drift is seen before any work starts
   hunsu.lock.json -> the lock's resolutions, one line per situation: the conflict policy, materialized where the agent reads it
+  this session runs a hunsu other than the lock pins (a `/clear`, which this hook also fires on, does not reload plugins)
+                  -> one line saying so, the same the UserPromptSubmit hook (prompt_submit.py) repeats at every prompt
 Never blocks. Never writes to the project.
 Inside a worker session (AGENT_WORKER=1 — a judge, a builder, the eyes, a newcomer are host sessions too, and the host runs
 the project's hooks in them): silent, and no check is run. The environment and its policy are the hiring session's.
@@ -48,6 +50,9 @@ def main():
             msg += ("\nhunsu policy — this project's resolutions between its skills, by situation (hunsu.json `resolutions`; the judge's evidence "
                     "is in hunsu-conflicts.md; `%s \"%s\" policy` prints them again, with who settled each). Follow them when the situation applies:\n- "
                     % (PY, ENGINE.replace(os.sep, "/")) + "\n- ".join(lines))
+    stale = None if os.environ.get("HUNSU_SURVEY") else hunsu.stale_session_line(cwd, os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("PLUGIN_ROOT") or os.path.dirname(HERE))
+    if stale:
+        msg = stale + "\n" + msg
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": msg}}))
     return 0
 
