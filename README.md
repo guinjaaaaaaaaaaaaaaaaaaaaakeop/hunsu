@@ -38,7 +38,11 @@ Open any project. hunsu's SessionStart hook puts one line into the session:
 
 - no `hunsu.json` → "this project's environment is not locked" — the `compose` skill walks you through declaring it
 - `hunsu.json` present → `check` runs; drift between this machine and the manifest is reported before any work starts
+- `hunsu.lock.json` present → also where the lock's plugins are on this machine, one root each — the place to call an
+  engine from by hand
 - a worker session (`AGENT_WORKER=1`: a judge, a builder, the eyes) → nothing; the environment is the hiring session's
+
+It fires at startup, on resume, after `/clear` and after a compaction (the summary keeps none of it).
 
 And at every prompt (UserPromptSubmit), when this session runs plugins other than the ones the lock pins: a host loads
 a session's plugins once, at start — an update mid-session says "restart to apply", and `/clear` does not reload them —
@@ -56,6 +60,16 @@ started before the update, so the rest it runs are as old.
 And on every skill call (PreToolUse on `Skill`): a skill that is not in `hunsu.lock.json`, or that `resolutions`
 denies or assigns to another plugin, is **refused** with the reason. An undeclared skill is an undeclared dependency —
 it works on your machine and breaks on everyone else's. No lock, no enforcement.
+
+And on every shell command (PreToolUse on `Bash`): a command that runs a locked plugin's engine from another copy — another
+version in the plugin cache, another marketplace's copy, or a glob in the version's place (`$C/mangsang/*/*/mangsang.py`,
+`ls -d …/dwitbuk/* | tail -1`) — is **refused**, naming the root the lock pins. The plugin cache keeps every version this
+machine installed and a glob picks by name order (1.9.1 after 1.12.0), so a session calling an engine by hand ran old
+copies for days while its hooks ran the locked ones. Only what a command runs is read — the script an interpreter is
+given, an engine file run as the command, a script run after `cd` into a copy, `$D/…` after `D=` took a copy — so
+listing, reading, comparing old copies, or passing one to the project's own script, passes. When what is installed is
+not the version the lock pins, no copy is named or refused (`check` reports it). A guard that cannot read its input
+allows. No lock, no enforcement.
 
 ## Files in your project
 
@@ -332,6 +346,8 @@ says so (`session: sandboxed …`) when the lock's roles are commands. Codex sna
 - `install` has been exercised on a fresh host (`CLAUDE_CONFIG_DIR`).
 - On Codex the PreToolUse hook is declared with the same `Skill` matcher; whether Codex reports skill invocations
   under that tool name is unverified.
+- On Codex the shell-command hook is declared with matcher `*` and reads `tool_input.command` (a string, or argv joined);
+  that Codex passes its shell commands that way is unverified.
 - On Codex the UserPromptSubmit hook (`hooks/codex.json`, materialized by `lock`) is declared the same way; that Codex runs
   it and takes its `additionalContext` is unverified. There `${PLUGIN_ROOT}` is resolved at lock time, so the hook runs from
   the copy this machine locked; a lock pulled from someone else that pins another hunsu is said the same way.

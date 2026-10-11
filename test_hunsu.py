@@ -1088,6 +1088,72 @@ def test_a_session_running_other_plugins_than_the_lock_pins_is_told_at_every_pro
         assert hook("prompt_submit.py", old) == ""
 
 
+def test_an_engine_is_run_from_the_copy_the_lock_pins_not_from_a_glob_over_the_cache():
+    """guin-site, 10-08 -> 10-10: the hooks ran the locked versions while the session's own commands ran mangsang 1.11.0 (a
+    glob over the cache; 1.16.0 locked) and dwitbuk 1.9.1 (`ls -d .../* | tail -1` — name order puts 1.9.1 after 1.12.0).
+    The SessionStart line names the lock's roots; the Bash hook refuses a command that runs another copy, naming the right
+    root; listing old copies, the locked path and project paths pass. The newest copy is found by version, not by name."""
+    assert hunsu.by_version(["1.9.1", "1.12.0", "1.10.0", "x"]) == ["x", "1.9.1", "1.10.0", "1.12.0"]
+    with Host() as h:
+        for v in ("1.9.1", "1.12.0"):
+            plugin(h.cache, "m1", "beta", v, [])
+        h.add_plugin("m1", "beta", "1.12.0", [])
+        write(os.path.join(h.cache, "m1", "beta", "1.12.0", "beta.py"), "")
+        h.flush()
+        right = h.installed["beta@m1"][0]["installPath"]
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"beta": {"version": "1.12.0", "marketplace": "m1"}}})
+        env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
+        env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)
+        def bash(command, **extra):
+            done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "pre_bash.py")], capture_output=True, text=True, encoding="utf-8",
+                                  input=json.dumps({"cwd": h.target, "tool_name": "Bash", "tool_input": {"command": command}}), env=dict(env, **extra))
+            return done.returncode, done.stderr
+        c = h.cache.replace(os.sep, "/")
+        for f in ("setup.py", "index.js", "run.sh"):   # generic names a plugin root may ship, as a project may
+            write(os.path.join(h.cache, "m1", "beta", "1.12.0", f), "")
+        hc = "$HOME/.claude/plugins/cache"
+        for stray in ("D=$(ls -d %s/m1/beta/* | tail -1); python3 $D/beta.py follow" % c,
+                      "D=$(ls -d %s/m1/beta/* | sort -V | tail -1)\npython3 \"$D/beta.py\" follow" % c,
+                      "python3 %s/m1/beta/1.9.1/beta.py check" % c,
+                      "python3 \"%s/m1/beta/1.9.1/beta.py\" check" % c,
+                      "python3.12 %s/m1/beta/1.9.1/beta.py" % c,
+                      "env python3 %s/m1/beta/1.9.1/beta.py" % c,
+                      "%s/m1/beta/1.9.1/beta.py check" % c,
+                      "cd %s/m1/beta/1.9.1 && python3 beta.py" % c,
+                      "C=%s; python3 $C/m1/*/*/beta.py check" % c,
+                      "C=%s; python3 $C/m1/beta/1.9.1/beta.py check" % c,
+                      "python3 %s" % "/".join([c, "m1", "beta", "1.9.1", "beta.py"]).replace("/", "\\")):
+            code, err = bash(stray)
+            assert code == 2 and "pins beta 1.12.0" in err and right.replace(os.sep, "/") in err, (stray, code, err)
+        for fine in ("python3 %s/m1/beta/1.12.0/beta.py check" % c, "ls -d %s/m1/beta/*" % c, "cat %s/m1/beta/1.9.1/README.md" % c,
+                     "python3 tests/run.py && git log -- beta/*", "python3 scripts/beta.py && cat docs/*/README.md",
+                     # listing, reading, comparing old copies — even beside a command that runs something, or through $HOME
+                     "ls -d %s/m1/beta/*" % hc, "ls -la %s/m1/beta/1.9.1/" % hc, "cat %s/m1/beta/1.9.1/beta.py" % hc,
+                     "diff -r %s/m1/beta/1.9.1 %s/m1/beta/1.12.0" % (hc, hc),
+                     "cat %s/m1/beta/1.9.1/CHANGELOG.md && python3 tests/run.py" % c,
+                     "grep -rn 'python3 ' %s/m1/beta/1.9.1/" % c,
+                     "python3 tools/cmp.py %s/m1/beta/1.9.1 %s/m1/beta/1.12.0" % (c, c),
+                     "C=%s; ls $C/m1/*/*/beta.py" % c,
+                     # a project's own paths that share a plugin root's file names
+                     "python3 packages/*/setup.py install", "node vendor/lib/2.0.1/index.js", "bash scripts/*/run.sh",
+                     "for f in */setup.py; do python3 $f; done", "python3 /tmp/한글/1.9.1/beta.py",
+                     "D=%s/m1/beta/1.12.0; python3 $D/beta.py" % c):
+            assert bash(fine) == (0, ""), fine
+        for broken in ("[]", '{"tool_input": "x"}', json.dumps({"cwd": h.target, "tool_input": {"command": 5}})):   # a guard that cannot read allows
+            done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "pre_bash.py")], capture_output=True, text=True, input=broken, env=env)
+            assert (done.returncode, done.stderr) == (0, ""), (broken, done.stderr)
+        assert bash("python3 %s/m1/beta/1.9.1/beta.py" % c, HUNSU_SURVEY="1") == (0, "")
+        os.remove(os.path.join(h.target, hunsu.LOCK))
+        assert bash("python3 %s/m1/beta/1.9.1/beta.py" % c) == (0, ""), "no lock: nothing is pinned"
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"beta": {"version": "1.12.0", "marketplace": "m1"}}})
+        assert hunsu.roots_line(h.target).endswith("beta 1.12.0 `%s`" % right.replace(os.sep, "/")), hunsu.roots_line(h.target)
+        # what is installed is not what the lock pins: no copy here is the lock's — nothing named, nothing refused (`check` says it)
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"beta": {"version": "1.9.1", "marketplace": "m1"}}})
+        assert hunsu.roots_line(h.target) is None and bash("python3 %s/m1/beta/1.9.1/beta.py" % c) == (0, "")
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": ["beta"]})
+        assert hunsu.roots_line(h.target) is None and bash("python3 %s/m1/beta/1.9.1/beta.py" % c) == (0, "")
+
+
 def test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed():
     """When a re-judged situation's findings change under an existing resolution, the stale packet carries the resolution
     (`existing_resolution` + `prior_findings`) and the judge answers `resolution_verdict`. consume keeps the resolution only

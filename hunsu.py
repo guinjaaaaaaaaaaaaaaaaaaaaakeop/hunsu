@@ -123,7 +123,7 @@ def survey_codex(target):
             continue
         name, _, market = key.partition("@")
         cache = os.path.join(CODEX, "plugins", "cache", market, name)
-        versions = sorted(os.listdir(cache)) if os.path.isdir(cache) else []
+        versions = by_version(os.listdir(cache)) if os.path.isdir(cache) else []
         root = os.path.join(cache, versions[-1]) if versions else ""
         manifest = load_json(os.path.join(root, ".codex-plugin", "plugin.json")) or load_json(os.path.join(root, "plugin.json"))
         m = markets.get(market) or {}
@@ -1917,20 +1917,38 @@ def plugin_version_at(root):
     return None
 
 
-def installed_version(target, name, market=None):
-    """What this host has installed for `target` — the copy a new session would load. Two small reads, no survey."""
+def by_version(names):
+    """Directory names in version order, oldest first: a name sort puts 1.9.1 after 1.12.0 (a session in guin-site took
+    `ls -d …/dwitbuk/* | tail -1` for the newest and ran 1.9.1 for days). Names that are not versions go first, by name."""
+    return sorted(names, key=lambda v: (_semver(v) is not None, _semver(v) or (), v))
+
+
+def _installed(target, name, market=None):
+    """(root, the version the install record names) for what this host has installed for `target` — the copy a new session
+    would load — or (None, None). Two small reads, no survey. The root is written with `/` on every platform."""
     if HOST == "codex":
         cache = os.path.join(CODEX, "plugins", "cache", market or "", name)
-        versions = sorted(os.listdir(cache)) if market and os.path.isdir(cache) else []
-        return (plugin_version_at(os.path.join(cache, versions[-1])) or versions[-1]) if versions else None
+        versions = by_version(os.listdir(cache)) if market and os.path.isdir(cache) else []
+        return (os.path.join(cache, versions[-1]).replace("\\", "/"), versions[-1]) if versions else (None, None)
     installed = load_json(os.path.join(CLAUDE, "plugins", "installed_plugins.json")).get("plugins", {})
     key = "%s@%s" % (name, market) if market else next((k for k in sorted(installed) if k.partition("@")[0] == name), None)
     if not key or not installed.get(key):
-        return None
+        return None, None
     inst = install_entry(installed[key], target)
     markets = load_json(os.path.join(CLAUDE, "plugins", "known_marketplaces.json"))
     root, _ = host_plugin_root(markets.get(key.partition("@")[2]), name, inst)
-    return plugin_version_at(root) or inst.get("version")
+    return (root.replace("\\", "/") if root else None), (inst or {}).get("version")
+
+
+def installed_root(target, name, market=None):
+    """The root this host has installed for `target` — the copy a new session would load — or None."""
+    return _installed(target, name, market)[0]
+
+
+def installed_version(target, name, market=None):
+    """What this host has installed for `target` — the copy a new session would load."""
+    root, recorded = _installed(target, name, market)
+    return (plugin_version_at(root) or recorded) if root else None
 
 
 def stale_session_line(target, root):
@@ -1949,6 +1967,207 @@ def stale_session_line(target, root):
     if have and have != running:
         return "hunsu: this session runs hunsu %s while hunsu %s is installed for this project" % (running, have) + tail
     return None
+
+
+def locked_roots(target):
+    """{name: (locked version, root on this machine)} for the lock's plugins — the copy a session should call an engine from:
+    the one installed for this project, or the working source while `hunsu dev` has it. The root is None when it is not
+    there, or when what is installed is not the version the lock pins (then no copy here is the lock's: `check` says so)."""
+    try:
+        plugins = load_json(os.path.join(target, LOCK)).get("plugins") or {}
+        dev = load_json(os.path.join(target, LOCAL)).get("dev") or {}
+    except (ValueError, OSError, AttributeError):
+        return {}
+    if not isinstance(plugins, dict) or not isinstance(dev, dict):
+        return {}
+    out = {}
+    for name, p in sorted(plugins.items()):
+        if not isinstance(p, dict):
+            continue
+        root = installed_root(target, name, dev.get(name) or p.get("marketplace"))
+        if root and not os.path.isdir(root):
+            root = None
+        if root and name not in dev and p.get("version") and plugin_version_at(root) not in (None, p.get("version")):
+            root = None
+        out[name] = (p.get("version"), root)
+    return out
+
+
+def roots_line(target):
+    """The SessionStart line naming where the lock's plugins are on this machine. A session that calls an engine by hand
+    finds it with a glob over the plugin cache, and a glob finds every version kept there (guin-site, 10-08 → 10-10: mangsang
+    1.11.0 ran for two days under a 1.16.0 lock, its version written into 40 sources). None without a lock."""
+    roots = [(n, v, r) for n, (v, r) in locked_roots(target).items() if r]
+    if not roots:
+        return None
+    return ("hunsu: the lock's plugins on this machine — call an engine at these roots, never through a glob over the plugin cache "
+            "(it holds every version this machine kept): " + " · ".join("%s %s `%s`" % (n, v or "?", r) for n, v, r in roots))
+
+
+CACHE_PATH = re.compile(r"plugins/cache/([^/\s\"'`;|&()<>]+)/([^/\s\"'`;|&()<>]+)/([^/\s\"'`;|&()<>]+)")
+ENGINE_EXTS = (".py", ".js", ".mjs", ".cjs", ".sh", ".ps1")   # a plugin's own top-level file a command can run
+INTERPRETER = re.compile(r"^(?:python[\d.]*|py|pypy3?|node|deno|bun|bash|sh|zsh|dash|pwsh|powershell)(?:\.exe)?$")
+NO_FILE = ("-m", "-c", "-e", "--eval", "-p", "--print", "-Command")   # an interpreter told to run no file
+PREFIXES = ("env", "exec", "time", "nohup", "command", "do", "then", "else", "{", "(", "!")
+ASSIGNMENT = re.compile(r"^\s*(?:export\s+|local\s+|readonly\s+)?([A-Za-z_]\w*)=(.*?)\s*$", re.S)
+FOR_LOOP = re.compile(r"^\s*for\s+([A-Za-z_]\w*)\s+in\s+(.*?)\s*$", re.S)
+ONE_WORD = re.compile(r"^(?:\$\(.*\)|`.*`|\"[^\"]*\"|'[^']*'|\S*)$", re.S)
+VAR_HEAD = re.compile(r"^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(/|$)")
+
+
+def shell_segments(command):
+    """A command line cut into simple commands at `;`, `&&`, `||`, `|`, `&` and newlines — outside quotes, `$(…)` and
+    backquotes, so `D=$(ls -d … | tail -1)` stays one segment. Rough on purpose: what it cannot read stays whole."""
+    segs, cur, quote, depth, i = [], [], None, 0, 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            if ch == quote:
+                quote = None
+            elif ch == "\\" and quote == '"' and i + 1 < len(command):
+                cur.append(ch)
+                i += 1
+                ch = command[i]
+        elif ch in "'\"`":
+            quote = ch
+        elif ch == "$" and command[i + 1:i + 2] == "(":
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+        elif not depth and (ch in ";|&\n"):
+            segs.append("".join(cur))
+            cur = []
+            while i + 1 < len(command) and command[i + 1] in "|&":
+                i += 1
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    segs.append("".join(cur))
+    return [s.strip() for s in segs if s.strip()]
+
+
+def _words(seg):
+    import shlex
+    try:
+        return shlex.split(seg)
+    except ValueError:
+        return seg.split()
+
+
+def _runs(words):
+    """The script a simple command runs — an interpreter's first operand, or the command word itself when it names an
+    engine file — or None. `python3 -m mod`, `node -e …` run no file."""
+    while words and (ASSIGNMENT.match(words[0]) or words[0] in PREFIXES):
+        words = words[1:]
+    if words[:2] == ["uv", "run"]:
+        words = [w for w in words[2:3] if not w.startswith("-")] + words[3:]
+    if not words:
+        return None
+    head = os.path.basename(words[0])
+    if INTERPRETER.match(head):
+        rest = words[1:]
+        if head in ("deno", "bun") and rest[:1] == ["run"]:
+            rest = rest[1:]
+        while rest and rest[0].startswith("-"):
+            if rest[0] in NO_FILE:
+                return None
+            rest = rest[1:]
+        return rest[0] if rest else None
+    return words[0] if words[0].endswith(ENGINE_EXTS) else None
+
+
+def stray_plugin_paths(target, command):
+    """[(plugin, what the command names, locked version, right root)] for each place a shell command runs a copy of a locked
+    plugin other than the one the lock pins — a version in the plugin cache that is not the lock's (or another marketplace's
+    copy), or a glob in the version's place. Only what a simple command runs is read: the script an interpreter is given,
+    an engine file run as the command, a script run after `cd` into a copy, or `$D/…` where an earlier `D=` (or `for D in`)
+    took a copy (`D=$(ls -d …/dwitbuk/* | tail -1); python3 $D/dwitbuk.py`). Listing, reading, comparing old copies, or
+    passing one to a project's own script, harms nothing and passes. A path that names no plugin of the lock passes."""
+    if not isinstance(command, str) or "/" not in command.replace("\\", "/"):
+        return []
+    roots = {n: (v, r) for n, (v, r) in locked_roots(target).items() if r}
+    if not roots:
+        return []
+    tops = {}
+    for name, (_, r) in roots.items():
+        try:
+            tops[name] = {f for f in os.listdir(r) if f.endswith(ENGINE_EXTS)}
+        except OSError:
+            tops[name] = set()
+
+    def stray(text):
+        """[(name, token)] where `text` reaches a copy that is not the lock's."""
+        out = []
+        for m in CACHE_PATH.finditer(text):
+            market, name, seg = m.groups()
+            if name in roots and not roots[name][1].rstrip("/").endswith("/".join(m.groups())):
+                out.append((name, m.group(0)))
+        return out
+
+    def stray_script(path, assigned):
+        if not path:
+            return []
+        path = path.replace("\\", "/")
+        found = stray(path)
+        if found:
+            return found
+        head = VAR_HEAD.match(path)
+        if head and assigned.get(head.group(1) or head.group(2)):
+            found = assigned[head.group(1) or head.group(2)]
+            if found:
+                return [(n, "%s (%s)" % (path, t)) for n, t in found]
+        parts = path.split("/")
+        if len(parts) < 3:
+            return []
+        for name, files in tops.items():
+            if parts[-1] not in files:
+                continue
+            if name in parts[:-1]:
+                way = parts[parts.index(name) + 1:-1]
+            elif head and os.path.splitext(parts[-1])[0] == name:   # `$C/<market>/*/*/<name>.py`: the cache's prefix in a variable
+                way = parts[1:-1]
+            else:
+                continue
+            right = os.path.basename(roots[name][1].rstrip("/"))
+            if any(re.search(r"[*?\[]", x) or (_semver(x) and x != right) for x in way):
+                found.append((name, path))
+        return found
+
+    command = command.replace("\\", "/")
+    assigned, cd_into, found = {}, [], []
+    for seg in shell_segments(command):
+        a = ASSIGNMENT.match(seg)
+        a = a if a and ONE_WORD.match(a.group(2)) else None   # `X=1 python3 …` is a command with its environment
+        f = FOR_LOOP.match(seg)
+        if a or f:
+            name, value = (a or f).groups()
+            assigned[name] = stray(value)
+            continue
+        words = _words(seg)
+        if words[:1] == ["cd"]:
+            cd_into = stray_script(words[1], assigned) if len(words) > 1 else []
+            continue
+        script = _runs(words)
+        if not script:
+            continue
+        hit = stray_script(script, assigned)
+        if not hit and cd_into and not script.startswith(("/", "~", "$")):
+            hit = cd_into
+        found += [(n, t, roots[n][0], roots[n][1]) for n, t in hit]
+    seen, out = set(), []
+    for x in found:
+        if x[:2] not in seen:
+            seen.add(x[:2])
+            out.append(x)
+    return out
+
+
+def stray_paths_reason(found):
+    return "\n".join("hunsu: `%s` is not the %s this project runs — hunsu.lock.json pins %s %s, which this machine has at `%s`. Call the "
+                     "engine there: the plugin cache keeps every version this machine installed, and a glob over it picks by name order "
+                     "(1.9.1 after 1.12.0)." % (tok, name, name, v or "?", root)
+                     for name, tok, v, root in found)
 
 
 def materialize_codex_hooks(target, manifest, s):

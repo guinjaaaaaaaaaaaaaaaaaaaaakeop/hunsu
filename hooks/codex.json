@@ -2,7 +2,7 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear",
+        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -33,6 +33,16 @@
             "command": "python3 \"${PLUGIN_ROOT}/hooks/pre_skill.py\"",
             "timeout": 10,
             "statusMessage": "hunsu — checking the skill against hunsu.lock.json"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/pre_bash.py\"",
+            "timeout": 10
           }
         ]
       }

@@ -4,8 +4,12 @@ Reads the hook payload (stdin JSON with `cwd`) and puts into the session's first
   no hunsu.json   -> one line: offer to lock the environment (the compose skill does it)
   hunsu.json      -> one line: run check; report errors/warnings so drift is seen before any work starts
   hunsu.lock.json -> the lock's resolutions, one line per situation: the conflict policy, materialized where the agent reads it
+  hunsu.lock.json -> also where the lock's plugins are on this machine, one line: a session that calls an engine by hand
+                     takes its root from there, not from a glob over the plugin cache (pre_bash.py refuses the latter)
   this session runs a hunsu other than the lock pins (a `/clear`, which this hook also fires on, does not reload plugins)
                   -> one line saying so, the same the UserPromptSubmit hook (prompt_submit.py) repeats at every prompt
+Fires after a compaction too: the summary keeps none of this (guin-site 10-08 → 10-11: four compactions, and the summary
+carried an old engine's path forward instead).
 Never blocks. Never writes to the project.
 Inside a worker session (AGENT_WORKER=1 — a judge, a builder, the eyes, a newcomer are host sessions too, and the host runs
 the project's hooks in them): silent, and no check is run. The environment and its policy are the hiring session's.
@@ -45,6 +49,9 @@ def main():
         state = "environment differs from hunsu.json" if done.returncode else "environment matches hunsu.json"
         msg = "hunsu: %s (%s). `%s \"%s\" check` for the list." % (state, summary, PY, ENGINE.replace(os.sep, "/"))
         lock = hunsu.load_json(os.path.join(cwd, "hunsu.lock.json"))
+        roots = hunsu.roots_line(cwd)
+        if roots:
+            msg += "\n" + roots
         lines = hunsu.policy_lines(lock)
         if lines:
             msg += ("\nhunsu policy — this project's resolutions between its skills, by situation (hunsu.json `resolutions`; the judge's evidence "
