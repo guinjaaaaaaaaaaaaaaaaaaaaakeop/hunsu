@@ -83,8 +83,8 @@ allows. No lock, no enforcement.
 
 ## Commands
 
-Nine are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin>`, `/hunsu:check`, `/hunsu:policy`,
-`/hunsu:role`, `/hunsu:capability`, `/hunsu:lock`, `/hunsu:compose`; `remove`, `judge`, `install`, `link`/`unlink` are the engine's (`python3 <plugin root>/hunsu.py …`).
+Ten are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin>`, `/hunsu:check`, `/hunsu:outdated`,
+`/hunsu:policy`, `/hunsu:role`, `/hunsu:capability`, `/hunsu:lock`, `/hunsu:compose`; `remove`, `judge`, `install`, `link`/`unlink` are the engine's (`python3 <plugin root>/hunsu.py …`).
 The `compose` skill is the same flow driven by the agent.
 
 ### `survey`
@@ -116,7 +116,26 @@ covered by a `<role>@<cap>` alternate — as one line naming the roles and both 
 alone, so it shows even while plugins are missing; a warning, so `lock` is not blocked; the SessionStart line counts it), `hunsu.local.json` not ignored by git (an `error` when it is committed). `info`: a pinned plugin behind a release available here (`plugin X is behind: pinned 1.12.2; the
 marketplace M lists 1.13.0 (local copy)`, or a linked checkout's version — no network: a marketplace copy is as fresh as
 its last `claude plugin marketplace update`; the session's first line counts them), links, extra
-plugins, machine-bound paths. Exit 1 on errors
+plugins, machine-bound paths. Exit 1 on errors. `--remote` runs `outdated` after it.
+
+A version skew between this machine and the manifest (`plugin X: manifest A, host B`), a plugin behind a release, and the
+stale-session line say the way out as numbered steps, each only when it is owed, in this order: `claude plugin marketplace
+update M`, `claude plugin update X@M --scope project` (in the project), restart the session (a `/clear` does not reload
+plugins), `hunsu add X`, `hunsu check` and a `--stale` judge round for what it calls stale, `hunsu lock` — committed with
+`hunsu.json` inside a run, like any change to the environment. On Codex the first two are `codex plugin marketplace upgrade
+M` and `codex plugin remove` + `add`.
+
+### `outdated`
+
+read-only, and the one command that asks the network: per locked plugin (the lock's, else `hunsu.json`'s) its locked
+version, what is installed for this project, this machine's copy of the marketplace, and what the marketplace publishes
+now — with the steps above when something is owed. A git marketplace is read by a shallow, blob-less clone of its
+`origin` into a temp directory, deleted after: the copy the host installs from, the plugin cache and the install records
+are not touched (`claude plugin marketplace update` stays the step that moves them); a directory marketplace is what is
+there. A marketplace that cannot be reached is said on its plugins' lines (`published ?`), and the rest are still asked;
+git never prompts for credentials. Install records of the same plugin under another marketplace in
+`installed_plugins.json` are named: one that applies to this project (a second copy that can load here) with the
+uninstall that keeps the lock's, one for other projects only as not this project's. Writes nothing. Exit 0
 
 ### `policy`
 
@@ -247,7 +266,13 @@ unread). `deny` is also enforced by the sentinel at call time; `use`, `order`, `
 Measured: the same request reached for a different skill with the line than without, 2/2 each way.
 6. Later, a member's text changes (its SKILL.md, a worker's prompt, a mode's script or command): only the situations
 it is a member of go stale. A judgment is about text, so a version bump that changes no member's text stales nothing —
-a patch release costs no judge round. (Judgments made before this carry only a version fingerprint and stay valid by
+a patch release costs no judge round. Each situation records every member's identity on its own (`member-fingerprints`)
+and what the judge read of each mode (`modes-read`, the injected text): a mode's identity is its script, since its text
+carries the project's state, but a script edited in a way that leaves its line as it was (chongdae 1.20.0 changed how its
+line counts open tasks) changed nothing the judge read, so it stales nothing — the hook is run to see, only for a mode
+whose script moved. A re-judge that finds the same findings (kind, members, quotes, class) keeps them word for word, their
+reason and proposal and the situation's `judged-by` with them; only what it was judged about is recorded anew — a
+judge words its reasons anew on every call, and a record rewritten with each rewording is a diff nobody can read. (Judgments made before this carry only a version fingerprint and stay valid by
 version until re-judged.) `judge request --out DIR --stale` writes packets for those alone; `consume` merges them over
 the old ones. A plugin that brings a skill no situation has seen needs a new cluster round (stage 1). If a re-judged
 situation's findings differ from what its resolution was written against, `consume` marks that resolution `reviewed:
@@ -393,4 +418,5 @@ copy under one version; `hunsu install --refresh <plugin>` recopies after the bu
 ## Self-check
 
 `python test_hunsu.py` — a fake host under a temp dir; every `check` error branch, `compose`'s gates, the sentinel's
-allow/deny, both SessionStart states, and the stale-session line (mismatch, match, worker) fire once.
+allow/deny, both SessionStart states, and the stale-session line (mismatch, match, worker) fire once. `outdated` is tested
+against local bare repositories standing for the publishers — no network.

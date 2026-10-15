@@ -284,7 +284,8 @@ def test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host():
         write(os.path.join(root, ".claude-plugin", "plugin.json"), {"name": "alpha", "version": "1.0.1"})
         h.installed["alpha@m1"][0]["version"] = "1.0.1"; h.flush()
         errors, _, _ = hunsu.check(h.target)
-        assert errors == ["plugin alpha: manifest 1.0.0, host 1.0.1"], errors   # the bump is drift for the manifest to take, not a lie
+        assert len(errors) == 1 and errors[0].startswith("plugin alpha: manifest 1.0.0, host 1.0.1 — to take 1.0.1: 1. restart the session if it started"), errors   # the bump is drift for the manifest to take, not a lie
+        assert "2. `hunsu add alpha`" in errors[0] and "`hunsu lock`, and commit" in errors[0] and "plugin update" not in errors[0], errors   # installed already: no update step
         run("add", "alpha", "--target", h.target)
         assert run("lock", "--target", h.target)[0] == 0 and not hunsu.check(h.target)[0]
 
@@ -336,7 +337,11 @@ def test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here():
             run("add", p, "--target", h.target)
         errors, warnings, info = hunsu.check(h.target)
         behind = [i for i in info if hunsu.BEHIND in i]
-        assert behind == ["plugin alpha is behind: pinned 1.2.0; the marketplace m1 lists 1.3.0 (local copy) — `hunsu add alpha`, then lock, to take it"], info
+        assert len(behind) == 1 and behind[0].startswith("plugin alpha is behind: pinned 1.2.0; the marketplace m1 lists 1.3.0 (local copy) — to take it: "
+                                                         "1. `claude plugin update alpha@m1 --scope project`, run in this project"), info
+        # the copy already lists it: no marketplace update; then the restart, the manifest, the judgments, the lock — in that order
+        assert "marketplace update" not in behind[0] and [behind[0].index(x) for x in ("2. restart the session", "3. `hunsu add alpha`", "4. `hunsu check`", "5. `hunsu lock`")] == \
+            sorted(behind[0].index(x) for x in ("2. restart the session", "3. `hunsu add alpha`", "4. `hunsu check`", "5. `hunsu lock`")), behind
         assert not any("alpha" in e for e in errors), "a release waiting is a choice, not a drift"
         # a linked checkout ahead of the pin says so too
         src = os.path.join(h.home, "src", "beta")
@@ -1372,6 +1377,181 @@ def test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_s
         assert code == 1 and "go with --alternates" in out, out
         assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)) == doc
 
+
+def test_a_rejudge_that_finds_the_same_keeps_the_record_and_a_script_that_says_the_same_stales_nothing():
+    """guin-site f304f91: an update re-judged all nine situations ($1.40) and rewrote 66 lines of hunsu-judgments.json — every
+    verdict the same, every `why` reworded. Two causes. A mode is a member of every situation and its identity is its script (its
+    text carries the project's state), so chongdae's edited hook staled all nine though its line read the same; now a member that
+    moved is a change only when what the judge read of it moved. And a re-judge that finds the same findings keeps the old ones,
+    word for word, with their judged-by; a finding that differs is recorded anew."""
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
+        mode_script(h.add_plugin("m2", "beta", "2.0.0", ["review"], hooks=MODE_HOOK), "Never build before asking.")
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("add", "beta", "--target", h.target)
+        d = os.path.join(h.target, "judge")
+        run("judge", "request", "--target", h.target, "--out", d)
+        write(os.path.join(d, "cluster-response.json"), {"groups": [
+            {"situation": "reviewing", "members": ["alpha:critique", "beta:review"], "why": "both review"},
+            {"situation": "building", "members": ["alpha:build"], "why": "alone"}]})
+        run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))
+        finding = {"kind": "contradiction", "members": ["alpha:build", "plugin:beta"], "quotes": {"alpha:build": "does build", "plugin:beta": "Never build before asking."},
+                   "why": "the mode forbids what build does", "proposed": {"order": ["plugin:beta", "alpha:build"]}}
+        write(os.path.join(d, "group-01-response.json"), {"findings": []})
+        write(os.path.join(d, "group-02-response.json"), {"findings": [finding]})
+        assert run("judge", "consume", "--target", h.target, "--dir", d, "--by", "first")[0] == 0
+        manifest(h.target, resolutions={"building": {"order": ["plugin:beta", "alpha:build"], "reviewed": True}})
+        before = {r["situation"]: r for r in hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))["situations"]}
+        assert before["building"]["modes-read"] and set(before["building"]["member-fingerprints"]) == {"alpha:build", "plugin:beta"}, before["building"]
+        stale = lambda: [e for e in hunsu.check(h.target)[0] if "judged about other text" in e]
+        # a release whose hook script changed and whose line did not: nothing is stale
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)); m["plugins"]["beta"]["version"] = "2.1.0"; hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), m)
+        beta21 = h.add_plugin("m2", "beta", "2.1.0", ["review"], hooks=MODE_HOOK); h.flush()
+        mode_script(beta21, "Never build before asking.")
+        with io.open(os.path.join(beta21, "mode.py"), "a", encoding="utf-8") as fh:
+            fh.write("\n# counts open tasks the way run does now\n")
+        assert stale() == [], "the script moved, what the judge read did not"
+        # a skill's text that changed is what the judge read: its situation, and only it, is stale
+        alpha = h.installed["alpha@m1"][0]["installPath"]
+        write(os.path.join(alpha, "skills", "build", "SKILL.md"), "---\nname: build\ndescription: does build, and says how\n---\n")
+        errs = stale()
+        assert len(errs) == 1 and "1 situation(s)" in errs[0] and "building" in errs[0], errs
+        # re-judged: the same finding, worded anew -> the old record stands as it was
+        assert run("judge", "request", "--target", h.target, "--out", d, "--stale")[0] == 0
+        write(os.path.join(d, "group-01-response.json"), {"findings": [dict(finding, why="build acts where the mode says ask first", proposed={"order": ["plugin:beta", "alpha:build"], "note": "x"})]})
+        code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "second")
+        assert code == 0 and "re-judged with the same findings — kept as they were" in out and "building" in out, out
+        after = {r["situation"]: r for r in hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))["situations"]}
+        assert after["building"]["findings"] == before["building"]["findings"] and after["building"]["judged-by"] == "first", after["building"]
+        assert after["building"]["members-text-fingerprint"] != before["building"]["members-text-fingerprint"], "what it was judged about is recorded anew"
+        assert after["reviewing"] == before["reviewing"], "a situation not re-judged is not touched"
+        assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["resolutions"]["building"]["reviewed"] is True
+        assert stale() == []
+        # a finding that differs (another quote) is a new finding: recorded as the judge gave it
+        write(os.path.join(alpha, "skills", "build", "SKILL.md"), "---\nname: build\ndescription: does build, and deploys\n---\n")
+        run("judge", "request", "--target", h.target, "--out", d, "--stale")
+        write(os.path.join(d, "group-01-response.json"), {"findings": [dict(finding, quotes={"alpha:build": "and deploys", "plugin:beta": "Never build before asking."}, why="deploying is building")]})
+        code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "third")
+        assert code == 0 and "kept as they were" not in out, out
+        b = next(r for r in hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))["situations"] if r["situation"] == "building")
+        assert b["findings"][0]["why"] == "deploying is building" and b["judged-by"] == "third", b
+
+
+def _git(cwd, *argv):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main"] + list(argv),
+                   cwd=cwd, check=True, capture_output=True)
+
+
+def published_marketplace(home, market, name, version):
+    """A marketplace as the host keeps a git one: a bare repo standing for the publisher (a local path: no network), and this
+    machine's clone of it at `installLocation`. Returns (bare, clone)."""
+    work = os.path.join(home, "publisher", market)
+    write(os.path.join(work, ".claude-plugin", "marketplace.json"), {"name": market, "plugins": [{"name": name, "source": "./", "version": version}]})
+    write(os.path.join(work, ".claude-plugin", "plugin.json"), {"name": name, "version": version})
+    _git(work, "init", "-q"); _git(work, "add", "-A"); _git(work, "commit", "-qm", version)
+    bare = os.path.join(home, "remote", market + ".git")
+    _git(home, "clone", "-q", "--bare", work, bare)
+    _git(work, "remote", "add", "origin", bare)
+    clone = os.path.join(home, "marketplaces", market)
+    _git(home, "clone", "-q", bare, clone)
+    return work, clone
+
+
+def publish(work, name, version):
+    write(os.path.join(work, ".claude-plugin", "plugin.json"), {"name": name, "version": version})
+    _git(work, "commit", "-qam", version); _git(work, "push", "-q", "origin", "HEAD")
+
+
+def test_outdated_asks_each_marketplace_read_only_and_says_the_steps_in_order():
+    """guin-site, 10-14: asked "are the plugins up to date?", a session listed the plugin cache, read installed_plugins.json, ran
+    `check` (offline by design) and `git fetch` in each marketplace clone by hand, then grepped old transcripts twice for the
+    update commands. `outdated` asks the network once, read-only (a shallow clone into a temp dir: the marketplace copy the host
+    installs from is not moved), prints locked / installed / published per plugin with the steps in order, says a marketplace it
+    cannot reach and goes on, and names install records under another marketplace (an old local marketplace's entries)."""
+    if not shutil.which("git"):
+        raise Skip("no git on PATH")
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.2.0", ["build"])
+        h.add_plugin("m2", "beta", "2.0.0", ["review"])
+        h.add_plugin("m4", "delta", "0.5.0", ["retro"])
+        work1, clone1 = published_marketplace(h.home, "m1", "alpha", "1.2.0")
+        h.markets["m1"]["installLocation"] = clone1
+        publish(work1, "alpha", "1.3.0")   # released since this machine's copy was taken
+        os.makedirs(os.path.join(h.home, "marketplaces", "m2"))
+        _git(os.path.join(h.home, "marketplaces", "m2"), "init", "-q")
+        _git(os.path.join(h.home, "marketplaces", "m2"), "remote", "add", "origin", os.path.join(h.home, "remote", "gone.git"))   # unreachable
+        h.markets["m2"]["installLocation"] = os.path.join(h.home, "marketplaces", "m2")
+        work4, clone4 = published_marketplace(h.home, "m4", "delta", "0.5.0")
+        h.markets["m4"]["installLocation"] = clone4
+        # an old local marketplace's records: one for another project, one that applies to this one
+        h.installed["alpha@old"] = [{"scope": "project", "projectPath": os.path.join(h.home, "elsewhere"), "installPath": "/x", "version": "1.0.0"}]
+        h.installed["delta@old"] = [{"scope": "project", "projectPath": h.target, "installPath": "/y", "version": "0.1.0"}]
+        h.flush()
+        run("init", "--target", h.target)
+        for p in ("alpha", "beta", "delta"):
+            run("add", p, "--target", h.target)
+        manifest(h.target, judge="skip")
+        assert run("lock", "--target", h.target)[0] == 0
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone1, capture_output=True, text=True).stdout
+        code, out = run("outdated", "--target", h.target)
+        assert code == 0, out
+        lines = out.splitlines()
+        alpha = next(l for l in lines if l.strip().startswith("alpha"))
+        assert "locked 1.2.0 · installed 1.2.0 · marketplace copy here 1.2.0 · published 1.3.0 — alpha 1.3.0 is published" in alpha, out
+        steps = lines[lines.index(alpha) + 1:lines.index(alpha) + 7]
+        assert [l.strip()[:2] for l in steps] == ["1.", "2.", "3.", "4.", "5.", "6."], steps
+        assert "`claude plugin marketplace update m1`" in steps[0] and "`claude plugin update alpha@m1 --scope project`" in steps[1], steps
+        assert "restart the session" in steps[2] and "`hunsu add alpha`" in steps[3] and "--stale" in steps[4] and "`hunsu lock`" in steps[5] and "inside a run" in steps[5], steps
+        assert "also recorded as alpha@old in installed_plugins.json, for 1 other project(s) — not this project's" in out, out
+        beta = next(l for l in lines if l.strip().startswith("beta"))
+        assert "published ?" in beta and "could not ask the marketplace" in beta, beta   # said, not an error
+        delta = next(l for l in lines if l.strip().startswith("delta"))
+        assert delta.endswith("— up to date"), delta
+        assert "also installed as delta@old, and that record applies to this project" in out and "`claude plugin uninstall delta@old --scope project`" in out, out
+        assert lines[-1] == "1 plugin(s) with a step owed · 3 marketplace(s) asked · 1 could not be asked", lines[-1]
+        # read-only: the copy the host installs from did not move, and nothing was written to the project
+        assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone1, capture_output=True, text=True).stdout == head
+        assert hunsu.load_json(os.path.join(clone1, ".claude-plugin", "plugin.json"))["version"] == "1.2.0"
+        assert sorted(os.listdir(h.target)) == sorted([".gitignore", hunsu.MANIFEST, hunsu.LOCK]), os.listdir(h.target)
+        # check stays offline and points at it; --remote runs both
+        code, out = run("check", "--target", h.target)
+        assert "`hunsu outdated` asks the marketplaces" in out and out.strip().splitlines()[-1].startswith("errors "), out
+        code, out = run("check", "--remote", "--target", h.target)
+        assert "alpha 1.3.0 is published" in out and out.strip().splitlines()[-1].startswith("errors "), out
+        # after `claude plugin update` (faked: the host's record moves) the skew is check's, with the rest of the steps
+        h.add_plugin("m1", "alpha", "1.3.0", ["build"]); h.markets["m1"]["installLocation"] = clone1; h.flush()   # (add_plugin renews the record)
+        err = next(e for e in hunsu.check(h.target)[0] if e.startswith("plugin alpha"))
+        assert err.startswith("plugin alpha: manifest 1.2.0, host 1.3.0 — to take 1.3.0: 1. restart the session if it started before alpha 1.3.0") and "2. `hunsu add alpha`" in err, err
+        code, out = run("outdated", "--target", h.target)
+        alpha = next(l for l in out.splitlines() if l.strip().startswith("alpha"))
+        assert "installed 1.3.0" in alpha and "alpha 1.3.0 is published" in alpha and "plugin update" not in out.split(alpha)[1].split("\n  beta")[0], out
+        # the manifest ahead of this machine (a lock pulled from someone who took the release): install steps, no add
+        h.add_plugin("m4", "delta", "0.4.0", ["retro"]); h.markets["m4"]["installLocation"] = clone4; h.flush()
+        err = next(e for e in hunsu.check(h.target)[0] if e.startswith("plugin delta"))
+        assert "to install 0.5.0: 1. `claude plugin update delta@m4 --scope project`" in err and "hunsu add" not in err and "3." not in err, err
+
+
+def test_a_session_whose_install_is_not_the_lock_is_told_the_whole_way_not_only_to_restart():
+    """The stale-session line said "restart" whatever was installed. A restart loads what is installed; when that is not the
+    lock's either, the line says the steps: an update installed and not taken (restart, add, lock), or a lock ahead of the
+    install (update the marketplace and the plugin, then restart)."""
+    with Host() as h:
+        h.add_plugin("m1", "hunsu", "1.1.0", [])
+        h.flush()
+        old = plugin(os.path.join(h.home, "session-copy"), "m1", "hunsu", "1.0.0", [])
+        hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), {"plugins": {"hunsu": {"version": "1.0.0", "marketplace": "m1"}}})
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": "1.0.0", "marketplace": "m1"}}})
+        line = hunsu.stale_session_line(h.target, h.installed["hunsu@m1"][0]["installPath"])   # runs 1.1.0 = installed, lock 1.0.0
+        assert line.startswith("hunsu: this session runs hunsu 1.1.0 while hunsu.lock.json pins 1.0.0 and hunsu 1.1.0 is installed for this project — "
+                               "1. restart the session if it started before hunsu 1.1.0"), line
+        assert "2. `hunsu add hunsu`" in line and "`hunsu lock`" in line and "plugin update" not in line, line
+        line = hunsu.stale_session_line(h.target, old)   # runs 1.0.0, installed 1.1.0, lock 1.0.0: restart first, then take it
+        assert "1. restart the session (a /clear" in line and "`hunsu add hunsu`" in line, line
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": "1.2.0", "marketplace": "m1"}}})
+        hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), {"plugins": {"hunsu": {"version": "1.2.0", "marketplace": "m1"}}})
+        line = hunsu.stale_session_line(h.target, old)   # the lock is ahead of the install: a restart alone would load 1.1.0
+        assert "1. `claude plugin marketplace update m1`" in line and "2. `claude plugin update hunsu@m1 --scope project`" in line and "3. restart the session" in line, line
+        assert "hunsu add" not in line and "hunsu lock" not in line, line
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):

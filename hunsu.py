@@ -15,6 +15,7 @@
   unlink  <plugin>
   lock    [--target DIR]            write hunsu.lock.json from the resolved environment — only when check has no errors
   compose [--target DIR]            the whole flow, stopping at each human decision (exit 2, last line = the question). Re-run after answering
+  outdated [--target DIR]           read-only, over the network: what each locked plugin's marketplace publishes now vs the lock and the install, with the update steps
   install [--target DIR] [--refresh P..] make this machine match hunsu.json: marketplace add + plugin install (project scope), then check; --refresh reinstalls linked plugins
   remove  <plugin>                  drop a plugin from the manifest (and its link); resolutions that name it are reported
   judge   request|consume           conflict judgment by a host-run judge: request packs (stage 1: cluster by situation, stage 2: per group), consume validates and writes hunsu-judgments.json + hunsu-conflicts.md
@@ -480,6 +481,45 @@ def marketplace_version(market, name):
     return v
 
 
+def install_scope(target, name, market):
+    """The scope this project's install of `name@market` was made at (the host's record) — `project` when there is none:
+    `hunsu install` installs at project scope."""
+    if HOST == "codex":
+        return None
+    entries = load_json(os.path.join(CLAUDE, "plugins", "installed_plugins.json")).get("plugins", {}).get("%s@%s" % (name, market)) or []
+    return install_entry(entries, target).get("scope") or "project"
+
+
+def update_steps(name, market, goal, installed=None, pinned=None, locked=None, copy=None, scope="project"):
+    """The steps, in order, that bring this project to `goal` of `name` — written out so nobody greps old transcripts for them
+    (guin-site, 10-13: twice). `installed` is what this host has installed for the project, `pinned` hunsu.json's version,
+    `locked` the lock's, `copy` the version this machine's copy of the marketplace has (None when unknown). Each step only
+    when it is owed: an install already at `goal` needs no update, a manifest already at it no `add`. The session restarts
+    whenever the plugins it runs may differ from what is installed: a host loads plugins once, at start."""
+    steps = []
+    if installed != goal:
+        if HOST == "codex":
+            steps.append("`codex plugin marketplace upgrade %s` — this machine's snapshot of the marketplace" % market)
+            steps.append("`codex plugin remove %s@%s` then `codex plugin add %s@%s` — Codex keeps a plugin's snapshot until it is added again" % (name, market, name, market))
+        else:
+            if copy != goal:
+                steps.append("`claude plugin marketplace update %s` — this machine's copy of the marketplace" % market)
+            steps.append("`claude plugin update %s@%s --scope %s`, run in this project — it installs what the marketplace has now" % (name, market, scope or "project"))
+        steps.append("restart the session — a session keeps the plugins it started with, and a /clear does not reload them")
+    elif pinned != goal or locked != goal:
+        steps.append("restart the session if it started before %s %s was installed — a /clear does not reload plugins" % (name, goal))
+    if pinned != goal:
+        steps.append("`hunsu add %s` — hunsu.json takes %s" % (name, goal))
+        steps.append("`hunsu check` — situations whose members' text changed are stale: `hunsu judge request --out DIR --stale`, judge those packets, `hunsu judge consume --dir DIR`")
+    if pinned != goal or locked != goal:
+        steps.append("`hunsu lock`, and commit hunsu.json, hunsu.lock.json (and hunsu-judgments.json when it changed) inside a run, like any change to the environment")
+    return steps
+
+
+def steps_text(steps):
+    return " ".join("%d. %s;" % (i, st) for i, st in enumerate(steps, 1)).rstrip(";")
+
+
 def check_behind(target, manifest, s, found):
     """0. A pinned plugin older than what is available here. `check` compared the manifest with this machine only, so a
     project pinned a release behind stayed green (guin-site, 2026-09-30: mangsang 1.12.2 and hunsu 1.6.2 pinned, 1.13.0 and
@@ -500,8 +540,15 @@ def check_behind(target, manifest, s, found):
         lv = source_version(src) if src else None
         if _semver(lv) and _semver(lv) > pinned:
             offers.append("the linked source %s is at %s" % (src.replace(os.path.expanduser("~"), "~"), lv))
-        if offers:
-            info.append("plugin %s %s pinned %s; %s — `hunsu add %s`, then lock, to take it" % (name, BEHIND, want["version"], "; ".join(offers), name))
+        if offers and name in linked:
+            info.append("plugin %s %s pinned %s; %s — `hunsu install --refresh %s`, restart the session, `hunsu add %s`, then lock, to take it"
+                        % (name, BEHIND, want["version"], "; ".join(offers), name, name))
+        elif offers:
+            market = want.get("marketplace")
+            have = installed_version(target, name, market)
+            locked = ((load_json(os.path.join(target, LOCK)).get("plugins") or {}).get(name) or {}).get("version")
+            steps = update_steps(name, market, mv, installed=have, pinned=want["version"], locked=locked, copy=mv, scope=install_scope(target, name, market))
+            info.append("plugin %s %s pinned %s; %s — to take it: %s" % (name, BEHIND, want["version"], "; ".join(offers), steps_text(steps)))
 
 
 def check_plugins(target, manifest, s, found):
@@ -522,7 +569,18 @@ def check_plugins(target, manifest, s, found):
                         % (name, dev[name], have["version"], want["version"], want.get("marketplace"), name))
             continue
         if have["version"] != want["version"] and name not in linked:
-            errors.append("plugin %s: manifest %s, host %s" % (name, want["version"], have["version"]))
+            market = want.get("marketplace")
+            locked = ((load_json(os.path.join(target, LOCK)).get("plugins") or {}).get(name) or {}).get("version")
+            newer = _semver(have["version"]) and _semver(want["version"]) and _semver(have["version"]) > _semver(want["version"])
+            if newer:   # updated here, not yet taken: the project decides to take it
+                steps = update_steps(name, market, have["version"], installed=have["version"], pinned=want["version"], locked=locked)
+                how = "to take %s: %s" % (have["version"], steps_text(steps))
+            else:       # the manifest is ahead of this machine (pulled from someone who took a release)
+                steps = update_steps(name, market, want["version"], installed=have["version"], pinned=want["version"], locked=locked,
+                                     copy=marketplace_version(load_json(os.path.join(CLAUDE, "plugins", "known_marketplaces.json")).get(market), name) if HOST != "codex" else None,
+                                     scope=install_scope(target, name, market))
+                how = "to install %s: %s (the host installs what the marketplace has now; `hunsu check` again after)" % (want["version"], steps_text(steps))
+            errors.append("plugin %s: manifest %s, host %s — %s" % (name, want["version"], have["version"], how))
         elif have["version"] != want["version"]:
             info.append("plugin %s: linked to %s at %s (manifest %s)" % (name, linked[name], have["version"], want["version"]))
         elif name in linked:
@@ -760,6 +818,10 @@ def cmd_check(args):
     for label, items in (("error", errors), ("warn", warnings), ("info", info)):
         for line in items:
             print("  %-5s %s" % (label, line))
+    if getattr(args, "remote", False):
+        cmd_outdated(args)
+    else:   # asked "is anything newer published?", a session ran check and then `git fetch` in each marketplace by hand (guin-site, 10-14)
+        print("  (offline: a release is known here only from this machine's marketplace copies — `hunsu outdated` asks the marketplaces, read-only)")
     print("errors %d · warnings %d · info %d" % (len(errors), len(warnings), len(info)))
     return 1 if errors else 0
 
@@ -899,7 +961,7 @@ def mode_text(h, s):
     if h["source"].startswith("plugin:"):
         p = next((x for x in s["plugins"].values() if x["name"] == h["source"][7:]), None)
         root = (p or {}).get("path", "")
-    key = (h["source"], h["command"], root)
+    key = (h["source"], h["command"], root, mode_script_fingerprint(h, s))   # an edited script under one root says something else
     if key in _MODE_TEXT:
         return _MODE_TEXT[key]
     cmd = h["command"].replace("${CLAUDE_PLUGIN_ROOT}", root).replace("${PLUGIN_ROOT}", root)
@@ -1023,6 +1085,35 @@ def member_texts(s, manifest=None, scripts=True):
     return {k: "\n".join(sorted(v)) if isinstance(v, list) else v for k, v in texts.items()}
 
 
+def _hash12(text):
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def member_fingerprints(s, members, manifest=None):
+    """Each judged member's identity on its own (member_texts, hashed) — so a changed situation can say which member moved."""
+    texts = member_texts(s, manifest)
+    return {m: _hash12(texts.get(m, "<absent>")) for m in sorted(members)}
+
+
+def modes_read(mode_packets):
+    """What the judge read of each mode — the text its hook injected, hashed per source (a plugin with two SessionStart hooks
+    injects two). A mode's identity is its script (its injected text carries the project's state), but a script can change in
+    ways that leave its text alone (chongdae 1.20.0 changed how its line counts open tasks; the line read the same): then
+    what was judged did not change."""
+    by = {}
+    for m in mode_packets:
+        by.setdefault(m.get("source"), []).append(str(m.get("text", "")))
+    return {src: _hash12("\n".join(sorted(texts))) for src, texts in by.items()}
+
+
+def mode_read_now(s, source):
+    """The same hash for the text `source`'s hooks inject now — the hooks are run (mode_text), so only asked of a mode whose
+    script moved since it was judged. An instruction file is its own text: nothing to run, its identity says it all."""
+    hooks = [h for h in s["hooks"] if h["event"] == "SessionStart" and h["source"] == source]
+    return _hash12("\n".join(sorted(mode_text(h, s) for h in hooks))) if hooks else None
+
+
 def members_text_fingerprint(s, members, manifest=None, scripts=True):
     """Identity of one situation's judged members by content — see member_texts. A member no longer present hashes as absent.
     `scripts=False` is the identity judgments made before 1.2 carry (a mode by its command alone); judgments_status accepts
@@ -1053,6 +1144,16 @@ def judgments_status(manifest, s, target):
             if "members-text-fingerprint" in r and set(r.get("modes", [])) != now_modes:
                 return True
             members = r.get("members", []) + r.get("modes", [])
+            if "member-fingerprints" in r:
+                # per member: one whose identity moved is a change only when what the judge read of it moved — for a skill, a
+                # role or an instruction file that is its identity; for a mode, the text its hook injects (asked only now).
+                # guin-site, 10-13: chongdae's hook script changed, its line did not, and all nine situations were re-judged
+                now = member_fingerprints(s, members, manifest)
+                read = r.get("modes-read") or {}
+                moved = [m for m in members if now.get(m) != r["member-fingerprints"].get(m)]
+                if os.environ.get("HUNSU_SURVEY"):   # inside a probe a moved mode is not asked (its hook cannot run here): only the rest count
+                    moved = [m for m in moved if m not in read]
+                return any(not (m in read and mode_read_now(s, m) == read[m]) for m in moved)
             if "members-text-fingerprint" in r:
                 return r["members-text-fingerprint"] not in (members_text_fingerprint(s, members, manifest), members_text_fingerprint(s, members, manifest, scripts=False))
             return r.get("members-fingerprint", "?") != members_fingerprint(manifest, members)
@@ -1263,10 +1364,35 @@ def judge_consume(args, target, manifest, j):
         results.append({"situation": req.get("situation", name), "members": members, "modes": mode_ids,
                         "members-fingerprint": members_fingerprint(manifest, members + mode_ids),
                         "members-text-fingerprint": members_text_fingerprint(s, members + mode_ids, manifest),
+                        "member-fingerprints": member_fingerprints(s, members + mode_ids, manifest),
+                        "modes-read": modes_read(req.get("modes", [])),
                         # who judged: the worker's own account (host + model, machine-readable) when the response
                         # carries one; --by is the runner's claim, kept only as the fallback — "default model" tells
                         # a later reader nothing, "claude-code claude-opus-5[1m]" does
                         "judged-by": account, "findings": findings})
+    # A re-judge that finds what was found before (the same kind, members and quotes, the same class) keeps the old finding as
+    # it was — its `why`, its proposal, its class sentence: a judge words a reason anew each call, and a record that changes with
+    # every rewording is a diff nobody can read (guin-site f304f91: 9 situations re-judged, 66 changed lines, no verdict changed).
+    # When every finding is the old one, the situation keeps its judged-by too; only what it was judged about is recorded anew.
+    old_by = {r["situation"]: r for r in existing.get("situations", [])}
+    kept = []
+    for r in results:
+        old = old_by.get(r["situation"])
+        if not old:
+            continue
+        pool = list(old.get("findings", []))
+        same = 0
+        for i, f in enumerate(r["findings"]):
+            match = next((o for o in pool if finding_signature(o) == finding_signature(f) and finding_class(o) == finding_class(f)
+                          and [(q.get("member"), quote_norm(q.get("quote", ""))) for q in [o.get("class_quote") or {}]]
+                          == [(q.get("member"), quote_norm(q.get("quote", ""))) for q in [f.get("class_quote") or {}]]), None)
+            if match is not None:
+                pool.remove(match)
+                r["findings"][i] = match
+                same += 1
+        if same == len(r["findings"]) and not pool:
+            r["judged-by"] = old.get("judged-by", r["judged-by"])
+            kept.append(r["situation"])
     import hashlib
     for r in results:
         r["findings-fingerprint"] = hashlib.sha256(json.dumps([(f["kind"], f["members"], f["quotes"]) for f in r["findings"]], sort_keys=True).encode("utf-8")).hexdigest()[:12]
@@ -1299,7 +1425,7 @@ def judge_consume(args, target, manifest, j):
     if not cluster.get("groups"):   # a stale round: these situations replace their old selves; the rest stand
         redone = {r["situation"] for r in results}
         results = [r for r in existing.get("situations", []) if r["situation"] not in redone] + results
-        rejected = existing.get("rejected", []) + rejected
+        rejected = existing.get("rejected", []) + [x for x in rejected if x not in existing.get("rejected", [])]
     doc = {"artifact-type": "hunsu/judgments@1", "skills-fingerprint": skills_fingerprint(manifest, s), "skills": judged_ids(manifest, s),
            "judged-by": args.by or judged_by(results), "situations": results, "rejected": rejected}
     save_json(os.path.join(target, JUDGMENTS), doc)
@@ -1308,6 +1434,8 @@ def judge_consume(args, target, manifest, j):
     n_settled = sum(finding_class(f) in SETTLED for r in results for f in r["findings"])
     print("judgments: %d situations · %d findings (%d settled by the members' text, %d for a person) · %d rejected (no quote / quote not in the text / unknown member / bad kind) -> %s, %s"
           % (len(results), n_find, n_settled, n_find - n_settled, len(rejected), JUDGMENTS, CONFLICTS_DOC))
+    if kept:
+        print("re-judged with the same findings — kept as they were (only what they were judged about is recorded anew): %s" % "; ".join(kept))
     if unread:
         print("findings changed under %d existing resolution(s) — marked reviewed: false until a human re-reads: %s" % (len(unread), "; ".join(unread)))
     if delegated:
@@ -1458,6 +1586,186 @@ def cmd_install(args):
     print("installed %d · blocked %d · already present %d — now `hunsu check` (restart the host for new plugins to load)"
           % (ok, len(blocked), matching))
     return 1 if blocked else 0
+
+
+OUTDATED_HELP = ("read-only, over the network: what each locked plugin's marketplace publishes now, against the lock and what is installed "
+                 "here, with the steps to take a newer one. Nothing installed, cached or committed changes (a shallow clone into a temp dir)")
+REMOTE_TIMEOUT = 60   # seconds per marketplace; a network that does not answer is said, never waited on for long
+
+
+def _git(argv, cwd=None):
+    """(ok, stdout or the reason) — git never prompts (a private marketplace without credentials fails, it does not hang)."""
+    import subprocess
+    try:
+        done = subprocess.run(["git"] + argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=REMOTE_TIMEOUT,
+                              env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="", SSH_ASKPASS=""))
+    except (OSError, subprocess.SubprocessError) as err:
+        return False, "%s" % (type(err).__name__ if not isinstance(err, OSError) else err)
+    if done.returncode:
+        return False, ((done.stderr or done.stdout).strip().splitlines() or ["git exited %d" % done.returncode])[-1]
+    return True, done.stdout
+
+
+def marketplace_records():
+    """{marketplace: {"source": {...}, "installLocation": path}} — Claude Code's own file; on Codex, config.toml's marketplaces
+    in the same shape (a git source as a url, a local one as a path)."""
+    if HOST != "codex":
+        return load_json(os.path.join(CLAUDE, "plugins", "known_marketplaces.json"))
+    path = os.path.join(CODEX, "config.toml")
+    try:
+        import tomllib
+        conf = tomllib.loads(io.open(path, encoding="utf-8").read()) if os.path.exists(path) else {}
+    except (ModuleNotFoundError, ValueError):
+        return {}
+    out = {}
+    for name, m in (conf.get("marketplaces") or {}).items():
+        src = str((m or {}).get("source", ""))
+        out[name] = {"source": {"source": "directory", "path": src} if m.get("source_type") == "local" else {"source": "git", "url": src}}
+    return out
+
+
+def published_url(market):
+    """Where a marketplace is published: its local copy's `origin` (the host keeps a git marketplace as a clone), else its
+    github repo or url. None for a directory marketplace: what is there is what is published."""
+    market = market or {}
+    src = market.get("source") or {}
+    if src.get("source") in ("directory", "local"):
+        return None
+    loc = market.get("installLocation")
+    if loc and os.path.isdir(os.path.join(loc, ".git")):
+        ok, out = _git(["-C", loc, "remote", "get-url", "origin"])
+        if ok and out.strip():
+            return out.strip()
+    if src.get("repo"):
+        return "https://github.com/%s.git" % src["repo"]
+    return src.get("url") or None
+
+
+def published_versions(url, names):
+    """({name: version or None}, None) for what the marketplace at `url` publishes now, or ({}, reason) when it cannot be asked.
+    Read-only by construction: a shallow, blob-less clone into a temp dir, read and deleted — the marketplace's copy on this
+    machine (what the host installs from), the plugin cache and the install records are not touched; `claude plugin
+    marketplace update` stays the step that moves them. The plugin's own plugin.json at the published head wins over the
+    listing's `version`, as for the local copy."""
+    import posixpath, tempfile
+    tmp = tempfile.mkdtemp(prefix="hunsu-outdated-")
+    try:
+        ok, why = _git(["clone", "--quiet", "--depth", "1", "--no-checkout", "--filter=blob:none", url, os.path.join(tmp, "m")])
+        if not ok:
+            return {}, why
+        repo = os.path.join(tmp, "m")
+        def show(path):
+            ok, out = _git(["-C", repo, "show", "HEAD:" + path])
+            try:
+                return json.loads(out) if ok else {}
+            except ValueError:
+                return {}
+        listing = show(".claude-plugin/marketplace.json") or show(".agents/plugins/marketplace.json")
+        out = {}
+        for name in names:
+            entry = next((e for e in listing.get("plugins", []) if e.get("name") == name), None)
+            if entry is None:
+                out[name] = None
+                continue
+            v = None
+            if isinstance(entry.get("source"), str):
+                base = posixpath.normpath(entry["source"])
+                base = "" if base == "." else base
+                for m in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "plugin.json"):
+                    v = show(posixpath.join(base, m) if base else m).get("version")
+                    if v:
+                        break
+            out[name] = v or entry.get("version")
+        return out, None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def install_records_elsewhere(target, name, market):
+    """The host's install records for `name` under another marketplace than the lock's: [(key, here, n other projects)] —
+    `here` when one applies to this project (its own project-scope record, or a user-scope one), which is a second copy that
+    can load here; else they are other projects' (an old local marketplace's), and say nothing about this one."""
+    if HOST == "codex":
+        return []
+    installed = load_json(os.path.join(CLAUDE, "plugins", "installed_plugins.json")).get("plugins", {})
+    want = os.path.realpath(target)
+    out = []
+    for key, entries in sorted(installed.items()):
+        n, _, m = key.partition("@")
+        if n != name or m == market or not entries:
+            continue
+        here = any(e.get("scope") == "user" or (e.get("projectPath") and os.path.realpath(e["projectPath"]) == want) for e in entries)
+        out.append((key, here, sum(1 for e in entries if e.get("projectPath") and os.path.realpath(e["projectPath"]) != want)))
+    return out
+
+
+def cmd_outdated(args):
+    """Per locked plugin: locked, installed for this project, this machine's marketplace copy, published now — and, when they
+    differ, the steps in order. `check` is offline by design; this is the one command that asks the network, and it changes
+    nothing. A marketplace that cannot be reached is said, and the rest are still asked: exit 0 whatever the network did."""
+    target = args.target
+    manifest = load_json(os.path.join(target, MANIFEST))
+    lock = load_json(os.path.join(target, LOCK))
+    plugins = lock.get("plugins") or manifest.get("plugins") or {}
+    if not plugins:
+        raise SystemExit("no %s or %s with plugins — nothing to compare" % (LOCK, MANIFEST))
+    markets = marketplace_records()
+    by_market = {}
+    for name, p in sorted(plugins.items()):
+        by_market.setdefault(p.get("marketplace"), []).append(name)
+    asked = {}
+    for market, names in sorted(by_market.items(), key=lambda kv: str(kv[0])):
+        rec = markets.get(market)
+        url = published_url(rec)
+        if rec is None:
+            asked[market] = ({}, "marketplace %s is not known on this machine — `hunsu install` adds it" % market)
+        elif url is None:   # a directory marketplace: its tree is the release
+            loc = (rec.get("source") or {}).get("path") or rec.get("installLocation") or ""
+            asked[market] = ({n: source_version(linked_source(loc, n)) if linked_source(loc, n) else None for n in names}, None)
+        else:
+            asked[market] = published_versions(url, names)
+    print("hunsu outdated — what each locked plugin's marketplace publishes now (asked over the network, read-only: nothing installed or cached here changes)")
+    owed = 0
+    for name, p in sorted(plugins.items()):
+        market = p.get("marketplace")
+        locked = ((lock.get("plugins") or {}).get(name) or {}).get("version")
+        pinned = ((manifest.get("plugins") or {}).get(name) or {}).get("version")
+        have = installed_version(target, name, market)
+        copy = marketplace_version(markets.get(market), name) if HOST != "codex" else None
+        got, why = asked.get(market, ({}, "not asked"))
+        pub = got.get(name)
+        parts = ["locked %s" % (locked or "-"), "installed %s" % (have or "-")]
+        if copy:
+            parts.append("marketplace copy here %s" % copy)
+        parts.append("published %s" % (pub or "?"))
+        if why:
+            state = "could not ask the marketplace (%s) — nothing is said about what it publishes" % why
+        elif pub is None:
+            state = "the marketplace %s publishes no plugin %s now" % (market, name)
+        else:
+            state = "up to date"
+        goal = None
+        if not why and pub and _semver(pub) and (_semver(locked or pinned or "") is None or _semver(pub) > _semver(locked or pinned)):
+            goal, state = pub, "%s %s is published" % (name, pub)
+        elif have and (locked or pinned) and have != (locked or pinned):
+            newer = _semver(have) and _semver(locked or pinned) and _semver(have) > _semver(locked or pinned)
+            goal = have if newer else (locked or pinned)
+            state = ("%s is installed here and not yet locked" if newer else "installed %s is behind the lock") % have
+        print("  %-10s %s — %s" % (name, " · ".join(parts), state))
+        if goal:
+            owed += 1
+            for i, st in enumerate(update_steps(name, market, goal, installed=have, pinned=pinned, locked=locked, copy=copy,
+                                                scope=install_scope(target, name, market)), 1):
+                print("      %d. %s" % (i, st))
+        for key, here, others in install_records_elsewhere(target, name, market):
+            if here:
+                print("      also installed as %s, and that record applies to this project — two copies of %s can load here: `claude plugin uninstall %s --scope project` (run in this project) keeps the lock's (%s@%s)"
+                      % (key, name, key, name, market))
+            else:
+                print("      also recorded as %s in installed_plugins.json, for %d other project(s) — not this project's: what loads here is %s@%s" % (key, others, name, market))
+    print("%d plugin(s) with a step owed · %d marketplace(s) asked · %d could not be asked"
+          % (owed, len(asked), sum(1 for _, why in asked.values() if why)))
+    return 0
 
 
 def policy_line(key, res):
@@ -1961,9 +2269,20 @@ def stale_session_line(target, root):
         return None
     locked = ((load_json(os.path.join(target, LOCK)).get("plugins") or {}).get("hunsu") or {})
     tail = " — the plugins updated since this session started are not loaded: restart the session (a /clear does not reload plugins)"
+    have = installed_version(target, "hunsu", locked.get("marketplace"))
+    if locked.get("version") and have and have != locked["version"]:
+        # a restart alone loads what is installed, and that is not the lock's either: say the whole way, in order
+        newer = _semver(have) and _semver(locked["version"]) and _semver(have) > _semver(locked["version"])
+        goal = have if newer else locked["version"]
+        pinned = (load_json(os.path.join(target, MANIFEST)).get("plugins") or {}).get("hunsu", {}).get("version")
+        steps = update_steps("hunsu", locked.get("marketplace"), goal, installed=have, pinned=pinned, locked=locked["version"],
+                             scope=install_scope(target, "hunsu", locked.get("marketplace")))
+        if goal == have and running != have:
+            steps.insert(0, "restart the session (a /clear does not reload plugins)")
+        return ("hunsu: this session runs hunsu %s while hunsu.lock.json pins %s and hunsu %s is installed for this project — %s"
+                % (running, locked["version"], have, steps_text(steps)))
     if locked.get("version") and locked["version"] != running:
         return "hunsu: this session runs hunsu %s while hunsu.lock.json pins %s" % (running, locked["version"]) + tail
-    have = installed_version(target, "hunsu", locked.get("marketplace"))
     if have and have != running:
         return "hunsu: this session runs hunsu %s while hunsu %s is installed for this project" % (running, have) + tail
     return None
@@ -2458,10 +2777,12 @@ def cmd_compose(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="hunsu", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("survey", "init", "add", "remove", "check", "policy", "link", "unlink", "dev", "lock", "compose", "install", "judge"):
-        p = sub.add_parser(name, **({"help": POLICY_HELP, "description": POLICY_HELP} if name == "policy" else {}))
+    for name in ("survey", "init", "add", "remove", "check", "policy", "link", "unlink", "dev", "lock", "compose", "install", "judge", "outdated"):
+        p = sub.add_parser(name, **({"help": POLICY_HELP, "description": POLICY_HELP} if name == "policy" else
+                                    {"help": OUTDATED_HELP, "description": OUTDATED_HELP} if name == "outdated" else {}))
         if name == "check":
             p.add_argument("--findings", action="store_true", help="print drift and unread resolutions as dwitbuk/findings@1 JSON")
+            p.add_argument("--remote", action="store_true", help="then `outdated`: ask each locked plugin's marketplace what it publishes now (network, read-only)")
         p.add_argument("--target", default=".")
         if name == "survey":
             p.add_argument("--json", action="store_true")
@@ -2507,7 +2828,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     return {"role": cmd_role, "capability": cmd_capability, "survey": cmd_survey, "init": cmd_init, "add": cmd_add, "check": cmd_check,
             "link": cmd_link, "unlink": cmd_unlink, "dev": cmd_dev, "lock": cmd_lock, "compose": cmd_compose,
-            "install": cmd_install, "judge": cmd_judge, "remove": cmd_remove, "policy": cmd_policy}[args.cmd](args)
+            "install": cmd_install, "judge": cmd_judge, "remove": cmd_remove, "policy": cmd_policy, "outdated": cmd_outdated}[args.cmd](args)
 
 
 if __name__ == "__main__":
