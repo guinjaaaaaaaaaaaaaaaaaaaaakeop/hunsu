@@ -11,6 +11,9 @@ Reads the hook payload (stdin JSON with `cwd`) and puts into the session's first
 Fires after a compaction too: the summary keeps none of this (guin-site 10-08 → 10-11: four compactions, and the summary
 carried an old engine's path forward instead).
 Never blocks. Never writes to the project.
+Under hunsu's own probe (HUNSU_SURVEY=1, a judge round reading what each mode says): the standing text — what this hook says
+in every project, with no check's counts and no resolutions (those are the judge's own answers; a judge that read them would
+judge its resolutions, and a count is one session's: "errors 1 · warnings 0" was quoted into guin-site's judgments).
 Inside a worker session (AGENT_WORKER=1 — a judge, a builder, the eyes, a newcomer are host sessions too, and the host runs
 the project's hooks in them): silent, and no check is run. The environment and its policy are the hiring session's.
 """
@@ -27,6 +30,13 @@ sys.path.insert(0, os.path.dirname(HERE))
 import hunsu  # noqa: E402
 
 
+STANDING = ("hunsu: at session start, `check` compares this machine's agent environment with hunsu.json and says whether it "
+            "matches (`%(engine)s check` lists the differences); a project with no hunsu.json is offered the hunsu:compose skill, which "
+            "declares which plugins, hooks and engines it uses. With a lock, the lock's plugin roots follow (an engine is called from "
+            "there), then the project's resolutions between its skills, one line per situation (`%(engine)s policy` prints them again, "
+            "with who settled each): follow them when the situation applies.")
+
+
 def main():
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -35,6 +45,10 @@ def main():
     if os.environ.get("AGENT_WORKER"):
         return 0
     cwd = payload.get("cwd") or os.getcwd()
+    engine = "%s \"%s\"" % (PY, ENGINE.replace(os.sep, "/"))
+    if os.environ.get("HUNSU_SURVEY"):
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": STANDING % {"engine": engine}}}))
+        return 0
     if not os.path.exists(os.path.join(cwd, "hunsu.json")):
         msg = ("hunsu: this project has no hunsu.json — its agent environment is not locked. "
                "Use the hunsu:compose skill to declare which plugins, hooks and engines this project uses (the engine is `%s \"%s\"`)." % (PY, ENGINE.replace(os.sep, "/")))

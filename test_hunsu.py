@@ -1553,6 +1553,188 @@ def test_a_session_whose_install_is_not_the_lock_is_told_the_whole_way_not_only_
         assert "1. `claude plugin marketplace update m1`" in line and "2. `claude plugin update hunsu@m1 --scope project`" in line and "3. restart the session" in line, line
         assert "hunsu add" not in line and "hunsu lock" not in line, line
 
+
+def state_mode(root, live, standing, marker):
+    """A SessionStart hook that reports the project's state, the way chongdae's, dwitbuk's and hunsu's own do: `live` when the
+    project (the payload's cwd) holds `marker`, else `standing` (empty: the hook says nothing)."""
+    write(os.path.join(root, "mode.py"),
+          "import json,os,sys\ncwd=json.load(sys.stdin).get('cwd') or os.getcwd()\n"
+          "msg=%r if os.path.exists(os.path.join(cwd,%r)) else %r\n"
+          "print(json.dumps({'hookSpecificOutput':{'hookEventName':'SessionStart','additionalContext':msg}}) if msg else '')\n" % (live, marker, standing))
+
+
+# guin-site 10239ce, hunsu-judgments.json and hunsu.json, as recorded (read-only): what a judge quoted of three modes read in
+# the live project, and a delegated reason that names the run that was open when it was judged
+GUIN_CHONGDAE_LIVE = ("chongdae: run run-20261002-050435-e75b in progress (session: 'Q-cache') — 1 task(s) open: cache-build. "
+                      "Writes go through this run; `python3 \"<plugin:chongdae>/chongdae.py\" run` advances it.")
+GUIN_CHONGDAE_IDLE = ("chongdae: no run in progress — the run is the agent's container, so Edit/Write are refused until one starts: "
+                      "`python3 \"<plugin:chongdae>/chongdae.py\" init --session --goal \"...\"` (tasks added as you go) or `... init --plan FILE`.")
+GUIN_HUNSU_LIVE = "hunsu: environment differs from hunsu.json (errors 1 · warnings 0 · info 0). `python3 \"<plugin:hunsu>/hunsu.py\" check` for the list."
+GUIN_HUNSU_STANDING = "hunsu: at session start, `check` compares this machine's agent environment with hunsu.json and says whether it matches."
+GUIN_DWITBUK_LIVE = ("dwitbuk: 12 undisposed objection(s) in review-20261015 (cq-failed 2, non-claim 10) — `follow` lists them; "
+                     "`dispose <review>/<n> --as accepted|dismissed --why ... --by NAME` answers one.")
+GUIN_FINDINGS = [
+    {"kind": "contradiction", "members": ["plugin:chongdae", "hacheong:build"],
+     "quotes": {"plugin:chongdae": "chongdae: no run in progress — the run is the agent's container, so Edit/Write are refused until one starts:",
+                "hacheong:build": "does build"},
+     "why": "In its no-run branch the mode tells the session to start a run, which writes `.chongdae/`.",
+     "proposed": {"accept": "The build worker is hired by chongdae inside an open run."}, "class": "authority"},
+    {"kind": "contradiction", "members": ["plugin:hunsu", "hacheong:build"],
+     "quotes": {"plugin:hunsu": "hunsu: environment differs from hunsu.json (errors 1 · warnings 0 · info 0).", "hacheong:build": "does build"},
+     "why": "the mode reports drift; the worker does not fix it", "proposed": {}, "class": "authority"},
+    {"kind": "contradiction", "members": ["plugin:dwitbuk", "hacheong:build"],
+     "quotes": {"plugin:dwitbuk": "`dispose <review>/<n> --as accepted|dismissed --why ... --by NAME` answers one.", "hacheong:build": "does build"},
+     "why": "the mode asks for a disposition; the worker decides nothing", "proposed": {}, "class": "authority"}]
+GUIN_DELEGATED = ("judge claude-code claude-opus-5-5: The finding is the same as before: compose's writes and commit against chongdae's rule "
+                  "that writes need a run. Only the chongdae mode's state has changed. The existing resolution's delegated reason names "
+                  "run-20261002-050435-e75b as the open run. That run is no longer in progress, so a new run is needed.")
+
+
+def guin_like(h):
+    """Three state-reporting modes (chongdae's, hunsu's, dwitbuk's lines as guin-site's sessions got them) and a builder; the
+    project holds a run in progress, a hunsu.json and a review — every mode's live branch is on."""
+    h.add_plugin("m1", "hacheong", "1.12.0", ["build"])
+    state_mode(h.add_plugin("m2", "chongdae", "1.21.0", [], hooks=MODE_HOOK), GUIN_CHONGDAE_LIVE, GUIN_CHONGDAE_IDLE, ".chongdae/running")
+    state_mode(h.add_plugin("m3", "hunsu", "1.13.0", [], hooks=MODE_HOOK), GUIN_HUNSU_LIVE, GUIN_HUNSU_STANDING, "hunsu.json")
+    state_mode(h.add_plugin("m4", "dwitbuk", "1.14.0", [], hooks=MODE_HOOK), GUIN_DWITBUK_LIVE, "", "reviews")
+    h.flush()
+    run("init", "--target", h.target)
+    for p in ("hacheong", "chongdae", "hunsu", "dwitbuk"):
+        run("add", p, "--target", h.target)
+    write(os.path.join(h.target, ".chongdae", "running"), "run-20261002-050435-e75b")
+    os.makedirs(os.path.join(h.target, "reviews"))
+    d = os.path.join(h.target, "judge")
+    run("judge", "request", "--target", h.target, "--out", d)
+    write(os.path.join(d, "cluster-response.json"), {"groups": [{"situation": "building a slice", "members": ["hacheong:build"]}]})
+    run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))
+    return d
+
+
+def test_the_judge_reads_a_mode_in_an_empty_project_so_a_run_opened_or_closed_stales_nothing():
+    """guin-site 10239ce: six of nine situations were re-judged "findings changed — still fits" only because chongdae's line went
+    from "run … in progress" to "no run in progress"; the quotes and the delegated reasons kept the run's id as a standing fact.
+    The judge now reads what a mode says in an empty project — the same whatever the project's state — and what it read is
+    fingerprinted on that text: a run opened or closed, a review written, a check gone red stale nothing."""
+    with Host() as h:
+        d = guin_like(h)
+        g = hunsu.load_json(os.path.join(d, "group-01-request.json"))
+        said = {m["source"]: m["text"] for m in g["modes"]}
+        # the run is open in the project; the judge reads none of it
+        assert said == {"plugin:chongdae": GUIN_CHONGDAE_IDLE, "plugin:hunsu": GUIN_HUNSU_STANDING, "plugin:dwitbuk": ""}, said
+        assert all("empty project" in m.get("note", "") for m in hunsu.judge_context(h.target, hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)))["mode_packets"])
+        assert "never a run's id, a time or a count" in g["instructions"], g["instructions"]
+        write(os.path.join(d, "group-01-response.json"), {"findings": [dict(GUIN_FINDINGS[0], quotes={
+            "plugin:chongdae": "the run is the agent's container, so Edit/Write are refused until one starts", "hacheong:build": "does build"})]})
+        code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "first")
+        assert code == 0 and "0 rejected" in out, out
+        r = hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))["situations"][0]
+        assert r["modes-read"]["plugin:chongdae"] == hunsu._hash12(GUIN_CHONGDAE_IDLE), r["modes-read"]   # the text read, not the live one
+        manifest(h.target, resolutions={"building a slice": {"accept": "the builder is hired inside a run", "reviewed": {"by": "owner"}}})
+        stale = lambda: [e for e in hunsu.check(h.target)[0] if "judged about other text" in e]
+        assert stale() == []
+        # every script moves (a release) while the run closes and the review is disposed: what each says in an empty project
+        # is what it said — nothing is stale; before 1.14 the moved chongdae was asked in the project and read a closed run
+        os.remove(os.path.join(h.target, ".chongdae", "running")); shutil.rmtree(os.path.join(h.target, "reviews"))
+        for p in ("chongdae", "hunsu", "dwitbuk"):
+            with io.open(os.path.join(h.installed["%s@m%d" % (p, {"chongdae": 2, "hunsu": 3, "dwitbuk": 4}[p])][0]["installPath"], "mode.py"), "a", encoding="utf-8") as fh:
+                fh.write("# counts open tasks another way\n")
+        hunsu._MODE_TEXT.clear()
+        assert stale() == [], "the scripts moved, the project's state moved; what the judge read did not"
+        write(os.path.join(h.target, ".chongdae", "running"), "run-20261019-101010-abcd")
+        hunsu._MODE_TEXT.clear()
+        assert stale() == [], "a new run opened"
+        # what a mode says in an empty project changed: that is a change of what the judge read
+        state_mode(h.installed["chongdae@m2"][0]["installPath"], GUIN_CHONGDAE_LIVE, GUIN_CHONGDAE_IDLE + " Ask before a run.", ".chongdae/running")
+        hunsu._MODE_TEXT.clear()
+        assert len(stale()) == 1, "the standing text moved"
+        # hunsu's own hook answers its standing text under the probe — no check's counts, no resolutions
+        payload = json.dumps({"cwd": h.target})
+        env = dict(os.environ, HUNSU_SURVEY="1"); env.pop("AGENT_WORKER", None)
+        out = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "session_start.py")], input=payload, capture_output=True, text=True, env=env).stdout
+        text = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        assert text.startswith("hunsu: at session start, `check` compares") and not hunsu.state_bound(text) and "errors" not in text, text
+
+
+def test_consume_refuses_a_mode_quote_that_names_one_state_and_a_verdict_that_does():
+    """A mode whose text names a run, a time or a count even in an empty project (a hook reading a machine-wide record): a quote of
+    that sentence would carry one session's fact into the committed record. consume drops the finding with what to quote instead;
+    a class sentence of the same kind is refused (authority); a still-fits whose reason names a run records no delegation."""
+    with Host() as h:
+        h.add_plugin("m1", "hacheong", "1.12.0", ["build"])
+        mode_script(h.add_plugin("m2", "chongdae", "1.21.0", [], hooks=MODE_HOOK),
+                    "Writes go through a run. Last run run-20261002-050435-e75b at 2026-10-15T06:04Z: 1 task(s) open.")
+        h.flush()
+        run("init", "--target", h.target); run("add", "hacheong", "--target", h.target); run("add", "chongdae", "--target", h.target)
+        d = os.path.join(h.target, "judge")
+        run("judge", "request", "--target", h.target, "--out", d)
+        write(os.path.join(d, "cluster-response.json"), {"groups": [{"situation": "building a slice", "members": ["hacheong:build"]}]})
+        run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))
+        f = lambda q, **kw: dict({"kind": "contradiction", "members": ["plugin:chongdae", "hacheong:build"],
+                                  "quotes": {"plugin:chongdae": q, "hacheong:build": "does build"}, "why": "w", "proposed": {}}, **kw)
+        write(os.path.join(d, "group-01-response.json"), {"findings": [
+            f("Last run run-20261002-050435-e75b"), f("at 2026-10-15T06:04Z"), f("1 task(s) open."),
+            f("Writes go through a run.", **{"class": "sequenced", "class_quote": {"member": "plugin:chongdae", "quote": "1 task(s) open."}}),
+            f("Writes go through a run.", **{"kind": "premise"})]})
+        code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "first")
+        assert code == 0 and "3 rejected" in out, out
+        j = hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))
+        why = "\n".join(j["rejected"])
+        assert "a run id 'run-20261002-050435-e75b'" in why and "a timestamp '2026-10-15T06:04'" in why and "a count '1 task(s)'" in why, why
+        assert why.count("quote the mode's sentence that holds in every state") == 3, why
+        kept = j["situations"][0]["findings"]
+        assert [x["kind"] for x in kept] == ["contradiction", "premise"], kept   # the class sentence named a count: the class is refused, not the finding
+        assert kept[0]["class"] == "authority" and "names one state (a count '1 task(s)')" in kept[0]["class-refused"], kept[0]
+        assert not hunsu.state_bound_situations(j)
+        # a re-judge under a resolution: still-fits, quote verbatim, but the reason names the run — no delegation, a person reads it
+        manifest(h.target, resolutions={"building a slice": {"accept": "a run is opened first", "reviewed": True}})
+        write(os.path.join(h.installed["hacheong@m1"][0]["installPath"], "skills", "build", "SKILL.md"), "---\nname: build\ndescription: does build, and tests\n---\n")
+        run("judge", "request", "--target", h.target, "--out", d, "--stale")
+        write(os.path.join(d, "group-01-response.json"), {"findings": [f("Writes go through a run.", kind="overlap")],
+                                                          "resolution_verdict": {"verdict": "still-fits", "quote": "Writes go through a run.",
+                                                                                 "why": "run-20261002-050435-e75b is the open run, so the accept holds"}})
+        code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "second")
+        assert "the verdict names one state (a run id 'run-20261002-050435-e75b')" in out and "reviewed: false" in out, out
+        assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["resolutions"]["building a slice"]["reviewed"] is False
+
+
+def test_check_says_a_judgment_read_from_a_live_session_is_state_bound_and_a_stale_round_rejudges_it():
+    """guin-site's record as 1.13 wrote it: quotes of hunsu's and dwitbuk's live lines, a delegated reason naming the run that was
+    open. check says which are state-bound and how to re-judge, rewriting nothing; policy marks the reason; `judge request --stale`
+    re-judges those situations — the count, and the sentence dwitbuk does not say in an empty project."""
+    with Host() as h:
+        d = guin_like(h)
+        write(os.path.join(d, "group-01-response.json"), {"findings": []})
+        run("judge", "consume", "--target", h.target, "--dir", d, "--by", "first")
+        jpath = os.path.join(h.target, hunsu.JUDGMENTS)
+        j = hunsu.load_json(jpath)
+        j["situations"][0]["findings"] = GUIN_FINDINGS   # what a judge quoted of the live lines, before 1.14
+        hunsu.save_json(jpath, j)
+        manifest(h.target, resolutions={"building a slice": {"accept": "the builder is hired inside a run", "reviewed": {"delegated": GUIN_DELEGATED}}})
+        before = [io.open(p, "rb").read() for p in (jpath, os.path.join(h.target, hunsu.MANIFEST))]
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not any("judged about other text" in e for e in errors), errors
+        bound = [w for w in warnings if "quote one state of a mode" in w]
+        assert len(bound) == 1 and "building a slice: plugin:hunsu a count 'errors 1'" in bound[0] and "--stale" in bound[0], warnings
+        reason = [w for w in warnings if "delegated reason names one state" in w]
+        assert len(reason) == 1 and "run-20261002-050435-e75b" in reason[0], warnings
+        assert [io.open(p, "rb").read() for p in (jpath, os.path.join(h.target, hunsu.MANIFEST))] == before, "check rewrites nothing"
+        code, out = run("policy", "--target", h.target)
+        assert "[names one state (a run id 'run-20261002-050435-e75b'): true when it was judged, not now]" in out, out
+        assert not hunsu.state_bound(" ".join(hunsu.policy_lines({"resolutions": hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["resolutions"]})))
+        code, out = run("judge", "request", "--target", h.target, "--out", d, "--stale")
+        assert code == 0 and "1 group packets" in out and "re-judged — its findings quote a mode's live state (plugin:hunsu a count 'errors 1')" in out, out
+        # without the count: dwitbuk's live sentence alone is found by what it says in an empty project
+        j["situations"][0]["findings"] = [GUIN_FINDINGS[0], GUIN_FINDINGS[2]]
+        hunsu.save_json(jpath, j)
+        assert not any("quote one state of a mode" in w for w in hunsu.check(h.target)[1])
+        code, out = run("judge", "request", "--target", h.target, "--out", d, "--stale")
+        assert code == 0 and "1 group packets" in out and "plugin:dwitbuk: a sentence it does not say in an empty project" in out, out
+        # chongdae's "no run in progress" is what it says in an empty project: standing, nothing to re-judge
+        j["situations"][0]["findings"] = [GUIN_FINDINGS[0]]
+        hunsu.save_json(jpath, j)
+        assert run("judge", "request", "--target", h.target, "--out", d, "--stale")[1].strip() == "nothing stale"
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

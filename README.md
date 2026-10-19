@@ -245,7 +245,7 @@ standing modes → the judge groups them by the **situation** they claim (`clust
 2. `judge request --out DIR --groups DIR/cluster-response.json` — stage 2: one packet per group with each member's
 full text → findings with **quotes from each member**, a reason, and a proposed resolution.
 3. `judge_worker.py --request F --response F [--host claude|codex]` runs one packet.
-4. `judge consume --dir DIR` — rejects findings without quotes, with a quote that is not in the member's text (whitespace aside; members travel whole, never cut), or with unknown members, writes `hunsu-judgments.json`
+4. `judge consume --dir DIR` — rejects findings without quotes, with a quote that is not in the member's text (whitespace aside; members travel whole, never cut), with a quote of a mode that names one state (a run id `run-YYYYMMDD-HHMMSS-xxxx`, a timestamp, a count such as "1 task(s) open" or "errors 1" — the reason asks for the mode's sentence that holds in every state), or with unknown members, writes `hunsu-judgments.json`
 (each situation with a fingerprint of its members' text — a version bump that changes no text stales nothing) and
 `hunsu-conflicts.md` (what was found, the evidence, the proposals — for a human to read).
 5. Each finding carries a `class` — how much it asks of a person. `authority`: the members diverge on who decides, a
@@ -267,14 +267,19 @@ Measured: the same request reached for a different skill with the line than with
 6. Later, a member's text changes (its SKILL.md, a worker's prompt, a mode's script or command): only the situations
 it is a member of go stale. A judgment is about text, so a version bump that changes no member's text stales nothing —
 a patch release costs no judge round. Each situation records every member's identity on its own (`member-fingerprints`)
-and what the judge read of each mode (`modes-read`, the injected text): a mode's identity is its script, since its text
-carries the project's state, but a script edited in a way that leaves its line as it was (chongdae 1.20.0 changed how its
-line counts open tasks) changed nothing the judge read, so it stales nothing — the hook is run to see, only for a mode
-whose script moved. A re-judge that finds the same findings (kind, members, quotes, class) keeps them word for word, their
+and what the judge read of each mode (`modes-read`, the text it says in an empty project — below): a mode's identity is
+its script, but a script edited in a way that leaves its text as it was (chongdae 1.20.0 changed how its line counts open
+tasks) changed nothing the judge read, so it stales nothing — the hook is run to see, only for a mode whose script moved.
+What the judge read depends on the script alone: a run opened or closed, a review written, a check gone red stale nothing. A re-judge that finds the same findings (kind, members, quotes, class) keeps them word for word, their
 reason and proposal and the situation's `judged-by` with them; only what it was judged about is recorded anew — a
 judge words its reasons anew on every call, and a record rewritten with each rewording is a diff nobody can read. (Judgments made before this carry only a version fingerprint and stay valid by
 version until re-judged.) `judge request --out DIR --stale` writes packets for those alone; `consume` merges them over
-the old ones. A plugin that brings a skill no situation has seen needs a new cluster round (stage 1). If a re-judged
+the old ones. Judgments made before 1.14 read each mode in the project itself, so a quote can be one session's line
+(guin-site 10239ce: "hunsu: environment differs from hunsu.json (errors 1 · …)", and a delegated reason that "names
+run-20261002-050435-e75b as the open run"). `check` warns of a finding whose mode quote names a run id, a time or a count,
+and of a delegated reason that does (`policy` marks it); nothing is rewritten — `--stale` re-judges those situations, and
+also one whose mode quote is a sentence the mode does not say in an empty project, saying which and why. A still-fits whose
+quote or reason names one state records no delegation (`reviewed: false`); a class sentence that does is refused (`authority`). A plugin that brings a skill no situation has seen needs a new cluster round (stage 1). If a re-judged
 situation's findings differ from what its resolution was written against, `consume` marks that resolution `reviewed:
 false` — it stays, and dwitbuk lists it until a human re-reads.
 
@@ -283,8 +288,16 @@ instruction files — `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md` — are mode
 situation, identified by their content); a situation judged with other modes than a session now gets (one added, one
 removed) is stale. A mode (a plugin's
 SessionStart hook) is the text it injects: hunsu runs the hook the way the host does — a `SessionStart` payload on
-stdin, `${CLAUDE_PLUGIN_ROOT}` resolved, `HUNSU_SURVEY=1` in the environment — and packs `additionalContext`; a hook
-that reports the project's state may answer its standing text under that variable. A role (a plugin's `roles` argv,
+stdin, `${CLAUDE_PLUGIN_ROOT}` resolved, `HUNSU_SURVEY=1` in the environment — and packs `additionalContext`, but in an
+empty project: a fresh temporary directory, no records, no git above it, as the payload's `cwd` and the hook's working
+directory. A hook that reports the project's state says what it says of a project with none, so the text is the same on every
+machine and at every moment, and the packet tells the judge it is the standing text. A hook does better to answer its
+standing text under `HUNSU_SURVEY=1` — what it can say in any state, as a template without live ids, times or counts
+(jokbo, dwitbuk and chongdae do; hunsu's own says what its line does, without a check's counts or the resolutions — those
+are the judge's own answers). Running the script beats a declared description: a declaration drifts from what the hook says,
+the empty project reads what it actually says. In the project itself, chongdae's line moved from "run … in progress" to
+"no run in progress" between two rounds and six of nine situations were re-judged for it, their quotes and reasons
+carrying the run's id as a standing fact (guin-site 10-15). A role (a plugin's `roles` argv,
 the worker a runner starts) is the prompt that worker is sent: hunsu asks the argv itself with `--prompt-only` on a
 sample request, and packs the answer as member `plugin:role`. A worker inherits the project's modes, so a mode that
 says "ask the user" beside a role that says "ask no one" is a contradiction the judge can now quote from both sides.

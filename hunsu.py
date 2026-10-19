@@ -790,14 +790,27 @@ def check_judgments(target, manifest, s, found):
             settled += sum(finding_class(f) in SETTLED for f in r["findings"])
             if open_:
                 errors.append("situation %r: %d finding(s) for a person, no resolution — see %s" % (r["situation"], len(open_), CONFLICTS_DOC))
+        bound = state_bound_situations(judged)
+        if bound:   # never rewritten here: a quote is the judge's, and only a judge round replaces it
+            warnings.append("%d situation(s) hold findings that quote one state of a mode, read in a live session — true of that session, "
+                            "not of the mode (%s); re-judge them on the mode's standing text: `hunsu judge request --out DIR --stale`, "
+                            "judge those packets, `consume`"
+                            % (len(bound), "; ".join("%s: %s %s" % (k, v[0][0], v[0][1]) for k, v in bound.items())))
         if judged.get("rejected"):
-            warnings.append("%d judge finding(s) were rejected (no quote, a quote not in the text, an unknown member or kind) — a real conflict may be among them; read them in %s" % (len(judged["rejected"]), CONFLICTS_DOC))
+            warnings.append("%d judge finding(s) were rejected (no quote, a quote not in the text, a mode quote naming one state, an unknown member or kind) — a real conflict may be among them; read them in %s" % (len(judged["rejected"]), CONFLICTS_DOC))
         if settled:
             info.append("%d finding(s) settled by the members' own text (sequenced / not co-active / duplicate, each on a verified sentence) — no resolution needed; see %s" % (settled, CONFLICTS_DOC))
         known = {r["situation"] for r in judged.get("situations", [])} | {sid.split(":", 1)[1] for sid in judged_ids(manifest, s)}
         for key in manifest.get("resolutions", {}):   # a cluster round names situations anew; a resolution about an old name decides nothing
             if key not in known:
                 warnings.append("resolutions[%r] is about a situation no judgment has (and no skill is named so) — a cluster round renamed it; move or remove it" % key)
+    for key, res in manifest.get("resolutions", {}).items():
+        rv = res.get("reviewed") if isinstance(res, dict) else None
+        bound = state_bound(rv.get("delegated")) if isinstance(rv, dict) else []
+        if bound:   # `policy` prints this reason to every later session; the state it names has moved on
+            warnings.append("resolutions[%r]: its delegated reason names one state (%s) — `policy` prints it as if it stood; a person "
+                            "re-reads it and records `reviewed: {\"by\": NAME}`, or a `--stale` round that finds other findings asks the judge again"
+                            % (key, "; ".join(bound)))
     judged = set(judged_ids(manifest, s))
     for key, res in manifest.get("resolutions", {}).items():
         named = [x for x in ([res] if isinstance(res, str) else [res.get("use")] + list(res.get("deny", [])) + list(res.get("order", []))) if x and x != "deny"]
@@ -949,12 +962,17 @@ def machine_neutral(text, s):
 
 
 def mode_text(h, s):
-    """What a SessionStart hook injects: run its command the way the host does (a synthetic payload on stdin, `${CLAUDE_PLUGIN_ROOT}`
-    resolved to the plugin's root) and read `hookSpecificOutput.additionalContext` — the text the session actually receives.
-    A mode is judged by what it says, not by the name of its script. The command's failure is recorded as its text.
-    The probe sets HUNSU_SURVEY=1: a hook that runs hunsu itself (hunsu's own does) must not probe again, and any hook may answer
-    its standing text under it. Inside a probe this returns the command."""
-    import subprocess
+    """What a SessionStart hook says — the text a judge reads of a mode: its command run the way the host runs it (a synthetic
+    payload on stdin, `${CLAUDE_PLUGIN_ROOT}` resolved to the plugin's root, `hookSpecificOutput.additionalContext` read), but
+    in an empty project — a fresh temporary directory with no records, no git above it — never in this one. A hook that reports
+    the project's state says it of an empty project, so what is judged depends on the plugin's script alone: the same on every
+    machine, before and after a run. In the project itself chongdae's line read "run … in progress — 1 task(s) open" one day and
+    "no run in progress" the next; six of nine situations were re-judged for it, and the judge's quotes and reasons carried
+    the run's id into hunsu-judgments.json and hunsu.json as if it stood (guin-site 10-15, 10239ce). The probe also sets
+    HUNSU_SURVEY=1: a hook that runs hunsu itself (hunsu's own does) must not probe again, and any hook may answer its standing
+    text under it (jokbo does; hunsu's own does). The command's failure is recorded as its text. Inside a probe this returns the
+    command."""
+    import subprocess, tempfile
     if os.environ.get("HUNSU_SURVEY"):
         return h["command"]
     root = ""
@@ -964,11 +982,13 @@ def mode_text(h, s):
     key = (h["source"], h["command"], root, mode_script_fingerprint(h, s))   # an edited script under one root says something else
     if key in _MODE_TEXT:
         return _MODE_TEXT[key]
+    empty = tempfile.mkdtemp(prefix="hunsu-mode-")
     cmd = h["command"].replace("${CLAUDE_PLUGIN_ROOT}", root).replace("${PLUGIN_ROOT}", root)
-    payload = json.dumps({"hook_event_name": "SessionStart", "source": "startup", "cwd": s["target"]})   # no session id: hooks that record sessions skip
+    payload = json.dumps({"hook_event_name": "SessionStart", "source": "startup", "cwd": empty})   # no session id: hooks that record sessions skip
+    env = dict(os.environ, CLAUDE_PLUGIN_ROOT=root, HUNSU_SURVEY="1", GIT_CEILING_DIRECTORIES=os.path.dirname(empty))   # git finds no repository above it
+    env.pop("AGENT_WORKER", None)   # a judge round run from a worker would read every hook's silence
     try:
-        done = subprocess.run(cmd, shell=True, input=payload, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, cwd=s["target"],
-                              env=dict(os.environ, CLAUDE_PLUGIN_ROOT=root, HUNSU_SURVEY="1"))
+        done = subprocess.run(cmd, shell=True, input=payload, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, cwd=empty, env=env)
         out = (done.stdout or "").strip()
         try:
             doc = json.loads(out)
@@ -979,8 +999,52 @@ def mode_text(h, s):
             text = "<hook exited %d: %s>" % (done.returncode, (done.stderr or "").strip()[-200:])
     except (OSError, subprocess.SubprocessError) as err:
         text = "<hook did not run: %s>" % err
+    finally:
+        shutil.rmtree(empty, ignore_errors=True)
+    for spelling in sorted({os.path.realpath(empty), empty}, key=len, reverse=True):   # macOS: /private/var/… and /var/…
+        text = text.replace(spelling, ".")
     _MODE_TEXT[key] = text = machine_neutral(text, s)
     return text
+
+
+# What is true of one state of a project and not of the mode that reports it: a run's id, a time, a count. A judge that quotes
+# such a sentence writes a fact of one session into a committed record ("names run-20261002-050435-e75b as the open run",
+# guin-site 10239ce), and `policy` prints it to every later session as if it stood. A mode's text is read in an empty project
+# (mode_text), so a quote of it never needs one; one that has one was read from a live session.
+STATE_BOUND = (("a run id", r"\brun-\d{8}-\d{6}-[0-9a-f]{4}\b"),
+               ("a timestamp", r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?"),
+               ("a count", r"\b\d+ tasks? open\b|\b\d+ (?:[\w-]+ ){0,2}?[\w-]+\(s\)|\b(?:errors|warnings) \d+\b"))
+
+
+def state_bound(text):
+    """What in `text` is only true of one state — ["a run id 'run-…'", …]; [] when nothing is."""
+    found = []
+    for label, pattern in STATE_BOUND:
+        m = re.search(pattern, quote_norm(text or ""))
+        if m:
+            found.append("%s %r" % (label, m.group(0)))
+    return found
+
+
+def state_bound_quotes(f, modes):
+    """A finding's quotes of a mode (a plugin's SessionStart hook among `modes`) that name one state — [(mode, what)…]. A skill,
+    a role's prompt and an instruction file are standing text: a run id there is an example, not a state."""
+    hooks = [m for m in modes if m.startswith("plugin:")]
+    quotes = dict(f.get("quotes") or {})
+    cq = f.get("class_quote") if isinstance(f.get("class_quote"), dict) else {}
+    pairs = [(m, quotes.get(m)) for m in hooks if m in quotes] + ([(cq.get("member"), cq.get("quote"))] if cq.get("member") in hooks else [])
+    return [(m, what) for m, q in pairs for what in state_bound(q)]
+
+
+def state_bound_situations(judged):
+    """Recorded situations whose findings quote a mode's state — {situation: [(mode, what)…]}. Judged before 1.14, a mode was read
+    in the project itself; such a quote is true of the session it was read in. `check` says so; `judge request --stale` re-judges them."""
+    out = {}
+    for r in (judged or {}).get("situations", []):
+        bound = [x for f in r.get("findings", []) for x in state_bound_quotes(f, r.get("modes", []))]
+        if bound:
+            out[r["situation"]] = bound
+    return out
 
 
 _ROLE_PROMPT = {}
@@ -1067,9 +1131,9 @@ def mode_script_fingerprint(h, s):
 def member_texts(s, manifest=None, scripts=True):
     """What identifies each judged member, per id: a skill's SKILL.md (LF-normalized), a role's worker prompt, a mode's
     SessionStart command(s) plus the script files the command names. A judgment is about text; a version bump that changes
-    no text changes no judgment. A mode is judged by what it injects (mode_text), but that text may carry the project's state
-    (a run in progress, a check's result) and would stale every situation each time the state moved — so a mode's identity
-    is its command and the content of the script it runs, not the text of one session."""
+    no text changes no judgment. A mode is judged by what it says in an empty project (mode_text); its identity here is its
+    command and the content of the script it runs — cheap to read on every check, where running each hook is not — and only a
+    mode whose script moved has its hook run, to see whether what it says moved (modes_read)."""
     texts = {}
     for sk in s["skills"]:
         path = sk["path"]
@@ -1097,10 +1161,11 @@ def member_fingerprints(s, members, manifest=None):
 
 
 def modes_read(mode_packets):
-    """What the judge read of each mode — the text its hook injected, hashed per source (a plugin with two SessionStart hooks
-    injects two). A mode's identity is its script (its injected text carries the project's state), but a script can change in
-    ways that leave its text alone (chongdae 1.20.0 changed how its line counts open tasks; the line read the same): then
-    what was judged did not change."""
+    """What the judge read of each mode — the text its hook says in an empty project (mode_text), hashed per source (a plugin
+    with two SessionStart hooks injects two). A mode's identity is its script, but a script can change in ways that leave its
+    text alone (chongdae 1.20.0 changed how its line counts open tasks; the line read the same): then what was judged did not
+    change. The text depends on the script alone, never on the project's state: a run opened or closed stales nothing.
+    (Judged before 1.14, this hashed the project's live line: the first script change after is one re-judge.)"""
     by = {}
     for m in mode_packets:
         by.setdefault(m.get("source"), []).append(str(m.get("text", "")))
@@ -1194,6 +1259,10 @@ def judge_render(target, manifest):
     return 0
 
 
+MODE_NOTE = ("injected at SessionStart — a member of every situation. This is what the hook says in an empty project (no records, "
+             "no run): its standing text. In a live session the parts that report state differ; judge the standing text")
+
+
 def judge_context(target, manifest):
     """What every judge stage reads: the survey, the locked skills, the modes and their injected text, the roles' prompts."""
     s = survey(target)
@@ -1205,7 +1274,7 @@ def judge_context(target, manifest):
     # worker is sent (`--prompt-only`) — never by a script's name. A worker inherits the project's modes, so a mode that says
     # "ask the user" and a role that says "ask no one" is a contradiction the judge can only see with both texts in front of it.
     # whole, as members are: the judge quotes from this text
-    mode_packets = [{"source": h["source"], "text": mode_text(h, s), "note": "injected at SessionStart — a member of every situation"} for h in modes]
+    mode_packets = [{"source": h["source"], "text": mode_text(h, s), "note": MODE_NOTE} for h in modes]
     for f in instruction_files(target):
         modes.append({"source": f["source"], "event": "SessionStart", "command": "", "matcher": "*"})
         mode_packets.append({"source": f["source"], "text": f["text"], "note": "read into every session (a committed instruction file) — a member of every situation"})
@@ -1244,7 +1313,23 @@ def judge_group_requests(args, target, manifest, j):
             raise SystemExit("no %s — nothing is stale; start with `judge request --out DIR`" % JUDGMENTS)
         if stale.get("unclustered"):
             raise SystemExit("new skills no situation has seen (%s) — a cluster round is needed: `judge request --out DIR`" % ", ".join(stale["unclustered"]))
-        groups = [{"situation": r["situation"], "members": r["members"]} for r in j["situations"] if r["situation"] in stale.get("situations", [])]
+        # and the situations whose findings quote a mode's live state (read in a live session before 1.14): one that names a run,
+        # a time or a count (`check` says so), or a sentence the mode does not say in an empty project — guin-site's dwitbuk quote
+        # ("`dispose …` answers one.") was its line about one review's open objections; in an empty project it says nothing
+        said = {}
+        for m in mode_packets:
+            said.setdefault(m["source"], []).append(quote_norm(m["text"]))
+        live = {k: ["%s %s" % x for x in v] for k, v in state_bound_situations(j).items()}
+        for r in j["situations"]:
+            for f in r.get("findings", []):
+                for m, q in (f.get("quotes") or {}).items():
+                    if m.startswith("plugin:") and m in said and not any(quote_norm(q) in t for t in said[m]):
+                        live.setdefault(r["situation"], []).append("%s: a sentence it does not say in an empty project" % m)
+        for k, v in live.items():
+            if k not in stale.get("situations", []):
+                print("situation %r: re-judged — its findings quote a mode's live state (%s)" % (k, v[0]))
+        redo = set(stale.get("situations", [])) | set(live)
+        groups = [{"situation": r["situation"], "members": r["members"]} for r in j["situations"] if r["situation"] in redo]
         if not groups:
             print("nothing stale")
             return 0
@@ -1287,14 +1372,18 @@ def judge_group_requests(args, target, manifest, j):
                                    "Then give the finding a `class` from `classes`: how much it asks of a person. `authority` unless the members' own "
                                    "text settles it — and for any other class, `class_quote` is {member, quote}: the verbatim sentence from that member's "
                                    "text that settles it (hunsu checks it; a class whose sentence is not there is treated as authority). When unsure, "
-                                   "authority. Change no files.")}
+                                   "authority. A mode's `text` is what its hook says in an empty project: quote the sentences that hold in "
+                                   "every state, never a run's id, a time or a count (hunsu drops a finding whose mode quote names one). "
+                                   "Change no files.")}
         res = manifest.get("resolutions", {}).get(packet["situation"])
         if isinstance(res, dict):   # the situation is already resolved: the judge also says whether that resolution still fits what it finds now
             packet["existing_resolution"] = {"resolution": res, **({"prior_findings": prior[packet["situation"]]} if packet["situation"] in prior else {})}
             packet["instructions"] += (" This situation already has a resolution (`existing_resolution`; the findings it was written about are its "
                                        "`prior_findings`). Additionally answer `resolution_verdict`: does that resolution still fit your findings? "
                                        "`verdict` is still-fits | does-not-fit | cannot-tell, with `why` and `quote` — a verbatim sentence from the "
-                                       "member texts above grounding the verdict. No verbatim quote, no still-fits.")
+                                       "member texts above grounding the verdict. No verbatim quote, no still-fits. The verdict is about "
+                                       "the members' standing text: its `why` names no run, time or count, which the record would carry "
+                                       "to every later session as if it stood.")
         save_json(os.path.join(args.out, "group-%02d-request.json" % i), packet)
         n += 1
     print("stage 2: %d group packets -> %s. Run the judge on each, then `judge consume --dir %s`" % (n, args.out, args.out))
@@ -1337,6 +1426,12 @@ def judge_consume(args, target, manifest, j):
                 rejected.append("%s: %s%s" % (name, "quote not in the text of %s — " % ", ".join(unquoted) if unquoted else "",
                                               json.dumps(f, ensure_ascii=False)[:160]))
                 continue
+            hooked = [m.get("source") for m in req.get("modes", [])]
+            bound = state_bound_quotes({"quotes": quotes}, hooked)
+            if bound:   # true of the session it was read in, not of the mode: quote the sentence that holds in every state
+                rejected.append("%s: a quote of %s names one state (%s) — quote the mode's sentence that holds in every state — %s"
+                                % (name, bound[0][0], "; ".join(w for _, w in bound), json.dumps(f, ensure_ascii=False)[:160]))
+                continue
             proposed = f.get("proposed") or {}
             if isinstance(proposed, str):   # Codex's strict schema carries it as text
                 try:
@@ -1347,7 +1442,10 @@ def judge_consume(args, target, manifest, j):
             # the class: a settled one stands only on a sentence found in the text of one of the finding's members; else authority
             claimed, cq = f.get("class"), f.get("class_quote") if isinstance(f.get("class_quote"), dict) else {}
             if claimed in SETTLED:
-                if cq.get("member") in members and norm(cq.get("quote", "")) and norm(cq.get("quote", "")) in texts.get(cq.get("member"), ""):
+                if state_bound_quotes({"class_quote": cq}, hooked):   # a count is no sentence that settles anything for good
+                    finding.update({"class": "authority", "class-refused": "%s claimed on a sentence that names one state (%s)"
+                                    % (claimed, "; ".join(w for _, w in state_bound_quotes({"class_quote": cq}, hooked)))})
+                elif cq.get("member") in members and norm(cq.get("quote", "")) and norm(cq.get("quote", "")) in texts.get(cq.get("member"), ""):
                     finding.update({"class": claimed, "class_quote": {"member": cq["member"], "quote": cq["quote"]}})
                 else:
                     finding.update({"class": "authority", "class-refused": "%s claimed; its sentence is not in %s's text" % (claimed, cq.get("member") or "a member")})
@@ -1408,7 +1506,8 @@ def judge_consume(args, target, manifest, j):
         verdict, packed, account = verdicts.get(sit) or (None, "", args.by)
         v = verdict if isinstance(verdict, dict) else {}
         quote = str(v.get("quote") or "")
-        if v.get("verdict") == "still-fits" and quote.strip() and quote_norm(quote) in quote_norm(packed):
+        bound = state_bound(quote) + state_bound(v.get("why"))
+        if v.get("verdict") == "still-fits" and quote.strip() and quote_norm(quote) in quote_norm(packed) and not bound:
             # whole: a record cut at 200 kept half a sentence in the manifest and the lock (guin-site, 2026-09-28); where a line must be
             # short, it is cut where it is printed, not where it is stored
             manifest["resolutions"][sit]["reviewed"] = {"delegated": "judge %s: %s" % (account, str(v.get("why") or ""))}
@@ -1416,7 +1515,8 @@ def judge_consume(args, target, manifest, j):
             print("situation %r: findings changed — the judge says the resolution still fits (quote verified); kept, delegation recorded" % sit)
         else:
             why = ("verdict %r" % v.get("verdict")) if v.get("verdict") in ("does-not-fit", "cannot-tell") else \
-                  ("quote not found verbatim in the member texts" if v.get("verdict") == "still-fits" else "no resolution_verdict")
+                  ("the verdict names one state (%s), not a standing fact" % "; ".join(bound) if v.get("verdict") == "still-fits" and bound else
+                   "quote not found verbatim in the member texts" if v.get("verdict") == "still-fits" else "no resolution_verdict")
             manifest["resolutions"][sit]["reviewed"] = False
             unread.append(sit)
             print("situation %r: findings changed — %s; marked reviewed: false (a human must re-read)" % (sit, why))
@@ -1432,7 +1532,7 @@ def judge_consume(args, target, manifest, j):
     write_conflicts_doc(target, doc, manifest)
     n_find = sum(len(r["findings"]) for r in results)
     n_settled = sum(finding_class(f) in SETTLED for r in results for f in r["findings"])
-    print("judgments: %d situations · %d findings (%d settled by the members' text, %d for a person) · %d rejected (no quote / quote not in the text / unknown member / bad kind) -> %s, %s"
+    print("judgments: %d situations · %d findings (%d settled by the members' text, %d for a person) · %d rejected (no quote / quote not in the text / a mode quote naming one state / unknown member / bad kind) -> %s, %s"
           % (len(results), n_find, n_settled, n_find - n_settled, len(rejected), JUDGMENTS, CONFLICTS_DOC))
     if kept:
         print("re-judged with the same findings — kept as they were (only what they were judged about is recorded anew): %s" % "; ".join(kept))
@@ -1813,7 +1913,9 @@ def settled_by(res, short=False):
     if isinstance(rv, dict) and rv.get("by"):
         return "by %s%s" % (rv["by"], (" — " + rv["why"]) if rv.get("why") else "")
     if isinstance(rv, dict) and rv.get("delegated"):
-        return "delegated: %s" % (rv["delegated"].split(": ", 1)[0] if short else rv["delegated"])
+        bound = [] if short else state_bound(rv["delegated"])
+        return "delegated: %s%s" % (rv["delegated"].split(": ", 1)[0] if short else rv["delegated"],
+                                    " [names one state (%s): true when it was judged, not now]" % "; ".join(bound) if bound else "")
     if rv is True:
         return "reviewed (no name recorded)"
     return "no `reviewed` record — written into %s by hand" % MANIFEST
