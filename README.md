@@ -116,7 +116,8 @@ covered by a `<role>@<cap>` alternate — as one line naming the roles and both 
 alone, so it shows even while plugins are missing; a warning, so `lock` is not blocked; the SessionStart line counts it), `hunsu.local.json` not ignored by git (an `error` when it is committed). `info`: a pinned plugin behind a release available here (`plugin X is behind: pinned 1.12.2; the
 marketplace M lists 1.13.0 (local copy)`, or a linked checkout's version — no network: a marketplace copy is as fresh as
 its last `claude plugin marketplace update`; the session's first line counts them), links, extra
-plugins, machine-bound paths. Exit 1 on errors. `--remote` runs `outdated` after it.
+plugins, machine-bound paths, roles declared with chongdae locked and no `reviewer` (every run then ends with its
+record unread — chongdae records it as each run's non-claim; here it is said once, where it is decided). Exit 1 on errors. `--remote` runs `outdated` after it.
 
 A version skew between this machine and the manifest (`plugin X: manifest A, host B`), a plugin behind a release, and the
 stale-session line say the way out as numbered steps, each only when it is owed, in this order: `claude plugin marketplace
@@ -144,7 +145,11 @@ and `hunsu-conflicts.md` by hand to learn what was decided and on whose word. Pe
 hook prints (from `hunsu.lock.json` — what was locked is what sessions get; an `accept` or `note` the line cuts follows
 whole), and who settled it (from `hunsu.json`, where declarations are read: `reviewed` by a name, `delegated:` the
 judge's reason, unreviewed, or written by hand). Where the two files differ it says which it read: a resolution not yet
-locked, one gone from `hunsu.json`, a rule changed since the lock, or one settled again since. Last, the judged
+locked, one gone from `hunsu.json`, a rule changed since the lock, or one settled again since. Under an unreviewed
+resolution, the conflict it answers: each finding for a person with the members' sentences and what the judge proposed —
+a person judges that, not the rule alone (asked to show the rulings, a session put the five rules as yes/no questions
+with the recommended answer "yes", and recorded the yeses: sagoforce, 10-26) — and how to record what they said. A
+delegated resolution is not owed a person. Last, the judged
 situations (`hunsu-judgments.json`) with a finding for a person and no resolution; whether those judgments are current
 is `check`'s to say. Exit 0
 
@@ -344,7 +349,10 @@ with a mode every group is judged (cost: 1 + groups calls).
 - `local-hooks-ok` — script names of user-level hooks that may run here without being part of the project (observers),
   or `plugin:NAME` for a plugin enabled on this machine but not in the manifest.
   A hook that is only yours — a terminal app's agent hooks, a personal logger — goes in `hunsu.local.json` under the
-  same key instead: acknowledged on this machine, never committed.
+  same key instead: acknowledged on this machine, never committed. The session reads what such a hook runs first; one
+  that adds nothing to the session (prints nothing or `{}`, never blocks) it lists there itself and says so in a line —
+  the person is asked only about what can change the session (sagoforce 10-26: an Orca hook printing `{}` stopped the
+  session twice for a person who said to ignore it if it could be ignored).
 - `settings` — the team's switches for its products (e.g. `{"chongdae": {"outside-runs": ["content/"]}}`). A product
   reads its own from this file, so a switch works as soon as it is written — also while a product's working source is
   tried with `dev`, when `lock` refuses. hunsu does not read them; `lock` copies them into the lock as the record of

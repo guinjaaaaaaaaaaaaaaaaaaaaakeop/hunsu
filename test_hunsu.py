@@ -228,6 +228,20 @@ def test_a_role_provider_is_what_the_plugin_declares_and_the_lock_carries_argv()
         assert lock["reads"] == {"alpha": {"file": ["python3", "{plugin:alpha}/a.py", "show", "{path}", "--target", "{target}"]}}, lock["reads"]
 
 
+def test_check_says_once_that_runs_end_unreviewed_when_chongdae_is_locked_with_no_reviewer():
+    """chongdae says "no `reviewer` role in the lock" at every close; the lock is where that is decided, so check says it."""
+    with Host() as h:
+        h.add_plugin("m1", "chongdae", "1.0.0", ["run"])
+        h.add_plugin("m1", "dwitbuk", "1.0.0", ["review"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "chongdae", "--target", h.target); run("add", "dwitbuk", "--target", h.target)
+        manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip", roles={"planner": "session"})
+        info = [i for i in hunsu.check(h.target)[2] if "no `reviewer` role" in i]
+        assert len(info) == 1 and "chongdae ends every run with its record unread" in info[0] and "{plugin:dwitbuk}/dwitbuk.py" in info[0], info
+        manifest(h.target, roles={"planner": "session", "reviewer": ["python3", "{plugin:dwitbuk}/dwitbuk.py", "review", "--target", "."]})
+        assert not [i for i in hunsu.check(h.target)[2] if "no `reviewer` role" in i]
+
+
 def test_survey_describes_what_the_host_runs_a_directory_marketplace_plugin_in_place():
     """The host loads a plugin from a `directory` marketplace in place (its init event says so), while the install record
     still points at a cache copy. survey must report the in-place path — engines, roles, skills and the same-version content
@@ -572,7 +586,7 @@ def test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated(
         assert len(zeta) == 1 and "SessionStart among them" in zeta[0], warnings
         manifest(h.target, engines={"claude-code": ">=0.0", "node": ">=0.0", "python": ">=0.0"}, judge="skip")
         code, out = run("compose", "--target", h.target)
-        assert "user skill mine" in out and "unmanaged plugin zeta" in out and "Tell the person first" in out, out
+        assert "user skill mine" in out and "unmanaged plugin zeta" in out and "Read the file each user hook" in out and "adds nothing to the session" in out, out
         # the sentinel: the person's skill is refused until acknowledged; a built-in and the project's own are not touched
         hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"skills": ["alpha:build"], "denied": []})
         hook = os.path.join(HERE, "hooks", "pre_skill.py")
@@ -842,7 +856,7 @@ def test_a_hook_that_is_only_yours_is_told_once_names_what_runs_here_and_is_ackn
         m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)); m["engines"] = {"claude-code": ">=0.1"}; m["judge"] = "skip"
         hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), m)
         code, out = run("compose", "--target", h.target)
-        assert code == 2 and "Tell the person first" in out and "claude-hook.sh" in out, out
+        assert code == 2 and "Read the file each user hook" in out and "adds nothing to the session" in out and "claude-hook.sh" in out, out
         write(os.path.join(h.target, hunsu.LOCAL), {"local-hooks-ok": ["claude-hook.sh"]})
         errors, warnings, _ = hunsu.check(h.target)
         assert not any("claude-hook.cmd" in w for w in warnings), warnings
@@ -929,6 +943,9 @@ def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_ca
         # the sentinel lets host built-ins through: nothing outside the manifest runs, honestly scoped to plugin skills
         assert hook("pre_skill.py", {"cwd": h.target, "tool_name": "Skill", "tool_input": {"skill": "simplify"}})[0] == 0
         assert hook("pre_skill.py", {"cwd": h.target, "tool_name": "Skill", "tool_input": {"skill": "gamma:other"}})[0] == 2
+        # a shell below the project is in it: the host's `cwd` follows `cd` (sagoforce 10-26, a session in `engine/`)
+        os.makedirs(os.path.join(h.target, "engine", "src"))
+        assert hook("pre_skill.py", {"cwd": os.path.join(h.target, "engine", "src"), "tool_name": "Skill", "tool_input": {"skill": "gamma:other"}})[0] == 2
 
 
 def test_policy_reads_the_resolutions_back_with_who_settled_each_and_says_where_the_lock_and_manifest_differ():
@@ -970,6 +987,14 @@ def test_policy_reads_the_resolutions_back_with_who_settled_each_and_says_where_
                                                                                {"situation": "shipping", "findings": [dict(f, members=["a:z", "b:y"])]}]})
         code, out = run("policy", "--target", target)
         assert "still need a resolution (hunsu-judgments.json): shipping (1 finding(s) for a person)" in out and "planning (" not in out, out
+        # an unreviewed rule is shown with the conflict it answers — the members' sentences a person judges, not the rule alone
+        assert "- auditing: both apply: the old reason [unreviewed" in out and "the conflict it answers: no finding for a person under this situation" in out, out
+        hunsu.save_json(os.path.join(target, hunsu.JUDGMENTS), {"situations": [{"situation": "auditing", "findings": [
+            dict(f, why="x says one owner, y says another", proposed={"accept": "both"}), dict(f, kind="premise", **{"class": "sequenced"})]}]})
+        code, out = run("policy", "--target", target)
+        assert "    the conflict it answers (hunsu-judgments.json):\n      contradiction between a:x, b:y: x says one owner, y says another\n" \
+               "        a:x: “q1”\n        b:y: “q2”\n        the judge proposed: {\"accept\": \"both\"}\n" in out and "premise between" not in out, out
+        assert "1 unreviewed (auditing): a person judges the conflict, not the rule" in out and "A delegated one was confirmed by the judge" in out, out
         manifest(target, judge="skip")
         assert "judge: skipped" in run("policy", "--target", target)[1]
 
@@ -1069,8 +1094,8 @@ def test_a_session_running_other_plugins_than_the_lock_pins_is_told_at_every_pro
         old = plugin(os.path.join(h.home, "session-copy"), "m1", "hunsu", "0.9.0", [])   # what this session loaded, days ago
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
         env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)
-        def hook(name, root, **extra):
-            done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps({"cwd": h.target}), capture_output=True,
+        def hook(name, root, cwd=None, **extra):
+            done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps({"cwd": cwd or h.target}), capture_output=True,
                                   text=True, encoding="utf-8", env=dict(env, CLAUDE_PLUGIN_ROOT=root, **extra))
             assert done.returncode == 0, done.stderr
             return json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] if done.stdout.strip() else ""
@@ -1084,6 +1109,11 @@ def test_a_session_running_other_plugins_than_the_lock_pins_is_told_at_every_pro
         assert hook("session_start.py", old).split("\n")[0] == line   # a /clear fires SessionStart too, and still runs the old copy
         # agreeing: silent at the prompt, and the SessionStart line carries no such line
         assert hook("prompt_submit.py", h.installed["hunsu@m1"][0]["installPath"]) == ""
+        # the shell in a directory below the project: the same project's lock, not another marketplace's hunsu (sagoforce 10-26:
+        # `cd engine`, no lock there, and the line named a directory marketplace's working copy as "installed for this project")
+        os.makedirs(os.path.join(h.target, "engine"))
+        assert hook("prompt_submit.py", h.installed["hunsu@m1"][0]["installPath"], cwd=os.path.join(h.target, "engine")) == ""
+        assert hook("prompt_submit.py", old, cwd=os.path.join(h.target, "engine")) == line
         assert "restart the session" not in hook("session_start.py", h.installed["hunsu@m1"][0]["installPath"])
         # a worker, hunsu's own probe, a working source in development: silent
         assert hook("prompt_submit.py", old, AGENT_WORKER="1") == ""

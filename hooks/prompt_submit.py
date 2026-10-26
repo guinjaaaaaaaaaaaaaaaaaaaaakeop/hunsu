@@ -24,7 +24,7 @@ def main():
         return 0
     import hunsu
     root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("PLUGIN_ROOT") or os.path.dirname(HERE)
-    line = hunsu.stale_session_line(payload.get("cwd") or os.getcwd(), root)
+    line = hunsu.stale_session_line(hunsu.project_root(payload.get("cwd") or os.getcwd()), root)
     if line:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": line}}))
     return 0

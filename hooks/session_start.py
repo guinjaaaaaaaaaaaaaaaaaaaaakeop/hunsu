@@ -44,7 +44,7 @@ def main():
         return 0
     if os.environ.get("AGENT_WORKER"):
         return 0
-    cwd = payload.get("cwd") or os.getcwd()
+    cwd = hunsu.project_root(payload.get("cwd") or os.getcwd())
     engine = "%s \"%s\"" % (PY, ENGINE.replace(os.sep, "/"))
     if os.environ.get("HUNSU_SURVEY"):
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": STANDING % {"engine": engine}}}))

@@ -1,7 +1,7 @@
 """PreToolUse hook on the Skill tool — the manifest is enforced at call time, not just reported.
 
 Payload (stdin JSON): {"cwd": ..., "tool_name": "Skill", "tool_input": {"skill": "<plugin>:<name>"}}.
-Decision comes from hunsu.lock.json in cwd:
+Decision comes from hunsu.lock.json in the project (cwd, or the nearest directory above it with hunsu.json or the lock):
   no lock                     -> allow (nothing is locked; the SessionStart line already said so)
   skill in lock `denied`      -> deny (a resolution ruled it out; the reason is in hunsu-conflicts.md / hunsu.json)
   skill in lock `skills`      -> allow
@@ -23,7 +23,9 @@ def main():
     if payload.get("tool_name") != "Skill":
         return 0
     skill = (payload.get("tool_input") or {}).get("skill", "")
-    cwd = payload.get("cwd") or os.getcwd()
+    cwd = os.path.abspath(payload.get("cwd") or os.getcwd())
+    while not any(os.path.exists(os.path.join(cwd, f)) for f in ("hunsu.json", "hunsu.lock.json")) and os.path.dirname(cwd) != cwd:
+        cwd = os.path.dirname(cwd)   # a shell below the project is in it (hunsu.project_root; kept inline, this hook imports nothing)
     lock_path = os.path.join(cwd, "hunsu.lock.json")
     if not skill or not os.path.exists(lock_path):
         return 0

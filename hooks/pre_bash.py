@@ -30,10 +30,12 @@ def main():
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if isinstance(command, list):   # Codex may pass argv
         command = " ".join(str(x) for x in command)
-    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd()
-    if not isinstance(command, str) or "/" not in command.replace("\\", "/") or not os.path.exists(os.path.join(cwd, "hunsu.lock.json")):
+    if not isinstance(command, str) or "/" not in command.replace("\\", "/"):
         return 0
     import hunsu
+    cwd = hunsu.project_root(payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd())   # a shell below the project is in it
+    if not os.path.exists(os.path.join(cwd, "hunsu.lock.json")):
+        return 0
     found = hunsu.stray_plugin_paths(cwd, command)
     if found:
         print(hunsu.stray_paths_reason(found), file=sys.stderr)

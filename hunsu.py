@@ -157,6 +157,21 @@ def survey_codex(target):
     return {"host": "codex", "target": os.path.abspath(target).replace(os.sep, "/"), "plugins": plugins, "skills": skills, "hooks": hooks, "modes": modes}
 
 
+def project_root(start):
+    """The project a hook's directory belongs to: the nearest directory at or above `start` holding hunsu.json or
+    hunsu.lock.json, else `start`. The host's payload `cwd` follows the shell: sagoforce's session `cd engine` (a repository
+    inside the workspace), and the prompt hook read no lock there, took another marketplace's hunsu and said "1.15.0 is
+    installed for this project" — the sentinel and the stray-path guard read no lock there either."""
+    p = os.path.abspath(start)
+    while True:
+        if os.path.exists(os.path.join(p, MANIFEST)) or os.path.exists(os.path.join(p, "hunsu.lock.json")):
+            return p
+        up = os.path.dirname(p)
+        if up == p:
+            return os.path.abspath(start)
+        p = up
+
+
 def install_entry(entries, target):
     """The host keeps one install record per (scope, project). The one that applies to `target` is its own project-scope
     record, else the user-scope one, else — for a project that only enabled the plugin — the first; entries[0] was the first
@@ -676,8 +691,10 @@ def check_hooks(target, manifest, s, found):
     ok = set(manifest.get("local-hooks-ok", [])) | set(load_json(os.path.join(target, LOCAL)).get("local-hooks-ok", []))
     for name, g in user_hook_groups(s).items():
         if not any(tag in h["command"] for h in g["hooks"] for tag in ok):
-            warnings.append("user hook %s: runs for this project on %d event(s) (%s) and is not the project's%s%s — tell the person, offer to read what it does, "
-                            "then list it in local-hooks-ok (hunsu.local.json when it is only theirs, hunsu.json when the team runs it) or remove it from their settings"
+            warnings.append("user hook %s: runs for this project on %d event(s) (%s) and is not the project's%s%s — read the file it runs: one that adds "
+                            "nothing to the session (prints nothing or `{}`: no context, no permission decision) is this machine's own tool — list it in "
+                            "local-hooks-ok in hunsu.local.json (not committed) and tell the person in a line; ask them only about one that can change the "
+                            "session or that the team runs (hunsu.json), or to remove it from their settings"
                             % (name, len(g["events"]), ", ".join(g["events"]), "; on this machine it runs " + ", ".join(g["runs"]) if g["runs"] else "",
                                "; SessionStart among them, so it can add instructions to every session" if "SessionStart" in g["events"] else ""))
     # a plugin enabled on this host but not in the manifest: its skills are refused (not in the lock), its hooks are not — they
@@ -763,6 +780,12 @@ def check_roles(manifest, s, found):
         why = role_argv(manifest, s, provider[len("native:"):] if isinstance(provider, str) and provider.startswith("native:") else provider)[1]
         if why:
             errors.append("role %s: provider %r — %s" % (role, provider, why))
+    plugins = manifest.get("plugins", {})
+    if "chongdae" in plugins and manifest.get("roles") and "reviewer" not in manifest["roles"]:
+        # chongdae said it at each of a day's ten closes and nothing here did (sagoforce, 10-26): the lock is where it is decided
+        info.append("no `reviewer` role: chongdae ends every run with its record unread, a non-claim in each run — declare one in roles%s "
+                    "and `hunsu lock`, or leave it so" % (" (dwitbuk's: \"reviewer\": [\"python3\", \"{plugin:dwitbuk}/dwitbuk.py\", \"review\", "
+                                                           "\"--target\", \".\"])" if "dwitbuk" in plugins else ""))
 
 
 def check_judgments(target, manifest, s, found):
@@ -824,7 +847,7 @@ def cmd_check(args):
     if getattr(args, "findings", False):
         manifest = load_json(os.path.join(args.target, MANIFEST))
         findings = [{"kind": "drift", "where": e.split(":")[0], "text": e} for e in errors]
-        findings += [{"kind": "unreviewed", "where": "hunsu.json resolutions[%r]" % k, "text": "applied from the judge's proposal, marked reviewed: false"}
+        findings += [{"kind": "unreviewed", "where": "hunsu.json resolutions[%r]" % k, "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges"}
                      for k, r in manifest.get("resolutions", {}).items() if isinstance(r, dict) and r.get("reviewed") is False]
         print(json.dumps({"artifact-type": "dwitbuk/findings@1", "source": "hunsu", "standing": True, "findings": findings}, ensure_ascii=False, indent=1))
         return 1 if errors else 0
@@ -1935,6 +1958,21 @@ def open_situations(manifest, judged):
     return out
 
 
+def conflict_lines(judged, situation):
+    """What a person judges under an unreviewed resolution: the situation's findings for a person, each member's sentence."""
+    r = next((r for r in (judged or {}).get("situations", []) if r["situation"] == situation), None)
+    found = [f for f in (r or {}).get("findings", []) if finding_class(f) == "authority"]
+    if not found:
+        return ["the conflict it answers: no finding for a person under this situation in %s now — `hunsu check`" % JUDGMENTS]
+    lines = ["the conflict it answers (%s):" % JUDGMENTS]
+    for f in found:
+        lines.append("  %s between %s%s" % (f.get("kind"), ", ".join(f.get("members", [])), (": " + f["why"]) if f.get("why") else ""))
+        lines += ["    %s: “%s”" % (m, " ".join(str(q).split())) for m, q in (f.get("quotes") or {}).items()]
+        if f.get("proposed"):
+            lines.append("    the judge proposed: %s" % json.dumps(f["proposed"], ensure_ascii=False))
+    return lines
+
+
 POLICY_HELP = ("read-only: this project's resolutions by situation — the line the SessionStart hook prints (from hunsu.lock.json), each "
                "one's reason and who settled it (from hunsu.json; where the two differ it says so), and the judged situations that still need one")
 
@@ -1949,6 +1987,8 @@ def cmd_policy(args):
         print("no %s here — nothing declared, nothing locked (`hunsu init`, or the compose skill)" % MANIFEST)
         return 0
     declared, locked = manifest.get("resolutions", {}), (lock.get("resolutions") or {}) if lock else None
+    judged = load_json(os.path.join(args.target, JUDGMENTS))
+    unread = []
     if locked is None:
         print("hunsu policy — no %s: sessions get no policy yet. What %s declares (lines as the hook would print them after `hunsu lock`):"
               % (LOCK, MANIFEST))
@@ -1972,9 +2012,17 @@ def cmd_policy(args):
         for reason in resolution_reasons(mine):
             print("    %s" % reason)
         print("    settled: %s" % settled_by(mine))
+        if isinstance(mine, dict) and mine.get("reviewed") is False:
+            unread.append(key)
+            for line in conflict_lines(judged, key):
+                print("    " + line)
     if not declared and not locked:
         print("  (no resolutions)")
-    judged = load_json(os.path.join(args.target, JUDGMENTS))
+    if unread:   # asked "판정 알려줘", a session put the rules alone as yes/no questions, "맞다 (Recommended)", and recorded four 맞다 (sagoforce, 10-26)
+        print("%d unreviewed (%s): a person judges the conflict, not the rule — show each one's members' sentences above and what the rule "
+              "makes them do, then record what they said as resolutions[<situation>].reviewed = {\"by\": NAME, \"why\": what they read} "
+              "(or the rule they chose instead), and `hunsu lock`. A delegated one was confirmed by the judge on a quote: it is not owed a "
+              "person, and its record stays unless the person read that one too." % (len(unread), "; ".join(unread)))
     if manifest.get("judge") == "skip":
         print("judge: skipped (%s) — no judged situations to resolve" % MANIFEST)
     elif not judged:
@@ -2868,10 +2916,15 @@ def cmd_compose(args):
     user_hooks = [w for w in warnings if w.startswith(("user ", "unmanaged plugin "))]
     if user_hooks:
         # Acknowledged = listed in local-hooks-ok. One mechanism; no separate "reviewed" flag.
-        return stop("user-level hooks and skills, and plugins outside the manifest, run here and are not the project's. Tell the person first, one line per item below, and ask whether they want "
-                    "one looked into — if so, read the file it runs on this machine and say what it takes in, where it sends it, and whether it can "
-                    "change the session. Then ask where it belongs: `local-hooks-ok` in hunsu.local.json (only theirs, not committed), in hunsu.json "
-                    "(the whole team runs it), or removed from their settings — then re-run compose",
+        # sagoforce 10-26: an Orca agent hook that prints `{}` stopped the session twice for the person, who said "ignore it if
+        # it can be ignored" — then the agent read its 86 lines and listed it. Reading it is the session's; deciding is the
+        # person's only where something can change what the session is told
+        return stop("user-level hooks and skills, and plugins outside the manifest, run here and are not the project's. Read the file each user hook "
+                    "below runs on this machine: one that adds nothing to the session (prints nothing or `{}` — no context, no permission decision) "
+                    "is this machine's own tool — list it in `local-hooks-ok` in hunsu.local.json (only theirs, not committed) and tell the person in "
+                    "one line what it is and where it sends what it reads. Ask the person only about the rest — a hook that can change the session, a "
+                    "user skill, a plugin outside the manifest: `local-hooks-ok` in hunsu.json (the whole team runs it), in hunsu.local.json, or "
+                    "removed from their settings — then re-run compose",
                     *user_hooks)
     return cmd_lock(args)
 
