@@ -24,12 +24,16 @@ The manifest (hunsu.json) is committed with the project; it is the definition of
 Host: Claude Code first. Other hosts attach when their packaging exists.
 """
 import argparse
+import contextlib
+import functools
 import io
 import json
 import os
 import re
 import shutil
 import sys
+import tempfile
+import threading
 
 HOME = os.path.expanduser("~")
 CLAUDE = os.environ.get("HUNSU_CLAUDE_DIR") or os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")   # the host honors CLAUDE_CONFIG_DIR; HUNSU_CLAUDE_DIR is for tests
@@ -47,9 +51,86 @@ def load_json(path):
 
 
 def save_json(path, data):
-    with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-        fh.write("\n")
+    """Publish a complete document; a failed write leaves the previous document readable."""
+    path = os.path.realpath(path)
+    fd, temporary = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", suffix=".tmp", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            if os.path.exists(path):
+                os.chmod(temporary, os.stat(path).st_mode & 0o777)
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+_PROJECT_LOCKS = {}
+_PROJECT_LOCKS_GUARD = threading.Lock()
+_PROJECT_LOCK_DEPTH = threading.local()
+
+
+@contextlib.contextmanager
+def project_mutation(target):
+    """Serialize each project's complete read/modify/write, including nested commands.
+
+    The OS releases the lock on process death. Keep its inode in a machine-local temp directory rather than deleting
+    it on release: another process may already be waiting on it. Real paths make checkout aliases share one lock.
+    """
+    import hashlib
+    target = os.path.normcase(os.path.realpath(target))
+    with _PROJECT_LOCKS_GUARD:
+        mutex = _PROJECT_LOCKS.setdefault(target, threading.RLock())
+    with mutex:
+        held = getattr(_PROJECT_LOCK_DEPTH, "held", None)
+        if held is None:
+            held = _PROJECT_LOCK_DEPTH.held = set()
+        if target in held:
+            yield
+            return
+        directory = os.path.join(tempfile.gettempdir(), "hunsu-mutations")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, hashlib.sha256(target.encode("utf-8")).hexdigest() + ".lock")
+        with open(path, "a+b") as fh:
+            if os.name == "nt":
+                import msvcrt
+                import errno
+                import time
+                if os.fstat(fh.fileno()).st_size == 0:
+                    fh.write(b"\0")
+                    fh.flush()
+                while True:
+                    try:
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError as err:
+                        if err.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                            raise
+                        time.sleep(0.05)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            held.add(target)
+            try:
+                yield
+            finally:
+                held.remove(target)
+                if os.name == "nt":
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def mutates_project(fn):
+    @functools.wraps(fn)
+    def guarded(first, *args, **kwargs):
+        target = first.target if isinstance(first, argparse.Namespace) else first
+        with project_mutation(target):
+            return fn(first, *args, **kwargs)
+    return guarded
 
 
 def frontmatter(path):
@@ -148,9 +229,8 @@ def survey_codex(target):
             if os.path.exists(sk):
                 fm = frontmatter(sk)
                 skills.append({"name": fm.get("name", d), "plugin": "project", "description": fm.get("description", ""), "path": sk.replace(os.sep, "/")})
-    proj_hooks = load_json(os.path.join(target, ".codex", "hooks.json"))
-    if not str(proj_hooks.get("description", "")).startswith("written by hunsu lock"):   # hunsu's own materialization of the plugins' hooks: those are counted as the plugins'
-        hooks += hook_entries(proj_hooks.get("hooks"), "project")
+    proj_hooks = codex_project_hooks(target, plugins)
+    hooks += hook_entries(proj_hooks.get("hooks"), "project")
     user_hooks = {k: v for k, v in (conf.get("hooks") or {}).items() if k != "state"}
     hooks += hook_entries(user_hooks, "user")
     modes = sorted({h["source"] for h in hooks if h["event"] == "SessionStart"})
@@ -293,6 +373,7 @@ def cmd_survey(args):
     return 0
 
 
+@mutates_project
 def cmd_init(args):
     path = os.path.join(args.target, MANIFEST)
     if os.path.exists(path):
@@ -1250,6 +1331,7 @@ def judgments_status(manifest, s, target):
     return j, stale if stale["situations"] or stale["unclustered"] else {}
 
 
+@mutates_project
 def cmd_judge(args):
     """Two stages, both done by a judge the host runs (read-only, fixed schema). hunsu packs and unpacks; it does not judge.
 
@@ -1596,6 +1678,7 @@ def write_conflicts_doc(target, doc, manifest):
         fh.write("\n".join(lines))
 
 
+@mutates_project
 def cmd_remove(args):
     path = os.path.join(args.target, MANIFEST)
     manifest = load_json(path)
@@ -1616,6 +1699,7 @@ def cmd_remove(args):
 LOCK = "hunsu.lock.json"
 
 
+@mutates_project
 def cmd_install(args):
     """Make this machine match the manifest: add each plugin's marketplace, install at project scope, then check.
 
@@ -2140,6 +2224,7 @@ def alternates_covering(roles, role):
     return [set(m.group(2).split("+")) for k in roles for m in [ALTERNATE.match(k)] if m and m.group(1) == role]
 
 
+@mutates_project
 def cmd_capability(args):
     """Record the project's answer for capabilities: `session` (the session does such work) or `alternates` (hired on a
     `<role>@<cap>` role). With `--alternates --host H`, the alternates themselves too: `<role>@<caps>` on H for every worker
@@ -2232,6 +2317,7 @@ def cmd_role(args):
     return cmd_role_add(args) if args.action == "add" else cmd_role_list(args)
 
 
+@mutates_project
 def cmd_role_add(args):
     """Write `NAME@CAP` into hunsu.json `roles`: ROLE's provider as argv, on another host. Read where it is written: hunsu.json."""
     path = os.path.join(args.target, MANIFEST)
@@ -2320,6 +2406,7 @@ def cmd_role_list(args):
     return 0
 
 
+@mutates_project
 def cmd_lock(args):
     """Snapshot of the resolved environment. Written only when check has no errors; warnings are recorded, not hidden."""
     dev = load_json(os.path.join(args.target, LOCAL)).get("dev", {})
@@ -2639,12 +2726,13 @@ def stray_paths_reason(found):
                      for name, tok, v, root in found)
 
 
-def materialize_codex_hooks(target, manifest, s):
-    """Codex runs a project's .codex/hooks.json, not a plugin's own hooks. So the lock writes the locked plugins' hooks/codex.json
-    there, `${PLUGIN_ROOT}` resolved to each plugin's root on this machine — a machine file, ignored by git, remade by every lock."""
+CODEX_HOOK_PROVENANCE = "written by hunsu lock; managed hooks: "
+
+
+def codex_plugin_hooks(plugins):
+    """Render plugin hook groups exactly as Codex will run them on this machine."""
     merged = {}
-    for name, want in manifest["plugins"].items():
-        p = enabled(s, name, want)
+    for p in plugins:
         if not p:
             continue
         declared = load_json(os.path.join(p["path"], "hooks", "codex.json")).get("hooks") or {}
@@ -2655,14 +2743,63 @@ def materialize_codex_hooks(target, manifest, s):
                 py = "python3" if shutil.which("python3") else "python"
                 text = re.sub(r'(?<=")python3? (?=\\")', py + " ", text)
                 merged.setdefault(event, []).append(json.loads(text))
+    return merged
+
+
+def codex_project_hooks(target, plugins):
+    """Remove only previously generated groups, preserving the project's own additions and edits.
+
+    Provenance lives in Codex's supported description field so hooks and ownership change in one atomic write. Older
+    files have only a marker: subtract exact matches to known plugin groups, retaining anything we cannot identify.
+    """
+    doc = load_json(os.path.join(target, ".codex", "hooks.json"))
+    description = doc.get("description", "")
+    if not isinstance(description, str) or not description.startswith("written by hunsu lock"):
+        return doc
+    if description.startswith(CODEX_HOOK_PROVENANCE):
+        try:
+            record = json.loads(description[len(CODEX_HOOK_PROVENANCE):])
+            managed = record["hooks"]
+            if not isinstance(managed, dict) or any(not isinstance(groups, list) for groups in managed.values()):
+                raise ValueError("invalid managed hooks")
+        except (ValueError, KeyError, TypeError):
+            raise SystemExit("invalid hunsu hook provenance in .codex/hooks.json — restore its description before locking")
+        if "description" in record:
+            doc["description"] = record["description"]
+        else:
+            doc.pop("description", None)
+    else:
+        managed = codex_plugin_hooks(plugins.values())
+        doc.pop("description", None)
+    own = {}
+    for event, groups in (doc.get("hooks") or {}).items():
+        remaining = list(groups)
+        for generated in managed.get(event, []):
+            if generated in remaining:
+                remaining.remove(generated)   # one owned occurrence; identical project duplicates remain the project's
+        if remaining:
+            own[event] = remaining
+    doc["hooks"] = own
+    return doc
+
+
+@mutates_project
+def materialize_codex_hooks(target, manifest, s):
+    """Keep project hooks and replace only hunsu's generated plugin groups."""
+    doc = codex_project_hooks(target, s["plugins"])
+    managed = codex_plugin_hooks(enabled(s, name, want) for name, want in manifest["plugins"].items())
+    record = {"hooks": managed}
+    if "description" in doc:
+        record["description"] = doc["description"]
+    merged = doc.setdefault("hooks", {})
+    for event, groups in managed.items():
+        merged.setdefault(event, []).extend(groups)
+    doc["description"] = CODEX_HOOK_PROVENANCE + json.dumps(record, ensure_ascii=False, separators=(",", ":"))
     out = os.path.join(target, ".codex", "hooks.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    save_json(out, {"hooks": merged, "description": "written by hunsu lock from the locked plugins' hooks/codex.json; machine paths — not committed"})   # Codex accepts `description`, refuses unknown keys
-    ignore = os.path.join(target, ".gitignore")
-    lines = io.open(ignore, encoding="utf-8").read().split("\n") if os.path.exists(ignore) else []
-    if ".codex/hooks.json" not in lines:
-        io.open(ignore, "a", encoding="utf-8", newline="\n").write(("" if not lines or lines[-1] == "" else "\n") + ".codex/hooks.json\n")
-    n = sum(len(v) for v in merged.values())
+    save_json(out, doc)
+    ensure_ignored(target, [".codex/hooks.json"])
+    n = sum(len(v) for v in managed.values())
     print("codex: %d hook group(s) from the locked plugins -> .codex/hooks.json (this machine's; run `codex` with hook trust, or exec with --dangerously-bypass-hook-trust)" % n)
 
 
@@ -2670,6 +2807,7 @@ def shareable(source):
     return source.startswith(("github:", "http"))
 
 
+@mutates_project
 def cmd_add(args):
     path = os.path.join(args.target, MANIFEST)
     manifest = load_json(path)
@@ -2753,15 +2891,18 @@ def tree_fingerprint(root):
     return h.hexdigest()[:12]
 
 
+@mutates_project
 def set_link(target, plugin, path):
     doc = load_json(os.path.join(target, LOCAL)) or {"links": {}}
+    linked = doc.setdefault("links", {})
     if path is None:
-        doc["links"].pop(plugin, None)
+        linked.pop(plugin, None)
     else:
-        doc["links"][plugin] = path.replace(os.sep, "/")
+        linked[plugin] = path.replace(os.sep, "/")
     save_json(os.path.join(target, LOCAL), doc)
 
 
+@mutates_project
 def cmd_dev(args):
     """Run a plugin's working source in this project on this machine only — to try an unreleased change in a project whose
     committed settings install the released one (a public project cannot name a local marketplace). `.claude/settings.local.json`
@@ -2834,6 +2975,7 @@ def apply_dev_settings(doc, manifest):
     return doc
 
 
+@mutates_project
 def ensure_ignored(target, entries):
     path = os.path.join(target, ".gitignore")
     lines = io.open(path, encoding="utf-8").read().split("\n") if os.path.exists(path) else []
@@ -2843,6 +2985,7 @@ def ensure_ignored(target, entries):
             fh.write(("" if not lines or lines[-1] == "" else "\n") + "\n".join(missing) + "\n")
 
 
+@mutates_project
 def cmd_link(args):
     manifest = load_json(os.path.join(args.target, MANIFEST))
     path = args.path or (enabled(survey(args.target), args.plugin, manifest.get("plugins", {}).get(args.plugin)) or {}).get("source")
@@ -2853,6 +2996,7 @@ def cmd_link(args):
     return 0
 
 
+@mutates_project
 def cmd_unlink(args):
     set_link(args.target, args.plugin, None)
     print("unlinked %s" % args.plugin)
@@ -2871,6 +3015,7 @@ def stop(question, *lines):
     return DECISION
 
 
+@mutates_project
 def cmd_compose(args):
     """init -> add -> engines -> check -> lock, stopping wherever a human must decide. Re-run after each answer.
 

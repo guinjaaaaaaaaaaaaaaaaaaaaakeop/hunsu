@@ -5,6 +5,10 @@ Which plugins, skills, hooks and runtimes a project uses is declared in `hunsu.j
 and pinned in `hunsu.lock.json`, and checked on every session start. Everyone on the project
 develops in the same environment; what is not in the manifest is not part of the project.
 
+Commands that change a project serialize their reads and writes across local sessions. JSON files are replaced only
+after the complete document has been written, so an interrupted write leaves the previous document readable. This
+protects each file; host installs and changes spanning multiple files are not an all-or-nothing transaction.
+
 ## Install
 
 ```
@@ -404,8 +408,12 @@ says so (`session: sandboxed …`) when the lock's roles are commands. Codex sna
 - Hosts: Claude Code (`~/.claude`, or `CLAUDE_CONFIG_DIR`; `HUNSU_CLAUDE_DIR` for tests) and Codex
   (`~/.codex/config.toml` and its plugin cache; selected by `AGENT_HOST=codex`, `HUNSU_CODEX_DIR` for tests). On
   Codex, which no longer runs a plugin's own hooks, `lock` materializes the locked plugins' `hooks/codex.json` into
-  the project's `.codex/hooks.json` (machine paths; gitignored; remade by every lock; run `codex` with hook trust or
-  `exec --dangerously-bypass-hook-trust`). The survey reads Codex's own registry (`config.toml`: marketplaces,
+  the project's `.codex/hooks.json` (machine paths; gitignored; run `codex` with hook trust or
+  `exec --dangerously-bypass-hook-trust`). Existing project hooks, later additions, and edits survive each lock; only
+  the previously generated groups are replaced. Their ownership is recorded in the file's supported `description`
+  field, published atomically with the hooks. Keep that generated description when editing hooks. Older generated
+  files have no ownership snapshot: migration removes exact matches to currently known plugin groups and preserves
+  unrecognized groups, which may include an old plugin hook that needs manual removal. The survey reads Codex's own registry (`config.toml`: marketplaces,
   plugins, the user's hooks) and its plugin cache.
 
 - `judge_worker.py` starts its host session through `hostcall.py` — one host call for every worker of this family (hunsu's judge, mangsang's judge, dwitbuk's eyes,

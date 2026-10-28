@@ -1765,6 +1765,167 @@ def test_check_says_a_judgment_read_from_a_live_session_is_state_bound_and_a_sta
         assert run("judge", "request", "--target", h.target, "--out", d, "--stale")[1].strip() == "nothing stale"
 
 
+def await_file(path, child):
+    import time
+    until = time.monotonic() + 10
+    while not os.path.exists(path):
+        if child.poll() is not None:
+            raise AssertionError("child exited before its checkpoint: %s" % child.communicate())
+        if time.monotonic() >= until:
+            raise AssertionError("child did not reach " + path)
+        time.sleep(0.01)
+
+
+def test_parallel_local_changes_keep_both_links_and_other_local_settings():
+    """Two actual processes overlap their local read/modify/write; the second must read the first's committed update."""
+    with tempfile.TemporaryDirectory(prefix="hunsu-parallel-") as target:
+        hunsu.save_json(os.path.join(target, hunsu.LOCAL), {"settings": {"product": {"trial": True}}})
+        script = """
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+import hunsu
+target, name = sys.argv[2:]
+load = hunsu.load_json
+def paused(path):
+    doc = load(path)
+    if path == os.path.join(target, hunsu.LOCAL):
+        open(os.path.join(target, name + '.read'), 'w').close()
+        if name == 'alpha':
+            while not os.path.exists(os.path.join(target, 'release')): time.sleep(0.01)
+    return doc
+hunsu.load_json = paused
+open(os.path.join(target, name + '.started'), 'w').close()
+hunsu.set_link(target, name, '/checkout/' + name)
+"""
+        first = subprocess.Popen([sys.executable, "-c", script, HERE, target, "alpha"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        second = None
+        try:
+            await_file(os.path.join(target, "alpha.read"), first)
+            second = subprocess.Popen([sys.executable, "-c", script, HERE, target, "beta"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            await_file(os.path.join(target, "beta.started"), second)
+            import time
+            time.sleep(0.15)
+            assert not os.path.exists(os.path.join(target, "beta.read")), "second read entered while first mutation held the lock"
+            write(os.path.join(target, "release"), "")
+            assert first.communicate(timeout=10) == (b"", b"") and first.returncode == 0
+            assert second.communicate(timeout=10) == (b"", b"") and second.returncode == 0
+            assert hunsu.load_json(os.path.join(target, hunsu.LOCAL)) == {
+                "settings": {"product": {"trial": True}}, "links": {"alpha": "/checkout/alpha", "beta": "/checkout/beta"}}
+        finally:
+            for child in (first, second):
+                if child is not None and child.poll() is None:
+                    child.kill(); child.communicate(timeout=10)
+
+
+def test_interrupted_json_publication_preserves_previous_document_and_releases_project_lock():
+    """Kill a writer after it emits partial JSON. Readers still see the complete previous local document, and retry works."""
+    with tempfile.TemporaryDirectory(prefix="hunsu-interrupted-") as target:
+        path = os.path.join(target, hunsu.LOCAL)
+        before = {"links": {"old": "/checkout/old"}}
+        hunsu.save_json(path, before)
+        script = """
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+import hunsu
+target = sys.argv[2]
+def partial(data, fh, **kwargs):
+    fh.write('{"incomplete":'); fh.flush()
+    open(os.path.join(target, 'partial'), 'w').close()
+    while True: time.sleep(1)
+hunsu.json.dump = partial
+hunsu.set_link(target, 'new', '/checkout/new')
+"""
+        child = subprocess.Popen([sys.executable, "-c", script, HERE, target], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            await_file(os.path.join(target, "partial"), child)
+            assert hunsu.load_json(path) == before
+            child.kill(); child.communicate(timeout=10)
+            assert hunsu.load_json(path) == before
+            done = subprocess.run([sys.executable, os.path.join(HERE, "hunsu.py"), "link", "new", "/checkout/new", "--target", target],
+                                  capture_output=True, text=True, timeout=10)
+            assert done.returncode == 0, done.stderr
+            assert hunsu.load_json(path)["links"] == {"old": "/checkout/old", "new": "/checkout/new"}
+        finally:
+            if child.poll() is None:
+                child.kill(); child.communicate(timeout=10)
+
+
+def test_failed_json_replace_keeps_previous_document_and_cleans_temporary_file():
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix="hunsu-publication-") as target:
+        path = os.path.join(target, hunsu.LOCK)
+        hunsu.save_json(path, {"plugins": {"old": {"version": "1.0.0"}}})
+        before = io.open(path, "rb").read()
+        with patch.object(hunsu.os, "replace", side_effect=OSError("injected replace failure")):
+            try:
+                hunsu.save_json(path, {"plugins": {"new": {"version": "2.0.0"}}})
+            except OSError:
+                pass
+            else:
+                raise AssertionError("replace failure was hidden")
+        assert io.open(path, "rb").read() == before
+        assert os.listdir(target) == [hunsu.LOCK]
+
+
+def test_codex_lock_preserves_project_hooks_and_tracks_only_generated_groups():
+    from unittest.mock import patch
+    if sys.version_info < (3, 11):
+        raise Skip("Codex survey requires Python 3.11+")
+    with tempfile.TemporaryDirectory(prefix="hunsu-hook-preserve-") as target:
+        cache = os.path.join(target, "host")
+        root = os.path.join(cache, "plugins", "cache", "market", "alpha", "1.0.0")
+        write(os.path.join(root, ".codex-plugin", "plugin.json"), {"name": "alpha", "version": "1.0.0"})
+        generated = {"hooks": [{"type": "command", "command": "python3 plugin_guard.py"}]}
+        custom = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 custom_guard.py", "timeout": 17}]}
+        added = {"hooks": [{"type": "command", "command": "python3 added_later.py"}]}
+        plugin_hooks_path = os.path.join(root, "hooks", "codex.json")
+        write(plugin_hooks_path, {"hooks": {"PreToolUse": [generated]}})
+        write(os.path.join(cache, "config.toml"), '[marketplaces.market]\nsource_type = "git"\nsource = "https://github.com/org/plugins"\n[plugins."alpha@market"]\nenabled = true\n')
+        path = os.path.join(target, ".codex", "hooks.json")
+        write(path, {"description": "Our project hooks", "hooks": {"PreToolUse": [custom]}})
+        write(os.path.join(target, hunsu.MANIFEST), {"plugins": {"alpha": {"version": "1.0.0", "source": "github:org/plugins", "marketplace": "market"}}, "engines": {}, "judge": "skip"})
+        with patch.object(hunsu, "HOST", "codex"), patch.object(hunsu, "CODEX", cache):
+            assert run("lock", "--target", target)[0] == 0
+            doc = hunsu.load_json(path)
+            assert doc["hooks"] == {"PreToolUse": [custom, generated]}, doc
+            assert run("lock", "--target", target)[0] == 0
+            assert hunsu.load_json(path) == doc, "repeat lock must not duplicate project or generated hooks"
+            srv = hunsu.survey(target)
+            assert [(h["source"], h["command"]) for h in srv["hooks"]] == [
+                ("plugin:alpha", "python3 plugin_guard.py"), ("project", "python3 custom_guard.py")]
+            doc["hooks"]["Stop"] = [added]
+            hunsu.save_json(path, doc)
+            # Remove the plugin: ownership must still remove its old group, retaining both project groups.
+            manifest(target, plugins={})
+            assert run("lock", "--target", target)[0] == 0
+            assert hunsu.load_json(path)["hooks"] == {"PreToolUse": [custom], "Stop": [added]}
+            own = hunsu.codex_project_hooks(target, hunsu.survey(target)["plugins"])
+            assert own["description"] == "Our project hooks"
+            assert {h["command"] for h in hunsu.load_json(os.path.join(target, hunsu.LOCK))["hooks"] if h["source"] == "project"} == {
+                "python3 custom_guard.py", "python3 added_later.py"}
+
+
+def test_codex_legacy_hook_migration_and_edits_preserve_unowned_content():
+    with tempfile.TemporaryDirectory(prefix="hunsu-hook-legacy-") as target:
+        root = os.path.join(target, "plugin")
+        generated = {"hooks": [{"type": "command", "command": "python3 original.py"}]}
+        custom = {"hooks": [{"type": "command", "command": "python3 custom.py"}]}
+        write(os.path.join(root, "hooks", "codex.json"), {"hooks": {"PreToolUse": [generated]}})
+        plugin = {"name": "alpha", "marketplace": "market", "path": root}
+        srv = {"plugins": {"alpha@market": plugin}}
+        mf = {"plugins": {"alpha": {"marketplace": "market"}}}
+        path = os.path.join(target, ".codex", "hooks.json")
+        write(path, {"description": "written by hunsu lock from the locked plugins' hooks/codex.json; machine paths — not committed",
+                     "hooks": {"PreToolUse": [generated, custom]}})
+        hunsu.materialize_codex_hooks(target, mf, srv)
+        assert hunsu.load_json(path)["hooks"] == {"PreToolUse": [custom, generated]}
+        doc = hunsu.load_json(path)
+        doc["hooks"]["PreToolUse"][1]["hooks"][0]["command"] = "python3 edited.py"
+        hunsu.save_json(path, doc)
+        hunsu.materialize_codex_hooks(target, {"plugins": {}}, srv)
+        assert [g["hooks"][0]["command"] for g in hunsu.load_json(path)["hooks"]["PreToolUse"]] == ["python3 custom.py", "python3 edited.py"]
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
