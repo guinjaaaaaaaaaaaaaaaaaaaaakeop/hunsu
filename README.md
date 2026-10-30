@@ -488,9 +488,9 @@ so an unbumped edit is a copy nobody can tell from the old one. **patch**: behav
 unchanged.
 **minor**: a new command, skill, field, hook or artifact key; what exists keeps working. **major**: an artifact type,
 lock or record that other products read changes shape, or a supported Python or host version is dropped (an `engines`
-floor raised): a machine that ran the old release may not run the new one. The `python >=3.11` floor in this source
-drops 3.9 and 3.10, so it ships with 2.0, not a patch; until then the manifests here still say 1.15.1, the released
-version, whose root and Claude manifests declare `>=3.9`. hunsu's `check` fails a linked plugin whose source differs from the
+floor raised): a machine that ran the old release may not run the new one. hunsu 2.0.0 is such a release: it raises
+the `python` floor to `>=3.11` in all three manifests, dropping 3.9 and 3.10 (the 1.x root and Claude manifests declared
+`>=3.9`). hunsu's `check` fails a linked plugin whose source differs from the
 installed
 copy under one version; for a locally linked plugin, `hunsu install --refresh <plugin>` re-snapshots after the bump.
 
