@@ -3,7 +3,7 @@
   "name": "hunsu",
   "version": "1.15.1",
   "engines": {
-    "python": ">=3.9"
+    "python": ">=3.11"
   },
   "records": [
     "hunsu.json",

@@ -2129,8 +2129,10 @@ SANDBOX_LACKS = {"codex": ("loopback", "network"), "claude": ()}
 DECISIONS = ("alternates", "session")   # alternates: such work is hired on a `<role>@<cap>` role; session: the session does it
 ALTERNATE = re.compile(r"^([A-Za-z0-9_.-]+)@([a-z0-9-]+(?:\+[a-z0-9-]+)*)$")
 CAPABILITY_HELP = ("the project's answer, once: do hired hands need loopback (a local port: a dev server like `wrangler dev`) or the "
-                   "network, which a Codex worker's sandbox lacks? `--session`: the session does such work; `--alternates`: it is hired "
-                   "on a `<role>@<cap>` role. Written to hunsu.json `capabilities`")
+                   "network? The current routing table models Codex workers as lacking both; it is not a live capability probe. "
+                   "`--session`: the session does such work; `--alternates`: it is hired "
+                   "on a `<role>@<cap>` role. Writes hunsu.json `capabilities`, and `roles` when --host creates alternates; "
+                   "lock new role providers before use")
 ROLE_HELP = ("a role's capability alternates (`<role>@<cap>[+<cap>]`, read by chongdae from the lock): `add NAME@CAP --from ROLE --host H` "
              "copies ROLE's provider onto another host into hunsu.json; `list` (read-only) shows the roles and their alternates")
 

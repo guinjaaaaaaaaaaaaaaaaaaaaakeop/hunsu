@@ -9,7 +9,13 @@ Commands that change a project serialize their reads and writes across local ses
 after the complete document has been written, so an interrupted write leaves the previous document readable. This
 protects each file; host installs and changes spanning multiple files are not an all-or-nothing transaction.
 
+Start with [installation](#install) and [host entry points](#shared-instructions-and-host-entry-points).
+See [commands](#commands) for the CLI, [manifest](#manifest) for configuration,
+[limits](#limits) for integration caveats, and [versioning](#versioning) for releases and updates.
+
 ## Install
+
+Python 3.11 or newer is required on both hosts. Ensure `python3` on the host's PATH selects that interpreter.
 
 ```
 claude plugin marketplace add guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu
@@ -25,16 +31,31 @@ codex plugin marketplace add guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu
 codex plugin add hunsu@hunsu
 ```
 
-At session start, Codex asks you to review and trust hunsu's bundled hook, then runs `hooks/session_start.py` with
-`python`. The hook adds the same one-line lock status described below to the session context. Inspect or change hook
-trust with `/hooks`.
+For this adapter, `lock` materializes the locked plugins' `hooks/codex.json` into the project's
+`.codex/hooks.json`. Review and trust those project hooks in Codex. The declared SessionStart hook runs
+`hooks/session_start.py` with `python3` to report lock status; installation alone does not materialize it.
+The host integration limits below distinguish declared hooks from verified behavior.
 
 Codex discovers the existing `compose` skill as `hunsu:compose`. Invoke it with `$hunsu:compose`, or select it from
 `/skills`; you can also ask Codex to compose, check, or lock the project environment in plain language. The engine
 commands remain `survey`, `init`, `add`, `check`, `lock`, and `compose`.
 
-Codex does not support plugin-defined custom slash commands, so the `/hunsu:*` commands below are available only in
-Claude Code. Codex also does not load plugins in its IDE extension.
+The `/hunsu:*` command files below are this repository's Claude Code adapters. On Codex, use the shared
+skill or the Python engine.
+
+## Shared instructions and host entry points
+
+[AGENTS.md](AGENTS.md) is the common guidance for maintaining this source checkout;
+[CLAUDE.md](CLAUDE.md) imports it for Claude Code compatibility. Plugin installation does not automatically
+load these repository instructions into the consuming project.
+
+For installed use, both hosts share [skills/compose/SKILL.md](skills/compose/SKILL.md) and `hunsu.py`.
+The `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` manifests expose host-specific packaging;
+`commands/` contains Claude entry points for individual engine actions, not a second compose workflow.
+Either host can call `python3 <plugin-root>/hunsu.py <command> --target <project>` directly;
+replace the angle-bracket placeholders with actual values and quote paths containing spaces.
+For Codex, set `AGENT_HOST=codex` when calling the engine from a shell so it selects the Codex registry.
+The installation instructions above and the limits below describe the host differences.
 
 ## What happens
 
@@ -160,8 +181,8 @@ is `check`'s to say. Exit 0
 ### `role add` / `role list`
 
 a role's capability alternates. chongdae hires `<role>@<cap>[+<cap>]` from the lock's `roles` for a task that requires
-those capabilities (`nitpick@loopback`: the same member on a host whose sandbox can bind a local port — Codex's cannot,
-Claude's can), and when a member lacks one it asks the person whether to add it. Yes is one command:
+those capabilities (`nitpick@loopback`: the same member on a worker adapter modeled as allowing a local port),
+and when a member lacks one it asks the person whether to add it. Yes is one command:
 
     hunsu role add nitpick@loopback --from nitpick --host claude [--model M] [--effort E] [--force]
 
@@ -179,14 +200,16 @@ records `"capabilities": {"<cap>": "alternates"}` (see `capability`), and says s
 ### `capability <cap>.. --session | --alternates [--host H [--model M] [--effort E]]`
 
 the project's answer, asked once at setup so a run never stops to ask: do hired hands need `loopback` (a local port: a
-dev server like `wrangler dev`) or the `network`? hunsu knows the host facts — a small table in `hunsu.py`
-(`SANDBOX_LACKS`): a Codex worker's sandbox has neither, a Claude worker's has both. `--session`: work a hired member's
+dev server like `wrangler dev`) or the `network`? The current `SANDBOX_LACKS` table in `hunsu.py`
+models Codex workers as lacking both and Claude workers as lacking neither. This is a fixed routing assumption,
+not a live capability probe or a guarantee for every host configuration. `--session`: work a hired member's
 sandbox cannot do is the session's; `--alternates`: it is hired on a `<role>@<cap>` role. The setup answer is one
 command — `hunsu capability loopback network --alternates --host claude` adds `<role>@<caps>` on that host for every
 worker role on a host lacking them, by `role add`'s rules (argv copied, host swapped, `--model`/`--effort` dropped unless
 given), skipping roles an alternate already covers; without `--host` it records the decision only (`role add` records it
-too, for one role). Writes `hunsu.json` `capabilities` only — chongdae reads it there, no lock needed: undecided
-or `session` → the session does such work; `alternates` with a `<role>@<cap>` role → hired there
+too, for one role). Writes `hunsu.json` `capabilities`, and also `roles` when `--host` creates alternates.
+Chongdae reads the capability decision from the manifest; new role providers must be resolved with `hunsu lock`
+before use. Undecided or `session` → the session does such work; `alternates` with a `<role>@<cap>` role → hired there.
 
 ### `lock`
 
@@ -327,7 +350,7 @@ with a mode every group is judged (cost: 1 + groups calls).
 
 ```json
 {
-  "engines": {"claude-code": ">=2.1", "python": ">=3.9", "node": ">=20"},
+  "engines": {"claude-code": ">=2.1", "python": ">=3.11", "node": ">=20"},
   "plugins": {"hacheong": {"version": "1.1.0", "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hacheong"}},
   "resolutions": {"review": "dwitbuk"},
   "local-hooks-ok": ["my-observer.py"]
@@ -335,11 +358,12 @@ with a mode every group is judged (cost: 1 + groups calls).
 ```
 
 - `engines` — floors the team requires. `lock` records what this machine actually had. A plugin may declare its own
-  floor (`"engines": {"python": ">=3.9"}` in its plugin.json, npm's convention); `check` then requires the team's
+  floor (`"engines": {"python": ">=3.11"}` in its plugin.json, npm's convention); `check` then requires the team's
   floor to cover it and this machine to meet it, so a plugin whose workers need a newer runtime fails as one line
-  here, not as a traceback in a worker later. The five products declare `python >=3.9`. One exception above that
-  floor: the Codex survey reads `~/.codex/config.toml` with `tomllib` (3.11+); on an older interpreter it refuses with
-  that reason instead of a traceback.
+  here, not as a traceback in a worker later. The six active products (hunsu, chongdae, mangsang, jokbo, hacheong,
+  dwitbuk) declare `python >=3.11` in their root, Claude and Codex manifests. This is the supported minimum,
+  not a claim that every runtime path has been tested on each newer Python version. The Codex survey reads `~/.codex/config.toml` with
+  `tomllib` (3.11+); on an older interpreter it refuses with that reason instead of a traceback.
 - `roles` — the project's declaration of who does what: `{"implementer": "hacheong:build", "verifier": "dwitbuk:eyes",
   "planner": "session"}`. A provider is `session`, an argv (`["python3", "{plugin:NAME}/worker.py", "--request",
   "{request}", "--response", "{response}"]`), or `plugin:role` — the last only when that plugin's plugin.json declares
@@ -382,18 +406,18 @@ with a mode every group is judged (cost: 1 + groups calls).
 
 ## Codex and the sandbox
 
-A Codex session under `read-only` or `workspace-write` cannot start a nested `codex exec` (the workers: a judge,
-dakdol, the eyes) — it dies at "failed to initialize in-process app-server client: Operation not permitted". So a
-session that drives workers runs unsandboxed (`codex exec --dangerously-bypass-approvals-and-sandbox
---dangerously-bypass-hook-trust`), and chongdae's write guard is the guard; or the workers run outside the session (a
-person, a runner, a native subagent — see chongdae's `native:` providers). `check` run from inside a sandboxed session
-says so (`session: sandboxed …`) when the lock's roles are commands. Codex snapshots a plugin at `plugin add`;
+Nested `codex exec` workers have failed in tested `read-only` and `workspace-write` sessions with
+"failed to initialize in-process app-server client: Operation not permitted". The adapter's sandbox detection
+reports this limitation; it does not probe whether a particular host configuration can launch a nested process.
+Use a worker runner with the required permissions or the host's native subagents (see chongdae's `native:`
+providers). A chongdae write guard coordinates project writes; it does not replace a host security sandbox.
+`check` run from inside a detected sandbox says so (`session: sandboxed …`) when the lock's roles are commands.
+Codex snapshots a plugin at `plugin add`;
 `install --refresh` re-snapshots.
 
 ## Limits
 
-- Hooks cannot be disabled per project on any host; user-level hooks are reported, not blocked. Project-level hooks
-  are the project's and are managed here.
+- Hunsu reports user-level hooks; it does not disable them for a project. Project-level hooks are managed here.
 - The sentinel judges plugin skills (`plugin:name`) and the person's own skills, which it knows by their file
   (`~/.claude/skills/<name>/SKILL.md`). Any other name without a prefix is a host built-in (`code-review`, `simplify`,
   `loop`) or the project's own skill and passes — built-ins are never guessed at. The person's own CLAUDE.md is said by
@@ -451,7 +475,23 @@ unchanged.
 lock or
 record that other products read changes shape. hunsu's `check` fails a linked plugin whose source differs from the
 installed
-copy under one version; `hunsu install --refresh <plugin>` recopies after the bump.
+copy under one version; for a locally linked plugin, `hunsu install --refresh <plugin>` re-snapshots after the bump.
+
+### Release and adoption
+
+Documentation and shared instruction edits also need a patch bump when interfaces stay unchanged.
+Keep the version equal in `plugin.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
+and `.claude-plugin/marketplace.json` (both `metadata.version` and this product's `plugins[].version`).
+`.agents/plugins/marketplace.json` currently has no version field; verify its product name and source path,
+but do not invent a version field there.
+
+Before publication, run the relevant checks in **Self-check** for behavior changes; for documentation-only
+changes, verify links, command examples, imports and manifest consistency, plus `git diff --check`.
+Publish the checked commit using this repository's existing release convention. Publication does not update
+consumer installations: update the plugin through the host's supported workflow, reconcile the consuming
+project's declared environment and lock if managed, and start a new host session to apply the installation.
+Report publication, project adoption and live-host verification separately. Refreshing a locally linked
+plugin is not an update procedure for every remote installation.
 
 ## Self-check
 
