@@ -361,7 +361,8 @@ with a mode every group is judged (cost: 1 + groups calls).
   floor (`"engines": {"python": ">=3.11"}` in its plugin.json, npm's convention); `check` then requires the team's
   floor to cover it and this machine to meet it, so a plugin whose workers need a newer runtime fails as one line
   here, not as a traceback in a worker later. The six active products (hunsu, chongdae, mangsang, jokbo, hacheong,
-  dwitbuk) declare `python >=3.11` in their root, Claude and Codex manifests. This is the supported minimum,
+  dwitbuk) declare `python >=3.11` in the root, Claude and Codex manifests of their source; an installed copy of an
+  earlier release may still declare `>=3.9`, and that is the floor `check` reads for it. This is the supported minimum,
   not a claim that every runtime path has been tested on each newer Python version. The Codex survey reads `~/.codex/config.toml` with
   `tomllib` (3.11+); on an older interpreter it refuses with that reason instead of a traceback.
 - `roles` — the project's declaration of who does what: `{"implementer": "hacheong:build", "verifier": "dwitbuk:eyes",

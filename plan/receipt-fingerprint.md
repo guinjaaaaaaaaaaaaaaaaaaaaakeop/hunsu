@@ -145,6 +145,14 @@ instruction in these docs says `python3` to match. Step 1 of `skills/compose/SKI
 `python`; `README.md`'s reporter argv example uses `"python3"`; its Self-check line runs `python3 test_hunsu.py`. Nothing
 else changes: other documents are not swept for the word.
 
+## Q-floor-wording
+
+Found by the fresh eyes after Q-prior-adoption: the adopted `engines` bullet says the six active products "declare
+`python >=3.11` in their root, Claude and Codex manifests", in a bullet about the floor `check` reads from each installed
+plugin; most of those products' releases still declare `>=3.9`. The sentence says it of their source manifests, and that
+an installed copy of an earlier release may still declare `>=3.9`, which is the floor `check` reads for it. Nothing else in
+the bullet or the README changes.
+
 ## Out of scope
 
 No version bump and no change to `plugin.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` or marketplace
