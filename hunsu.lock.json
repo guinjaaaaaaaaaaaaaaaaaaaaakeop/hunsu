@@ -1,0 +1,495 @@
+{
+  "artifact-type": "hunsu/lock@1",
+  "host": "claude-code",
+  "engines": {
+    "claude-code": "2.1.314",
+    "python": "3.12.15"
+  },
+  "plugins": {
+    "hunsu": {
+      "version": "1.15.1",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu",
+      "marketplace": "hunsu",
+      "fingerprint": "506135a169ad"
+    },
+    "chongdae": {
+      "version": "1.24.0",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/chongdae",
+      "marketplace": "chongdae",
+      "fingerprint": "2ebc633b588f"
+    },
+    "mangsang": {
+      "version": "1.19.3",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/mangsang",
+      "marketplace": "mangsang",
+      "fingerprint": "16820498c0f4"
+    },
+    "jokbo": {
+      "version": "1.8.1",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/jokbo",
+      "marketplace": "jokbo",
+      "fingerprint": "e29b4880489d"
+    },
+    "hacheong": {
+      "version": "1.12.1",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hacheong",
+      "marketplace": "hacheong",
+      "fingerprint": "cda16204ca77"
+    },
+    "dwitbuk": {
+      "version": "1.16.0",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/dwitbuk",
+      "marketplace": "dwitbuk",
+      "fingerprint": "51128fee56ee"
+    }
+  },
+  "skills": [
+    "chongdae:run",
+    "dwitbuk:review",
+    "hacheong:hire",
+    "hunsu:compose",
+    "jokbo:read",
+    "mangsang:operate"
+  ],
+  "denied": [],
+  "skills-fingerprint": "fc6974514c9c",
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "matcher": "startup|resume|clear|compact",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\"",
+      "source": "plugin:chongdae"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pre_write.py\"",
+      "source": "plugin:chongdae"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pre_bash.py\"",
+      "source": "plugin:chongdae"
+    },
+    {
+      "event": "SessionStart",
+      "matcher": "startup|resume|clear|compact",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\"",
+      "source": "plugin:dwitbuk"
+    },
+    {
+      "event": "Stop",
+      "matcher": "",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stop_eyes.py\"",
+      "source": "plugin:dwitbuk"
+    },
+    {
+      "event": "SessionStart",
+      "matcher": "startup|resume|clear|compact",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\"",
+      "source": "plugin:hunsu"
+    },
+    {
+      "event": "UserPromptSubmit",
+      "matcher": "*",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt_submit.py\"",
+      "source": "plugin:hunsu"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Skill",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pre_skill.py\"",
+      "source": "plugin:hunsu"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pre_bash.py\"",
+      "source": "plugin:hunsu"
+    },
+    {
+      "event": "SessionStart",
+      "matcher": "startup|resume|clear|compact",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\"",
+      "source": "plugin:jokbo"
+    },
+    {
+      "event": "UserPromptSubmit",
+      "matcher": "*",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt.py\"",
+      "source": "plugin:jokbo"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "*",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pre_tool.py\"",
+      "source": "plugin:jokbo"
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "*",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_tool.py\"",
+      "source": "plugin:jokbo"
+    },
+    {
+      "event": "Stop",
+      "matcher": "",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stop.py\"",
+      "source": "plugin:jokbo"
+    },
+    {
+      "event": "PostToolUseFailure",
+      "matcher": "*",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/post_tool.py\"",
+      "source": "plugin:jokbo"
+    }
+  ],
+  "roles": {
+    "planner": "session",
+    "implementer": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "nitpick": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "teujip",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "quibble": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "sibi",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "newbie": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "chojja",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "verifier": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "reviewer": [
+      "python3",
+      "{plugin:dwitbuk}/dwitbuk.py",
+      "review",
+      "--target",
+      "."
+    ],
+    "coherence": [
+      "python3",
+      "{plugin:mangsang}/mangsang.py",
+      "impact",
+      "--target",
+      "."
+    ]
+  },
+  "roles-declared": {
+    "planner": "session",
+    "implementer": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "nitpick": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "teujip",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "quibble": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "sibi",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "newbie": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "chojja",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "verifier": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "reviewer": [
+      "python3",
+      "{plugin:dwitbuk}/dwitbuk.py",
+      "review",
+      "--target",
+      "."
+    ],
+    "coherence": [
+      "python3",
+      "{plugin:mangsang}/mangsang.py",
+      "impact",
+      "--target",
+      "."
+    ]
+  },
+  "reporters": {
+    "hunsu": [
+      "python3",
+      "{plugin:hunsu}/hunsu.py",
+      "check",
+      "--findings",
+      "--target",
+      "."
+    ],
+    "chongdae": [
+      "python3",
+      "{plugin:chongdae}/chongdae.py",
+      "report",
+      "--since",
+      "{since}",
+      "--target",
+      "."
+    ],
+    "mangsang": [
+      "python3",
+      "{plugin:mangsang}/mangsang.py",
+      "impact",
+      "--findings",
+      "--target",
+      "."
+    ]
+  },
+  "settings": {},
+  "resolutions": {
+    "reviewing a change (before a gate or a merge, disputing, testing or trying a slice)": {
+      "order": [
+        "chongdae:run",
+        "dwitbuk:review",
+        "hacheong:hire"
+      ],
+      "note": "setup session's merge of the judge's order proposals, not its deny of dwitbuk:review; no person read it. Applied by the hunsu setup session under the owner's delegated setup policy: chongdae's rule decides, so a finding is disposed --delegated only when the person handed it off",
+      "reviewed": false
+    },
+    "a run or review stopped at a decision for the person": {
+      "order": [
+        "chongdae:run",
+        "dwitbuk:review"
+      ],
+      "note": "judge's proposal, applied by the hunsu setup session under the owner's delegated setup policy; no person read it",
+      "reviewed": false
+    },
+    "asking what happened, what is open, or what was decided": {
+      "order": [
+        "jokbo:read",
+        "dwitbuk:review"
+      ],
+      "note": "judge's order proposal, applied by the hunsu setup session under the owner's delegated setup policy; no person read it. A review run by hand is written inside a chongdae run",
+      "reviewed": false
+    }
+  },
+  "record-paths": {
+    "hunsu": [
+      "hunsu-conflicts.md",
+      "hunsu-judgments.json",
+      "hunsu.json",
+      "hunsu.local.json",
+      "hunsu.lock.json"
+    ],
+    "chongdae": [
+      ".chongdae/"
+    ],
+    "mangsang": [
+      ".mangsang/",
+      "mangsang/"
+    ],
+    "jokbo": [
+      ".jokbo/"
+    ],
+    "hacheong": [],
+    "dwitbuk": [
+      ".dwitbuk/",
+      "reviews/"
+    ]
+  },
+  "reads": {
+    "hunsu": {
+      "decision": [
+        "python3",
+        "{plugin:hunsu}/hunsu.py",
+        "policy",
+        "--target",
+        "{target}"
+      ]
+    },
+    "chongdae": {
+      "file": [
+        "python3",
+        "{plugin:chongdae}/chongdae.py",
+        "show",
+        "--path",
+        "{path}",
+        "--target",
+        "{target}"
+      ],
+      "since": [
+        "python3",
+        "{plugin:chongdae}/chongdae.py",
+        "show",
+        "--since",
+        "{since}",
+        "--target",
+        "{target}"
+      ],
+      "note": [
+        "python3",
+        "{plugin:chongdae}/chongdae.py",
+        "show",
+        "--path",
+        "{path}",
+        "--brief",
+        "--target",
+        "{target}"
+      ],
+      "map": [
+        "python3",
+        "{plugin:chongdae}/chongdae.py",
+        "show",
+        "--brief",
+        "--target",
+        "{target}"
+      ],
+      "hands": [
+        "python3",
+        "{plugin:chongdae}/chongdae.py",
+        "show",
+        "--target",
+        "{target}",
+        "--after",
+        "{after}",
+        "--hands",
+        "{paths}"
+      ]
+    },
+    "mangsang": {
+      "file": [
+        "python3",
+        "{plugin:mangsang}/mangsang.py",
+        "lookup",
+        "{path}",
+        "--target",
+        "{target}"
+      ],
+      "decision": [
+        "python3",
+        "{plugin:mangsang}/mangsang.py",
+        "cq",
+        "--target",
+        "{target}"
+      ],
+      "note": [
+        "python3",
+        "{plugin:mangsang}/mangsang.py",
+        "lookup",
+        "{path}",
+        "--brief",
+        "--target",
+        "{target}"
+      ],
+      "map": [
+        "python3",
+        "{plugin:mangsang}/mangsang.py",
+        "concept",
+        "list",
+        "--brief",
+        "--target",
+        "{target}"
+      ]
+    },
+    "dwitbuk": {
+      "file": [
+        "python3",
+        "{plugin:dwitbuk}/dwitbuk.py",
+        "follow",
+        "--path",
+        "{path}",
+        "--target",
+        "{target}"
+      ],
+      "note": [
+        "python3",
+        "{plugin:dwitbuk}/dwitbuk.py",
+        "follow",
+        "--path",
+        "{path}",
+        "--brief",
+        "--target",
+        "{target}"
+      ]
+    }
+  },
+  "judge": "judged",
+  "warnings": []
+}

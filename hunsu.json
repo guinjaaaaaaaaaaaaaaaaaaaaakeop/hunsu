@@ -1,0 +1,172 @@
+{
+  "engines": {
+    "claude-code": ">=2.1",
+    "python": ">=3.11"
+  },
+  "plugins": {
+    "hunsu": {
+      "version": "1.15.1",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu",
+      "marketplace": "hunsu"
+    },
+    "chongdae": {
+      "version": "1.24.0",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/chongdae",
+      "marketplace": "chongdae"
+    },
+    "mangsang": {
+      "version": "1.19.3",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/mangsang",
+      "marketplace": "mangsang"
+    },
+    "jokbo": {
+      "version": "1.8.1",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/jokbo",
+      "marketplace": "jokbo"
+    },
+    "hacheong": {
+      "version": "1.12.1",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hacheong",
+      "marketplace": "hacheong"
+    },
+    "dwitbuk": {
+      "version": "1.16.0",
+      "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/dwitbuk",
+      "marketplace": "dwitbuk"
+    }
+  },
+  "roles": {
+    "planner": "session",
+    "implementer": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "nitpick": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "teujip",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "quibble": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "sibi",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "newbie": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "chojja",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "verifier": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "reviewer": [
+      "python3",
+      "{plugin:dwitbuk}/dwitbuk.py",
+      "review",
+      "--target",
+      "."
+    ],
+    "coherence": [
+      "python3",
+      "{plugin:mangsang}/mangsang.py",
+      "impact",
+      "--target",
+      "."
+    ]
+  },
+  "reporters": {
+    "hunsu": [
+      "python3",
+      "{plugin:hunsu}/hunsu.py",
+      "check",
+      "--findings",
+      "--target",
+      "."
+    ],
+    "chongdae": [
+      "python3",
+      "{plugin:chongdae}/chongdae.py",
+      "report",
+      "--since",
+      "{since}",
+      "--target",
+      "."
+    ],
+    "mangsang": [
+      "python3",
+      "{plugin:mangsang}/mangsang.py",
+      "impact",
+      "--findings",
+      "--target",
+      "."
+    ]
+  },
+  "resolutions": {
+    "reviewing a change (before a gate or a merge, disputing, testing or trying a slice)": {
+      "order": [
+        "chongdae:run",
+        "dwitbuk:review",
+        "hacheong:hire"
+      ],
+      "note": "setup session's merge of the judge's order proposals, not its deny of dwitbuk:review; no person read it. Applied by the hunsu setup session under the owner's delegated setup policy: chongdae's rule decides, so a finding is disposed --delegated only when the person handed it off",
+      "reviewed": false
+    },
+    "a run or review stopped at a decision for the person": {
+      "order": [
+        "chongdae:run",
+        "dwitbuk:review"
+      ],
+      "note": "judge's proposal, applied by the hunsu setup session under the owner's delegated setup policy; no person read it",
+      "reviewed": false
+    },
+    "asking what happened, what is open, or what was decided": {
+      "order": [
+        "jokbo:read",
+        "dwitbuk:review"
+      ],
+      "note": "judge's order proposal, applied by the hunsu setup session under the owner's delegated setup policy; no person read it. A review run by hand is written inside a chongdae run",
+      "reviewed": false
+    }
+  },
+  "local-hooks-ok": [],
+  "capabilities": {
+    "loopback": "session",
+    "network": "session"
+  }
+}

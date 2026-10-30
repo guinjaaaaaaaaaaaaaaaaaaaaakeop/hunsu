@@ -1,2 +1,6 @@
 __pycache__/
 hunsu.local.json
+.claude/settings.local.json
+hunsu-conflicts.md
+*-response.transcript.jsonl
+.hunsu-bootstrap/
