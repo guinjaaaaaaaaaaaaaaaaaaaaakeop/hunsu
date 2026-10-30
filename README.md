@@ -128,6 +128,12 @@ manifest, and `check` accepts exactly that content
 
 ### `check`
 
+`check` reads project data without writing project state, but rendering role prompts and modes may need temporary
+scratch files; `--remote` also needs scratch space for marketplace clones. If that space is unavailable, the command
+stops nonzero with `no writable temporary directory`, without a summary or findings document. Set `TMPDIR` to a writable
+directory or use a sandbox that allows writing there (Codex `workspace-write`). The mutation lock used by `compose`,
+`lock` and `judge` also requires writable temporary space.
+
 manifest vs this machine. `error`: missing/wrong-version plugin, engine below floor, runtime a hook needs is not on
 PATH, a skill name provided by two plugins with no resolution *when the project locks without a judge* (`"judge":
 "skip"`) — otherwise a shared name is the judge's question: calling is never ambiguous (`plugin:skill`), and a name is a

@@ -68,6 +68,28 @@ def save_json(path, data):
             os.unlink(temporary)
 
 
+class ScratchUnavailable(Exception):
+    """Scratch setup failed; never expose the OS error's machine paths."""
+
+
+@contextlib.contextmanager
+def scratch_space(needed):
+    try:
+        yield
+    except OSError:
+        _MODE_TEXT.clear()
+        _ROLE_PROMPT.clear()
+        raise ScratchUnavailable(
+            "no writable temporary directory for %s; set TMPDIR to a writable directory "
+            "or use a sandbox that allows writing there (Codex workspace-write)" % needed
+        ) from None
+
+
+def scratch_directory(prefix, needed):
+    with scratch_space(needed):
+        return tempfile.mkdtemp(prefix=prefix)
+
+
 _PROJECT_LOCKS = {}
 _PROJECT_LOCKS_GUARD = threading.Lock()
 _PROJECT_LOCK_DEPTH = threading.local()
@@ -91,10 +113,12 @@ def project_mutation(target):
         if target in held:
             yield
             return
-        directory = os.path.join(tempfile.gettempdir(), "hunsu-mutations")
-        os.makedirs(directory, exist_ok=True)
-        path = os.path.join(directory, hashlib.sha256(target.encode("utf-8")).hexdigest() + ".lock")
-        with open(path, "a+b") as fh:
+        with scratch_space("the mutation lock"):
+            directory = os.path.join(tempfile.gettempdir(), "hunsu-mutations")
+            os.makedirs(directory, exist_ok=True)
+            path = os.path.join(directory, hashlib.sha256(target.encode("utf-8")).hexdigest() + ".lock")
+            lock_file = open(path, "a+b")
+        with lock_file as fh:
             if os.name == "nt":
                 import msvcrt
                 import errno
@@ -1086,7 +1110,7 @@ def mode_text(h, s):
     key = (h["source"], h["command"], root, mode_script_fingerprint(h, s))   # an edited script under one root says something else
     if key in _MODE_TEXT:
         return _MODE_TEXT[key]
-    empty = tempfile.mkdtemp(prefix="hunsu-mode-")
+    empty = scratch_directory("hunsu-mode-", "rendering a mode's text")
     cmd = h["command"].replace("${CLAUDE_PLUGIN_ROOT}", root).replace("${PLUGIN_ROOT}", root)
     payload = json.dumps({"hook_event_name": "SessionStart", "source": "startup", "cwd": empty})   # no session id: hooks that record sessions skip
     env = dict(os.environ, CLAUDE_PLUGIN_ROOT=root, HUNSU_SURVEY="1", GIT_CEILING_DIRECTORIES=os.path.dirname(empty))   # git finds no repository above it
@@ -1165,7 +1189,7 @@ def role_prompts(manifest, s):
             mid = "%s:%s" % (name, role)
             if mid not in role_ids(manifest, s):
                 continue
-            tmp = tempfile.mkdtemp(prefix="hunsu-role-")
+            tmp = scratch_directory("hunsu-role-", "rendering role prompts")
             req = os.path.join(tmp, "request.json")
             # the stage a runner would send this role: the manifest's verifier gets `verify`, its implementer `build`, a role hired
             # around a task (before/after) its own name — the worker's prompt depends on it
@@ -1855,7 +1879,7 @@ def published_versions(url, names):
     marketplace update` stays the step that moves them. The plugin's own plugin.json at the published head wins over the
     listing's `version`, as for the local copy."""
     import posixpath, tempfile
-    tmp = tempfile.mkdtemp(prefix="hunsu-outdated-")
+    tmp = scratch_directory("hunsu-outdated-", "outdated's marketplace clone")
     try:
         ok, why = _git(["clone", "--quiet", "--depth", "1", "--no-checkout", "--filter=blob:none", url, os.path.join(tmp, "m")])
         if not ok:
@@ -3131,9 +3155,14 @@ def main(argv=None):
     p.add_argument("--effort", default=None, help="the alternates' effort on HOST")
     p.add_argument("--target", default=".")
     args = parser.parse_args(argv)
-    return {"role": cmd_role, "capability": cmd_capability, "survey": cmd_survey, "init": cmd_init, "add": cmd_add, "check": cmd_check,
-            "link": cmd_link, "unlink": cmd_unlink, "dev": cmd_dev, "lock": cmd_lock, "compose": cmd_compose,
-            "install": cmd_install, "judge": cmd_judge, "remove": cmd_remove, "policy": cmd_policy, "outdated": cmd_outdated}[args.cmd](args)
+    try:
+        return {"role": cmd_role, "capability": cmd_capability, "survey": cmd_survey, "init": cmd_init, "add": cmd_add, "check": cmd_check,
+                "link": cmd_link, "unlink": cmd_unlink, "dev": cmd_dev, "lock": cmd_lock, "compose": cmd_compose,
+                "install": cmd_install, "judge": cmd_judge, "remove": cmd_remove, "policy": cmd_policy, "outdated": cmd_outdated}[args.cmd](args)
+    except ScratchUnavailable as why:
+        command = args.cmd + (" " + args.mode if args.cmd == "judge" else "")
+        print("hunsu: %s: %s" % (command, why), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

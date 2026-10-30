@@ -62,6 +62,8 @@ def main():
             summary += " · %d plugin(s) behind a release available here" % behind
         state = "environment differs from hunsu.json" if done.returncode else "environment matches hunsu.json"
         msg = "hunsu: %s (%s). `%s \"%s\" check` for the list." % (state, summary, PY, ENGINE.replace(os.sep, "/"))
+        if done.returncode and "no writable temporary directory" in done.stderr:
+            msg = "hunsu: check could not complete — " + done.stderr.strip()
         lock = hunsu.load_json(os.path.join(cwd, "hunsu.lock.json"))
         roots = hunsu.roots_line(cwd)
         if roots:
