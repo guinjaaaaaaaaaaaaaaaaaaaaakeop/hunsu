@@ -1,0 +1,52 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "contract",
+    "role": "session",
+    "brief": "Write the task contract plan/receipt-fingerprint.md: the receipt-exclusion rule, the acceptance sentences (Q- sections) the tests writer, the builder and the verifier read, and what is out of scope — from the owner's delegated task statement and the released-engine reproduction",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [],
+    "gate": null,
+    "domain": "plan",
+    "scope": [
+      "plan/receipt-fingerprint.md"
+    ]
+  },
+  "seq": 1,
+  "added": "2026-10-30T06:50:34+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so"
+  ],
+  "checks": [],
+  "touched": [
+    "plan/receipt-fingerprint.md"
+  ],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "write ./plan/receipt-fingerprint.md"
+      ],
+      "commands-run": 2,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T06:50:34+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T06:51:29+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}
