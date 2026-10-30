@@ -270,5 +270,18 @@
   "done": {
     "at": "2026-10-30T06:56:48+00:00",
     "chongdae": "chongdae 1.24.0"
+  },
+  "seen-non-claims": {
+    "by": "verifier of receipt-fix",
+    "texts": [
+      "(provider) Q-no-migration: \"The remedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin> --take-content \\\"why\\\"` ...)\" is documented in README.md by the Q-docs task; test_hunsu.py does not assert README wording, as the contract decides.",
+      "(provider) Q-no-migration: 'computed for a fixture tree … with the current source gives 1.15.1's values' — the two literals were computed with the current hunsu.py, not cross-checked here against a separate copy of the locked 1.15.1. They rely on the session's statement that the two are byte-identical.",
+      "(provider) Q-exact-path: a case-variant root name (e.g. `.Codex-Marketplace-Install.json`) is not tested. On this case-insensitive macOS filesystem it is the same file as the receipt, so no test here can tell the two apart.",
+      "(provider) Q-cross-host is tested through the fake Claude host with a receipt added to the installed copy, or to a second copy registered as the install. No test runs `check` with AGENT_HOST=codex against a real or faked Codex plugin cache.",
+      "(provider) Q-receipt-ignored symlink case: the test raises Skip if the platform cannot make a symlink.",
+      "(provider) Already failing before these changes, and still failing on this machine: test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here, test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them, test_session_start_hook_reports_both_states. They fail the same way with the HEAD copy of test_hunsu.py, so `python3 test_hunsu.py` exits non-zero apart from these new tests."
+    ],
+    "at": "2026-10-30T07:00:44+00:00",
+    "chongdae": "chongdae 1.24.0"
   }
 }

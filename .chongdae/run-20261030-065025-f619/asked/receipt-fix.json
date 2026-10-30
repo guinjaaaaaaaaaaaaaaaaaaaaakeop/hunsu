@@ -1,0 +1,43 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "build",
+  "run": "run-20261030-065025-f619",
+  "task": "receipt-fix",
+  "role": "implementer",
+  "target": ".",
+  "goal": "Fix the confirmed hunsu tree_fingerprint false drift between identical Claude/Codex plugin payloads caused by Codex's root .codex-marketplace-install.json installer receipt: ignore that exact root path only, keep every real content change visible, and document that locks whose hash included the receipt need an explicit relock after payload verification",
+  "brief": "Make hunsu.py's tree_fingerprint leave out exactly the root-level file entry .codex-marketplace-install.json (Codex's installer receipt) and nothing else, per the contract sections; name the receipt in the function's docstring (Q-docs' last sentence). Change only tree_fingerprint in hunsu.py: test_hunsu.py is protected; hunsu.py also carries an earlier uncommitted CAPABILITY_HELP edit that is not this task's — keep it byte for byte. Do not touch README.md, plugin.json, .claude-plugin/plugin.json, .codex-plugin/plugin.json, skills/, AGENTS.md or CLAUDE.md; no version bump; never read or write a real plugin cache, ~/.claude, ~/.codex or another project. python3 test_hunsu.py must pass in full (python3 3.11+).",
+  "closes": [
+    "Q-receipt-ignored",
+    "Q-cross-host",
+    "Q-real-content",
+    "Q-exact-path",
+    "Q-no-migration",
+    "Q-suite"
+  ],
+  "contract": {
+    "Q-receipt-ignored": "contract/Q-receipt-ignored-6a7ce15a.md",
+    "Q-cross-host": "contract/Q-cross-host-8adde2a8.md",
+    "Q-real-content": "contract/Q-real-content-38eb1fce.md",
+    "Q-exact-path": "contract/Q-exact-path-89901250.md",
+    "Q-no-migration": "contract/Q-no-migration-a1e8777c.md",
+    "Q-suite": "contract/Q-suite-1c561f64.md"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+    ],
+    [
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "tests": [
+    "test_hunsu.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-065025-f619/local/receipt-fix.response.json"
+}

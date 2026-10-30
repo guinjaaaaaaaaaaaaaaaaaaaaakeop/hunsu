@@ -1,0 +1,230 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "receipt-fix",
+    "role": "implementer",
+    "brief": "Make hunsu.py's tree_fingerprint leave out exactly the root-level file entry .codex-marketplace-install.json (Codex's installer receipt) and nothing else, per the contract sections; name the receipt in the function's docstring (Q-docs' last sentence). Change only tree_fingerprint in hunsu.py: test_hunsu.py is protected; hunsu.py also carries an earlier uncommitted CAPABILITY_HELP edit that is not this task's — keep it byte for byte. Do not touch README.md, plugin.json, .claude-plugin/plugin.json, .codex-plugin/plugin.json, skills/, AGENTS.md or CLAUDE.md; no version bump; never read or write a real plugin cache, ~/.claude, ~/.codex or another project. python3 test_hunsu.py must pass in full (python3 3.11+).",
+    "closes": [
+      "Q-receipt-ignored",
+      "Q-cross-host",
+      "Q-real-content",
+      "Q-exact-path",
+      "Q-no-migration",
+      "Q-suite"
+    ],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "-c",
+        "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+      ],
+      [
+        "python3",
+        "test_hunsu.py"
+      ]
+    ],
+    "tests": [
+      "test_hunsu.py"
+    ],
+    "gate": null,
+    "domain": "code",
+    "scope": [
+      "hunsu.py"
+    ]
+  },
+  "seq": 5,
+  "added": "2026-10-30T06:58:47+00:00",
+  "response": {
+    "status": "done",
+    "summary": "Changed only tree_fingerprint to exclude the exact root receipt file and name it in the docstring. Protected tests and the existing CAPABILITY_HELP edit remain unchanged. Full suite passes with AGENT_WORKER unset.",
+    "verified": [
+      {
+        "check": "python3 -c \"assert __import__('sys').version_info >= (3, 11), __import__('sys').version\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 test_hunsu.py",
+        "exit": 1
+      },
+      {
+        "check": "git diff --check",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c \"import hashlib,pathlib; assert hashlib.sha256(pathlib.Path('test_hunsu.py').read_bytes()).hexdigest() == '6b24468dc7aaa861b9a29f70961ec85a554812039152ef8d335aed352c0bc67b'\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 test_hunsu.py",
+        "exit": 0
+      }
+    ],
+    "decisions": [],
+    "non-claims": [
+      "Initial suite run failed three hook tests because inherited AGENT_WORKER=1 suppresses hook output. The successful run used unset AGENT_WORKER in its shell.",
+      "README relock documentation belongs to the separate documentation task and was not changed.",
+      "No live-host verification was performed."
+    ],
+    "disputed-tests": [],
+    "worker": {
+      "host": "codex",
+      "model": "gpt-6-astra",
+      "effort": "medium"
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T07:00:24+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched_by_provider": [],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "host": "codex",
+    "model": "gpt-6-astra",
+    "effort": "medium",
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "update ./hunsu.py"
+      ],
+      "commands-run": 16,
+      "commands-failed": 2
+    }
+  },
+  "non-claims": [
+    "(provider) Initial suite run failed three hook tests because inherited AGENT_WORKER=1 suppresses hook output. The successful run used unset AGENT_WORKER in its shell.",
+    "(provider) README relock documentation belongs to the separate documentation task and was not changed.",
+    "(provider) No live-host verification was performed."
+  ],
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 -c 'assert __import__('\"'\"'sys'\"'\"').version_info >= (3, 11), __import__('\"'\"'sys'\"'\"').version'",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T07:00:24+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 test_hunsu.py",
+        "exit": 0,
+        "tail": [
+          "PASS test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host",
+          "PASS test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed",
+          "PASS test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short",
+          "PASS test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run",
+          "PASS test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated",
+          "all passed"
+        ],
+        "at": "2026-10-30T07:00:29+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T07:00:29+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 3,
+      "cost_usd": 0.0804942
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T07:00:44+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    ".claude-plugin/plugin.json": "c1a964f33a9104906f87e64c9ea78997d6567074",
+    ".gitignore": "bffddc5226b8b4d2de1eb75b9ffb1dce2ae28649",
+    "README.md": "051f274a457004aa77e7c59065d49b1dc9938b74",
+    "plugin.json": "7f990d192ba4e4ac1db7c00acfc0e2cddb54dedb",
+    "skills/compose/SKILL.md": "2e6d9b44c5b4ed430775ea5719ab04f80a26fa74",
+    "test_hunsu.py": "30ef319f3e59ddeed0e1a51d3bb393afbf9bb34f",
+    "AGENTS.md": "a2d25664fe92af537b3f8ba491cb9574650b6cef",
+    "CLAUDE.md": "c140473a3a5fbe89301c99d9d0d1b76c5971f2c3",
+    "plan/receipt-fingerprint.md": "d3d878360da9722f27fa81d77d6153e479eba668"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 3,
+    "cost_usd": 0.0804942,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "seen-non-claims": {
+    "by": "verifier of receipt-fix",
+    "texts": [
+      "(provider) Initial suite run failed three hook tests because inherited AGENT_WORKER=1 suppresses hook output. The successful run used unset AGENT_WORKER in its shell.",
+      "(provider) README relock documentation belongs to the separate documentation task and was not changed.",
+      "(provider) No live-host verification was performed."
+    ],
+    "at": "2026-10-30T07:00:44+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+    ],
+    [
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "touched": [
+    "hunsu.py"
+  ],
+  "done": {
+    "at": "2026-10-30T07:00:44+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}
