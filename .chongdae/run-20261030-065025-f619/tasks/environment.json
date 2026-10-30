@@ -1,0 +1,58 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "todo",
+  "def": {
+    "id": "environment",
+    "role": "session",
+    "brief": "Adopt the bootstrap's environment files (declared environment, lock, judge verdicts, project plugin enablement, ignore lines) into this run; the released hunsu check must report errors 0",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "{plugin:hunsu}/hunsu.py",
+        "check",
+        "--target",
+        "."
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "scope": [
+      ".claude/settings.json",
+      ".gitignore",
+      "hunsu-judgments.json",
+      "hunsu.json",
+      "hunsu.lock.json"
+    ]
+  },
+  "seq": 2,
+  "added": "2026-10-30T06:51:51+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Environment adoption, not a build: hunsu.json, hunsu.lock.json, hunsu-judgments.json, .claude/settings.json and the four .gitignore lines were written by the bootstrap session 5310f313 (released hunsu compose and lock under the owner's delegated setup policy); this task only adopts them into the run and checks them with the released hunsu check",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T06:51:51+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "adopted": [
+    {
+      "by": {
+        "agent": "claude-code claude-opus-5-5"
+      },
+      "why": "Written before this task existed by the bootstrap session 5310f313 (released hunsu init/compose/lock and claude plugin install, project scope); unchanged since the bootstrap's report — hashes match the session's baseline taken before this run",
+      "files": [
+        ".claude/settings.json",
+        ".gitignore",
+        "hunsu-judgments.json",
+        "hunsu.json",
+        "hunsu.lock.json"
+      ],
+      "at": "2026-10-30T06:51:58+00:00",
+      "chongdae": "chongdae 1.24.0"
+    }
+  ]
+}
