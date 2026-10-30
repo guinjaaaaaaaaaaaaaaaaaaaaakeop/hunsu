@@ -1926,6 +1926,265 @@ def test_codex_legacy_hook_migration_and_edits_preserve_unowned_content():
         assert [g["hooks"][0]["command"] for g in hunsu.load_json(path)["hooks"]["PreToolUse"]] == ["python3 custom.py", "python3 edited.py"]
 
 
+# Codex's marketplace installer writes this receipt at the root of each plugin copy it installs; Claude Code's copy of the
+# same release has none. The receipt is the installer's record, not the plugin's content (plan/receipt-fingerprint.md).
+RECEIPT = ".codex-marketplace-install.json"
+RECEIPT_DOC = {"source_type": "git", "source": "https://github.com/org/m1.git", "ref_name": "main", "sparse_paths": ["alpha"],
+               "revision": "0123456789abcdef0123456789abcdef01234567"}
+# hunsu 1.15.1's tree_fingerprint of `plugin(cache, "m1", "alpha", "1.0.0", ["build"])`, without and with RECEIPT_DOC at its
+# root (written by `write`). The second is what a lock written on Codex before the fix recorded.
+FP_1_15_1_NO_RECEIPT = "0d39d9e3a3b7"
+FP_1_15_1_WITH_RECEIPT = "57633aa9234d"
+
+
+def receipt_tree():
+    """A plugin tree in a temporary directory, no receipt. Returns (tmp, root); the caller removes tmp."""
+    tmp = tempfile.mkdtemp(prefix="hunsu-receipt-")
+    root = plugin(tmp, "m1", "alpha", "1.0.0", ["build"])
+    write(os.path.join(root, "hooks", "guard.py"), "print('guard')\n")
+    return tmp, root
+
+
+def receipt_host(h, extra=True):
+    """alpha@m1 1.0.0 installed without a receipt (as Claude Code installs it), added, and locked with a clean check."""
+    root = h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+    if extra:
+        write(os.path.join(root, "plugin.json"), {"name": "alpha", "version": "1.0.0", "description": "alpha"})
+        write(os.path.join(root, ".codex-plugin", "plugin.json"), {"name": "alpha", "version": "1.0.0", "description": "alpha"})
+        write(os.path.join(root, "hooks", "guard.py"), "print('guard')\n")
+    h.flush()
+    run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+    manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip")
+    code, out = run("lock", "--target", h.target)
+    assert code == 0, out
+    errors = hunsu.check(h.target)[0]
+    assert not errors, errors
+    return root
+
+
+def test_Q_receipt_ignored_one_value_across_all_six_receipt_states():
+    tmp, root = receipt_tree()
+    try:
+        path = os.path.join(root, RECEIPT)
+        values = {"absent": hunsu.tree_fingerprint(root)}
+        states = [("present", RECEIPT_DOC),
+                  ("another revision", dict(RECEIPT_DOC, revision="fedcba9876543210fedcba9876543210fedcba98")),
+                  ("another source", dict(RECEIPT_DOC, source="https://example.invalid/fork/m1.git")),
+                  ("empty", ""),
+                  ("not JSON", "this is not json {\n")]
+        for name, data in states:
+            write(path, data)
+            values[name] = hunsu.tree_fingerprint(root)
+        assert len(set(values.values())) == 1, values
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_Q_receipt_ignored_a_root_symlink_to_a_file_is_the_receipt_too():
+    tmp, root = receipt_tree()
+    try:
+        before = hunsu.tree_fingerprint(root)
+        target = os.path.join(tmp, "receipt-elsewhere.json")
+        write(target, RECEIPT_DOC)
+        try:
+            os.symlink(target, os.path.join(root, RECEIPT))
+        except (OSError, NotImplementedError) as err:
+            raise Skip("cannot make a symlink here: %s" % err)
+        assert hunsu.tree_fingerprint(root) == before
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_Q_receipt_ignored_the_receipt_is_neither_deleted_nor_edited_by_fingerprinting():
+    tmp, root = receipt_tree()
+    try:
+        path = os.path.join(root, RECEIPT)
+        write(path, RECEIPT_DOC)
+        data = io.open(path, "rb").read()
+        assert hunsu.tree_fingerprint(root) == hunsu.tree_fingerprint(root)
+        os.remove(path)
+        bare = hunsu.tree_fingerprint(root)
+        write(path, RECEIPT_DOC)
+        assert hunsu.tree_fingerprint(root) == bare
+        assert io.open(path, "rb").read() == data
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_Q_cross_host_a_lock_from_a_claude_copy_checks_clean_on_a_copy_with_the_receipt():
+    with Host() as h:
+        root = receipt_host(h)
+        write(os.path.join(root, RECEIPT), RECEIPT_DOC)   # the same payload as Codex installs it
+        errors = hunsu.check(h.target)[0]
+        assert not [e for e in errors if "content differs" in e], errors
+
+
+def test_Q_cross_host_a_second_copy_with_the_receipt_checks_clean():
+    with Host() as h:
+        root = receipt_host(h)
+        second = os.path.join(h.home, "codex-cache", "m1", "alpha", "1.0.0")
+        shutil.copytree(root, second)
+        write(os.path.join(second, RECEIPT), RECEIPT_DOC)
+        h.installed["alpha@m1"] = [{"installPath": second, "version": "1.0.0"}]
+        h.flush()
+        errors = hunsu.check(h.target)[0]
+        assert not [e for e in errors if "content differs" in e], errors
+
+
+def test_Q_cross_host_a_linked_source_without_the_receipt_is_its_installed_copy_with_one():
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.flush()
+        link = os.path.join(h.home, "checkout")
+        src = os.path.join(link, "alpha-src")
+        write(os.path.join(link, ".claude-plugin", "marketplace.json"), {"name": "m1", "plugins": [{"name": "alpha", "source": "./alpha-src"}]})
+        installed = h.installed["alpha@m1"][0]["installPath"]
+        shutil.copytree(installed, src)
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        assert run("link", "alpha", link, "--target", h.target)[0] == 0
+        manifest(h.target, engines={"claude-code": ">=0.0"})
+        errors = hunsu.check(h.target)[0]
+        assert not errors, errors
+        write(os.path.join(installed, RECEIPT), RECEIPT_DOC)
+        errors = hunsu.check(h.target)[0]
+        assert not [e for e in errors if "the linked source" in e or "differs from the installed copy" in e], errors
+        assert os.path.exists(os.path.join(installed, RECEIPT)) and not os.path.exists(os.path.join(src, RECEIPT))
+
+
+def real_content_case(rel, data):
+    """Lock from a copy without the receipt; put the receipt on the copy, then change `rel`: the fingerprint changes and
+    check reports content differs."""
+    with Host() as h:
+        root = receipt_host(h)
+        locked = hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["plugins"]["alpha"]["fingerprint"]
+        write(os.path.join(root, RECEIPT), RECEIPT_DOC)
+        with_receipt = hunsu.tree_fingerprint(root)
+        write(os.path.join(root, rel), data)
+        after = hunsu.tree_fingerprint(root)
+        assert after != with_receipt and after[:len(locked)] != locked, (rel, locked, with_receipt, after)
+        errors = hunsu.check(h.target)[0]
+        assert any("plugin alpha: content differs from what the lock recorded for version 1.0.0" in e for e in errors), (rel, errors)
+
+
+def test_Q_real_content_a_skill_md_edit_is_seen_with_the_receipt_present():
+    real_content_case(os.path.join("skills", "build", "SKILL.md"), "---\nname: build\ndescription: does build, edited\n---\n")
+
+
+def test_Q_real_content_a_py_edit_is_seen_with_the_receipt_present():
+    real_content_case(os.path.join("hooks", "guard.py"), "print('guard, edited')\n")
+
+
+def test_Q_real_content_a_root_plugin_json_edit_is_seen_with_the_receipt_present():
+    real_content_case("plugin.json", {"name": "alpha", "version": "1.0.0", "description": "alpha, edited"})
+
+
+def test_Q_real_content_a_claude_plugin_manifest_edit_is_seen_with_the_receipt_present():
+    real_content_case(os.path.join(".claude-plugin", "plugin.json"), {"name": "alpha", "version": "1.0.0", "description": "edited"})
+
+
+def test_Q_real_content_a_codex_plugin_manifest_edit_is_seen_with_the_receipt_present():
+    real_content_case(os.path.join(".codex-plugin", "plugin.json"), {"name": "alpha", "version": "1.0.0", "description": "alpha, edited"})
+
+
+def exact_path_changes(rel, data):
+    tmp, root = receipt_tree()
+    try:
+        write(os.path.join(root, RECEIPT), RECEIPT_DOC)
+        before = hunsu.tree_fingerprint(root)
+        write(os.path.join(root, rel), data)
+        return before, hunsu.tree_fingerprint(root)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_Q_exact_path_the_name_below_the_root_still_counts():
+    for rel in (os.path.join("skills", "build", RECEIPT), os.path.join("sub", RECEIPT)):
+        before, after = exact_path_changes(rel, RECEIPT_DOC)
+        assert before != after, rel
+
+
+def test_Q_exact_path_other_root_codex_entries_still_count():
+    for rel in (os.path.join(".codex-plugin", "plugin.json"), ".codex-hooks.json", RECEIPT + ".bak", ".codex-marketplace-install.jsonx",
+                "codex-marketplace-install.json"):
+        before, after = exact_path_changes(rel, RECEIPT_DOC)
+        assert before != after, rel
+
+
+def test_Q_exact_path_other_dotfiles_still_count():
+    for rel in (".gitignore", os.path.join(".agents", "x.md"), ".env"):
+        before, after = exact_path_changes(rel, "x\n")
+        assert before != after, rel
+
+
+def test_Q_exact_path_a_root_directory_of_the_receipts_name_is_content():
+    tmp, root = receipt_tree()
+    try:
+        before = hunsu.tree_fingerprint(root)
+        write(os.path.join(root, RECEIPT, "inside.json"), RECEIPT_DOC)
+        after = hunsu.tree_fingerprint(root)
+        assert before != after
+        write(os.path.join(root, RECEIPT, "inside.json"), dict(RECEIPT_DOC, revision="another"))
+        assert hunsu.tree_fingerprint(root) != after, "the files inside it count, bytes and all"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_Q_exact_path_the_existing_exclusions_and_crlf_normalization_stay():
+    tmp, root = receipt_tree()
+    try:
+        before = hunsu.tree_fingerprint(root)
+        write(os.path.join(root, "hooks", "__pycache__", "guard.cpython-311.pyc"), "junk")
+        write(os.path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n")
+        write(os.path.join(root, "hooks", "guard.pyc"), "junk")
+        write(os.path.join(root, ".DS_Store"), "junk")
+        write(os.path.join(root, ".in_use"), "")
+        assert hunsu.tree_fingerprint(root) == before
+        os.remove(os.path.join(root, ".in_use"))
+        write(os.path.join(root, ".in_use", "21139"), "")
+        assert hunsu.tree_fingerprint(root) == before
+        skill = os.path.join(root, "skills", "build", "SKILL.md")
+        text = io.open(skill, "rb").read()
+        with io.open(skill, "wb") as fh:
+            fh.write(text.replace(b"\n", b"\r\n"))
+        assert hunsu.tree_fingerprint(root) == before, "CRLF is LF"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def literal_tree():
+    tmp = tempfile.mkdtemp(prefix="hunsu-literal-")
+    return tmp, plugin(tmp, "m1", "alpha", "1.0.0", ["build"])
+
+
+def test_Q_no_migration_a_tree_without_the_receipt_fingerprints_as_1_15_1_did():
+    tmp, root = literal_tree()
+    try:
+        assert hunsu.tree_fingerprint(root) == FP_1_15_1_NO_RECEIPT, hunsu.tree_fingerprint(root)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    with Host() as h:
+        receipt_host(h, extra=False)
+        assert hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["plugins"]["alpha"]["fingerprint"] == FP_1_15_1_NO_RECEIPT
+
+
+def test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten():
+    with Host() as h:
+        root = receipt_host(h, extra=False)
+        receipt = os.path.join(root, RECEIPT)
+        write(receipt, RECEIPT_DOC)
+        lock_path = os.path.join(h.target, hunsu.LOCK)
+        lock = hunsu.load_json(lock_path)
+        lock["plugins"]["alpha"]["fingerprint"] = FP_1_15_1_WITH_RECEIPT   # as hunsu 1.15.1 locked it on Codex
+        hunsu.save_json(lock_path, lock)
+        lock_bytes = io.open(lock_path, "rb").read()
+        receipt_bytes = io.open(receipt, "rb").read()
+        errors = hunsu.check(h.target)[0]
+        assert any("plugin alpha: content differs from what the lock recorded for version 1.0.0" in e for e in errors), errors
+        assert io.open(lock_path, "rb").read() == lock_bytes, "check does not rewrite the lock's fingerprint"
+        assert "content-taken" not in json.dumps(hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))), "nor takes the mismatch"
+        assert io.open(receipt, "rb").read() == receipt_bytes, "nor edits or deletes the receipt"
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
