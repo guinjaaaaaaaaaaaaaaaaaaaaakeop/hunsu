@@ -128,12 +128,6 @@ manifest, and `check` accepts exactly that content
 
 ### `check`
 
-`check` reads project data without writing project state, but rendering role prompts and modes may need temporary
-scratch files; `--remote` also needs scratch space for marketplace clones. If that space is unavailable, the command
-stops nonzero with `no writable temporary directory`, without a summary or findings document. Set `TMPDIR` to a writable
-directory or use a sandbox that allows writing there (Codex `workspace-write`). The mutation lock used by `compose`,
-`lock` and `judge` also requires writable temporary space.
-
 manifest vs this machine. `error`: missing/wrong-version plugin, engine below floor, runtime a hook needs is not on
 PATH, a skill name provided by two plugins with no resolution *when the project locks without a judge* (`"judge":
 "skip"`) — otherwise a shared name is the judge's question: calling is never ambiguous (`plugin:skill`), and a name is a
@@ -156,6 +150,13 @@ update M`, `claude plugin update X@M --scope project` (in the project), restart 
 plugins), `hunsu add X`, `hunsu check` and a `--stale` judge round for what it calls stale, `hunsu lock` — committed with
 `hunsu.json` inside a run, like any change to the environment. On Codex the first two are `codex plugin marketplace upgrade
 M` and `codex plugin remove` + `add`.
+
+`check` reads project data without writing project state, but rendering role prompts and modes may need temporary
+scratch files; `--remote` also needs scratch space for marketplace clones, and the mutation lock that `compose`, `lock`
+and `judge` take first lives in a temporary directory. Where that space is unavailable (a completely read-only sandbox can
+give none), the command stops nonzero with `no writable temporary directory` and what needed it: no summary line, no
+findings document, nothing judged or written; the SessionStart line says `check` could not complete. Set `TMPDIR` to a
+writable directory or use a sandbox that allows writing there (Codex `workspace-write`).
 
 ### `outdated`
 
@@ -419,6 +420,8 @@ reports this limitation; it does not probe whether a particular host configurati
 Use a worker runner with the required permissions or the host's native subagents (see chongdae's `native:`
 providers). A chongdae write guard coordinates project writes; it does not replace a host security sandbox.
 `check` run from inside a detected sandbox says so (`session: sandboxed …`) when the lock's roles are commands.
+A `read-only` sandbox may also give no writable temporary directory, which `check` needs to render roles and modes; it then
+stops with `no writable temporary directory` (see [`check`](#check)) instead of judging without them.
 Codex snapshots a plugin at `plugin add`;
 `install --refresh` re-snapshots.
 
