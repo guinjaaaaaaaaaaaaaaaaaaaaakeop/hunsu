@@ -1,0 +1,31 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "quibble",
+  "run": "run-20261030-065025-f619",
+  "task": "receipt-tests",
+  "role": "quibble",
+  "target": ".",
+  "goal": "Fix the confirmed hunsu tree_fingerprint false drift between identical Claude/Codex plugin payloads caused by Codex's root .codex-marketplace-install.json installer receipt: ignore that exact root path only, keep every real content change visible, and document that locks whose hash included the receipt need an explicit relock after payload verification",
+  "brief": "Add regression tests to the existing test_hunsu.py (plain test_ functions run by its __main__; keep every existing test unchanged) for the contract's receipt sections. Use temporary trees and the file's fake Host fixtures only — never a real plugin cache, ~/.claude, ~/.codex or another project. The Q-receipt-ignored and Q-cross-host tests must fail against the current hunsu.py; tests that guard what already holds (Q-real-content, Q-exact-path, the unchanged no-receipt fingerprint and existing exclusions of Q-no-migration) are expected to pass before the build — they keep the fix narrow. Run under python3 (3.11+).",
+  "closes": [
+    "Q-receipt-ignored",
+    "Q-cross-host",
+    "Q-real-content",
+    "Q-exact-path",
+    "Q-no-migration"
+  ],
+  "contract": {
+    "Q-receipt-ignored": "contract/Q-receipt-ignored-d1374c6b.md",
+    "Q-cross-host": "contract/Q-cross-host-34a3c92f.md",
+    "Q-real-content": "contract/Q-real-content-ed8e32f2.md",
+    "Q-exact-path": "contract/Q-exact-path-ce1a4da2.md",
+    "Q-no-migration": "contract/Q-no-migration-5d141e97.md"
+  },
+  "checks": [],
+  "tests": [
+    "test_hunsu.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-065025-f619/local/receipt-tests.quibble.response.json"
+}

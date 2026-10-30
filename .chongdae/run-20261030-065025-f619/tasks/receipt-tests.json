@@ -1,0 +1,151 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "todo",
+  "def": {
+    "id": "receipt-tests",
+    "role": "nitpick",
+    "brief": "Add regression tests to the existing test_hunsu.py (plain test_ functions run by its __main__; keep every existing test unchanged) for the contract's receipt sections. Use temporary trees and the file's fake Host fixtures only — never a real plugin cache, ~/.claude, ~/.codex or another project. The Q-receipt-ignored and Q-cross-host tests must fail against the current hunsu.py; tests that guard what already holds (Q-real-content, Q-exact-path, the unchanged no-receipt fingerprint and existing exclusions of Q-no-migration) are expected to pass before the build — they keep the fix narrow. Run under python3 (3.11+).",
+    "closes": [
+      "Q-receipt-ignored",
+      "Q-cross-host",
+      "Q-real-content",
+      "Q-exact-path",
+      "Q-no-migration"
+    ],
+    "needs": [],
+    "checks": [],
+    "tests": [
+      "test_hunsu.py"
+    ],
+    "gate": null,
+    "domain": "code",
+    "before": [
+      "quibble"
+    ]
+  },
+  "seq": 3,
+  "added": "2026-10-30T06:52:30+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so"
+  ],
+  "stages": {
+    "quibble": {
+      "response": {
+        "status": "done",
+        "summary": "I read only the request (brief, five contract sections, checks = [], tests = [test_hunsu.py]). The sections mostly agree with each other. Before tests are written, a few things need deciding: what counts as a receipt when it isn't a regular file; how a test can get the \"1.15.1\" and \"old hash\" values once the function has changed; which section id the existing-exclusion tests carry (the brief and the contract disagree); and where the relock remedy is documented, and whether that can be tested at all. No checks are listed yet, so each section's acceptance sentences have no check selecting them. The unchecked findings say what each check must decide.",
+        "findings": [
+          {
+            "kind": "undecided",
+            "where": "Q-receipt-ignored",
+            "quote": "`tree_fingerprint` returns the same value when `.codex-marketplace-install.json` at the tree's root is absent, present, or\npresent with different contents (another `revision`, another `source`, empty, not JSON).",
+            "why": "Every case listed is a regular file. The contract doesn't say what happens when the root entry with that name is a directory (with files under it) or a symlink. Is the whole entry left out, or only a regular file? A builder writing an exact-path filter has to pick one."
+          },
+          {
+            "kind": "undecided",
+            "where": "Q-no-migration",
+            "quote": "A tree with no root receipt fingerprints exactly as hunsu 1.15.1 fingerprints it",
+            "why": "Once the build changes `tree_fingerprint`, nothing records what 1.15.1 produced. Should the test pin a literal digest for a fixture tree, or compute the old algorithm separately? Comparing the function's output to itself proves nothing. The brief expects this test to pass both before and after the build, so the reference value has to come from somewhere that stays fixed."
+          },
+          {
+            "kind": "undecided",
+            "where": "Q-no-migration",
+            "quote": "A lock written before this fix from a copy that carried a receipt (a lock\nwritten on Codex) recorded a hash that included it; after the fix `check` reports \"content differs\" for it, honestly.",
+            "why": "After the fix, a test can't produce a hash that includes the receipt by calling the engine, so the source of that pre-fix hash (a pinned literal?) is undecided. The brief also doesn't sort this test in either direction. It names only Q-receipt-ignored and Q-cross-host as must-fail, and only the no-receipt fingerprint and exclusions of Q-no-migration as must-pass. Against the current hunsu.py this sentence's test would fail, because the receipt-bearing lock matches."
+          },
+          {
+            "kind": "contradiction",
+            "where": "brief vs Q-exact-path",
+            "quote": "The existing exclusions (`__pycache__/`, `.git/`, `.in_use` as file or folder, `*.pyc`, `.DS_Store`) and the CRLF→LF\nnormalization stay as they are.",
+            "why": "The contract puts this sentence under Q-exact-path, but the brief calls them \"existing exclusions of Q-no-migration\". A sentence is decided by a test whose name contains the section id, so the two disagree on which id the exclusion and CRLF tests must carry."
+          },
+          {
+            "kind": "undecided",
+            "where": "Q-no-migration",
+            "quote": "The\nremedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin>\n--take-content \"why\"` when a release was rewritten under its version).",
+            "why": "The goal says to document this, but the contract doesn't say where: README, a skill doc, or the text of the \"content differs\" error from `check`. It also doesn't say whether the check output must mention the receipt or the relock remedy."
+          },
+          {
+            "kind": "unchecked",
+            "where": "Q-no-migration",
+            "quote": "The\nremedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin>\n--take-content \"why\"` when a release was rewritten under its version).",
+            "why": "If the remedy lives only in documentation, no test_ function in test_hunsu.py can observe it. A check would have to read a named doc file or check output for a stated string, and the contract names neither."
+          },
+          {
+            "kind": "unchecked",
+            "where": "Q-receipt-ignored",
+            "quote": "`tree_fingerprint` returns the same value when `.codex-marketplace-install.json` at the tree's root is absent, present, or\npresent with different contents (another `revision`, another `source`, empty, not JSON).",
+            "why": "No check is listed. A check must run test_hunsu.py under python3 3.11+ with a test whose name contains Q-receipt-ignored (or a -k key that selects it). That test must assert equal fingerprints across absent, present, and each listed variant: other revision, other source, empty, not JSON."
+          },
+          {
+            "kind": "unchecked",
+            "where": "Q-cross-host",
+            "quote": "The comparison of a linked\nsource with its installed copy treats a receipt the same way, because both go through `tree_fingerprint`.",
+            "why": "No check is listed. A check must select a Q-cross-host test that runs `check` on a lock written from a receipt-less copy against a receipt-bearing copy and finds no \"content differs\". It must also exercise the linked-source comparison path through `check` with a fake Host, not just call `tree_fingerprint` directly. Otherwise the \"because both go through\" claim goes unobserved."
+          },
+          {
+            "kind": "unchecked",
+            "where": "Q-real-content",
+            "quote": "Every real content change still changes the fingerprint and still fails `check` with \"content differs\": a skill's\n`SKILL.md`, Python code (an engine or hook `.py`), and each manifest (`plugin.json`, `.claude-plugin/plugin.json`,\n`.codex-plugin/plugin.json`).",
+            "why": "No check is listed. A check must select Q-real-content tests covering each of the five named files. Each test must assert both a fingerprint change and a \"content differs\" failure from `check`, with the receipt present on the changed copy."
+          },
+          {
+            "kind": "unchecked",
+            "where": "Q-exact-path",
+            "quote": "Only the exact root-relative path `.codex-marketplace-install.json` is left out.",
+            "why": "No check is listed. A check must select Q-exact-path tests showing that each listed near-miss changes the fingerprint: `skills/<x>/…` and `sub/…` copies of the receipt name, `.codex-plugin/plugin.json`, `.codex-hooks.json`, `.codex-marketplace-install.json.bak`, `.gitignore`, and `.agents/…`."
+          },
+          {
+            "kind": "unchecked",
+            "where": "Q-no-migration",
+            "quote": "The engine does not rewrite a lock's fingerprint by\nitself, does not accept a mismatch as taken, does not delete or edit a receipt, and does not report an old-hash lock as\ncurrent.",
+            "why": "No check is listed. A check must select Q-no-migration tests that, after `check` runs on an old-hash lock, confirm three things: the lock file's bytes are unchanged, no taken/accepted entry was added, and the receipt file's bytes are unchanged. They must also confirm that `check` exits with the error."
+          }
+        ],
+        "non-claims": [
+          "I did not read hunsu.py, test_hunsu.py or any other file in the tree; the findings rest only on the request text.",
+          "I did not judge whether the contract's chosen behavior is right or propose answers.",
+          "I did not run anything."
+        ],
+        "worker": {
+          "host": "claude-code",
+          "model": "claude-opus-5-5",
+          "turns": 2,
+          "cost_usd": 0.1134726
+        }
+      },
+      "by": {
+        "provider": "command",
+        "argv": [
+          "python3",
+          "{plugin:hacheong}/worker.py",
+          "--member",
+          "sibi",
+          "--request",
+          "{request}",
+          "--response",
+          "{response}",
+          "--host",
+          "claude"
+        ],
+        "host": "claude-code",
+        "model": "claude-opus-5-5",
+        "turns": 2,
+        "cost_usd": 0.1134726,
+        "versions": {
+          "used": {
+            "hacheong": "1.12.1",
+            "chongdae": "1.24.0"
+          }
+        },
+        "trace": {
+          "changed": [],
+          "commands-run": 0,
+          "commands-failed": 0
+        }
+      },
+      "when": "before",
+      "contract-fingerprint": "bb14f54107e1"
+    }
+  }
+}
