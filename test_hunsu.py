@@ -365,6 +365,7 @@ def test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here():
         assert any(i.startswith("plugin beta is behind: pinned 2.0.0; the linked source") and "is at 2.1.0" in i for i in info), info
         # the session's first line counts them
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
+        env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)   # a normal session's hook, whatever the parent is (a worker's sandbox sets AGENT_WORKER)
         out = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "session_start.py")], input=json.dumps({"cwd": h.target}),
                              capture_output=True, text=True, encoding="utf-8", env=env).stdout
         assert "2 plugin(s) behind a release available here" in json.loads(out)["hookSpecificOutput"]["additionalContext"], out
@@ -935,6 +936,7 @@ def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_ca
         manifest(h.target, engines={"claude-code": ">=0.0"}, resolutions={"building": {"order": ["alpha:build", "plugin:beta"]}}, judge="skip")
         assert run("lock", "--target", h.target)[0] == 0
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
+        env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)   # a normal session's hook, whatever the parent is (a worker's sandbox sets AGENT_WORKER)
         def hook(name, payload):
             done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", env=env)
             return done.returncode, done.stdout + done.stderr
@@ -1072,6 +1074,7 @@ def test_session_start_hook_reports_both_states():
         h.flush()
         hook = os.path.join(HERE, "hooks", "session_start.py")
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
+        env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)   # a normal session's hook, whatever the parent is (a worker's sandbox sets AGENT_WORKER)
         done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": h.target}), capture_output=True, text=True, encoding="utf-8", env=env)
         assert "no hunsu.json" in json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"], done.stdout
         run("init", "--target", h.target)
