@@ -15,10 +15,27 @@ import tempfile
 from pathlib import Path
 
 
+def worker_env(host):
+    """A fresh parent env without session identity or project metadata, marked with the worker's own host.
+    Only `codex` and `claude` are supported; other hosts raise ValueError. The parent's env is unchanged."""
+    if host == "codex":
+        agent_host = "codex"
+    elif host == "claude":
+        agent_host = "claude-code"
+    else:
+        raise ValueError("unsupported host: %r" % (host,))
+    env = dict(os.environ)
+    for key in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "CHONGDAE_SESSION", "AI_AGENT", "CLAUDE_PROJECT_DIR", "CODEX_VERSION"):
+        env.pop(key, None)
+    env.update(AGENT_HOST=agent_host, AGENT_WORKER="1")
+    return env
+
+
 def run_claude(prompt, schema, cwd=None, add_dirs=(), tools="Read,Grep,Glob", model=None, effort=None, max_turns=30, bypass=False):
     """`claude -p`: stream-json out, no session persistence, no user settings or MCP servers, exactly the tools named, the
-    answer constrained by `schema`. Returns (returncode, stdout, stderr) as text. The env marks the session a worker's
-    (AGENT_WORKER=1, so the project's hooks step aside inside it) and keeps auto-memory off."""
+    answer constrained by `schema`. Returns (returncode, stdout, stderr) as text. The env drops parent session identity
+    and project metadata, sets AGENT_HOST=claude-code and AGENT_WORKER=1 (so the project's hooks step aside inside it),
+    and keeps auto-memory off."""
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
            "--setting-sources", "", "--strict-mcp-config", "--tools", tools, "--allowedTools", tools,
            "--max-turns", str(max_turns), "--json-schema", json.dumps(schema)]
@@ -31,7 +48,7 @@ def run_claude(prompt, schema, cwd=None, add_dirs=(), tools="Read,Grep,Glob", mo
     if bypass:
         cmd += ["--permission-mode", "bypassPermissions"]
     done = subprocess.run(cmd, input=prompt.encode("utf-8"), capture_output=True, cwd=cwd,
-                          env=dict(os.environ, CLAUDE_CODE_DISABLE_AUTO_MEMORY="1", AGENT_WORKER="1"))
+                          env=dict(worker_env("claude"), CLAUDE_CODE_DISABLE_AUTO_MEMORY="1"))
     return done.returncode, done.stdout.decode("utf-8", "replace"), done.stderr.decode("utf-8", "replace")
 
 
@@ -81,7 +98,7 @@ def run_codex(prompt, schema, cwd, add_dirs=(), sandbox="read-only", model=None,
     for d in add_dirs:
         cmd += ["--add-dir", d]
     cmd.append("-")
-    done = subprocess.run(cmd, input=prompt.encode("utf-8"), capture_output=True, env=dict(os.environ, AGENT_WORKER="1"))
+    done = subprocess.run(cmd, input=prompt.encode("utf-8"), capture_output=True, env=worker_env("codex"))
     try:
         last = Path(last_path).read_text(encoding="utf-8")
     except OSError:
