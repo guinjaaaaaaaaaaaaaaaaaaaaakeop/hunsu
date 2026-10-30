@@ -1,0 +1,15 @@
+{
+  "id": "R-57b1aac9",
+  "src": "test_hunsu.py:test_Q_receipt_ignored_one_value_across_all_six_receipt_states",
+  "predicate": "verifies",
+  "dst": "hunsu.py:tree_fingerprint",
+  "evidence": "assert len(set(values.values())) == 1, values",
+  "seen": {
+    "test_hunsu.py:test_Q_receipt_ignored_one_value_across_all_six_receipt_states": "a64fb516328c",
+    "hunsu.py:tree_fingerprint": "df949baf4333"
+  },
+  "confirmed": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them"
+  },
+  "written_by": "mangsang 1.19.3"
+}

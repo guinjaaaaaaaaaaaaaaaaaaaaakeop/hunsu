@@ -1,0 +1,14 @@
+{
+  "id": "receipt-fingerprint",
+  "text": "Does the content fingerprint tell a Claude Code copy and a Codex copy of one release apart, what exactly does it leave out of a Codex copy, and what happens to a lock that hashed Codex's installer receipt?",
+  "verify": {
+    "kind": "answered-by",
+    "concepts": [
+      "receipt-not-content"
+    ]
+  },
+  "declared": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 (focused mangsang relationship, no invented quotes or signatures); the session wrote this question from plan/receipt-fingerprint.md Q-receipt-ignored, Q-cross-host and Q-no-migration; no person read it"
+  },
+  "written_by": "mangsang 1.19.3"
+}

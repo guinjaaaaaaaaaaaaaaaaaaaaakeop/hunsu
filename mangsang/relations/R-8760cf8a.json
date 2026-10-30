@@ -1,0 +1,15 @@
+{
+  "id": "R-8760cf8a",
+  "src": "test_hunsu.py:test_Q_real_content_a_skill_md_edit_is_seen_with_the_receipt_present",
+  "predicate": "realizes",
+  "dst": "concept:receipt-not-content",
+  "evidence": "real_content_case(os.path.join(\"skills\", \"build\", \"SKILL.md\")",
+  "seen": {
+    "test_hunsu.py:test_Q_real_content_a_skill_md_edit_is_seen_with_the_receipt_present": "32244c980f31",
+    "concept:receipt-not-content": "81cc20fd69c7"
+  },
+  "confirmed": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them"
+  },
+  "written_by": "mangsang 1.19.3"
+}

@@ -1,0 +1,18 @@
+{
+  "documents": {
+    "propagates": "dst->src",
+    "means": "src (a document section) describes dst's behavior; when dst changes the section may be stale"
+  },
+  "verifies": {
+    "propagates": "dst->src",
+    "means": "src (a test) proves dst; when dst changes the test may be stale"
+  },
+  "references": {
+    "propagates": "none",
+    "means": "src names dst; no content dependency"
+  },
+  "realizes": {
+    "propagates": "both",
+    "means": "src (a document section, code or test) is a projection of dst (a concept): src expresses in its medium what the concept means. When the concept's meaning changes every projection may be stale; when a projection changes it may have outgrown the meaning"
+  }
+}

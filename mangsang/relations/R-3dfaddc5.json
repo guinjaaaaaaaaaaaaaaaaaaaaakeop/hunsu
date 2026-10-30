@@ -1,0 +1,15 @@
+{
+  "id": "R-3dfaddc5",
+  "src": "plan/receipt-fingerprint.md#Q-receipt-ignored",
+  "predicate": "realizes",
+  "dst": "concept:receipt-not-content",
+  "evidence": "The root receipt is the installer's record, not the plugin's content.",
+  "seen": {
+    "plan/receipt-fingerprint.md#Q-receipt-ignored": "61ceea95a3c6",
+    "concept:receipt-not-content": "81cc20fd69c7"
+  },
+  "confirmed": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them"
+  },
+  "written_by": "mangsang 1.19.3"
+}

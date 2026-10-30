@@ -1,0 +1,15 @@
+{
+  "id": "R-c65a1808",
+  "src": "plan/receipt-fingerprint.md#Q-cross-host",
+  "predicate": "realizes",
+  "dst": "concept:receipt-not-content",
+  "evidence": "The same payload installed by both hosts is one content.",
+  "seen": {
+    "plan/receipt-fingerprint.md#Q-cross-host": "5c51f69def28",
+    "concept:receipt-not-content": "81cc20fd69c7"
+  },
+  "confirmed": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them"
+  },
+  "written_by": "mangsang 1.19.3"
+}

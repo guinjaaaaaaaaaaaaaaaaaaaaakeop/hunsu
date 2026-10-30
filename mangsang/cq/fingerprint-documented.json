@@ -1,0 +1,14 @@
+{
+  "id": "fingerprint-documented",
+  "text": "Is what tree_fingerprint leaves out documented for the reader of a lock?",
+  "verify": {
+    "kind": "coverage",
+    "predicate": "documents",
+    "anchors": "hunsu.py:tree_fingerprint",
+    "as": "dst"
+  },
+  "declared": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked that the relock consequence be documented truthfully; the session declared README coverage of hunsu.py:tree_fingerprint only; no person read it"
+  },
+  "written_by": "mangsang 1.19.3"
+}

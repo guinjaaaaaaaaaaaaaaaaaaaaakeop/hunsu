@@ -1,0 +1,15 @@
+{
+  "id": "R-cab27757",
+  "src": "test_hunsu.py:test_Q_exact_path_other_root_codex_entries_still_count",
+  "predicate": "verifies",
+  "dst": "hunsu.py:tree_fingerprint",
+  "evidence": "\".codex-hooks.json\", RECEIPT + \".bak\"",
+  "seen": {
+    "test_hunsu.py:test_Q_exact_path_other_root_codex_entries_still_count": "c9b9ff04d4e2",
+    "hunsu.py:tree_fingerprint": "df949baf4333"
+  },
+  "confirmed": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them"
+  },
+  "written_by": "mangsang 1.19.3"
+}

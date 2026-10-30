@@ -1,0 +1,15 @@
+{
+  "id": "R-684fadb0",
+  "src": "plan/receipt-fingerprint.md#Q-no-migration",
+  "predicate": "realizes",
+  "dst": "concept:receipt-not-content",
+  "evidence": "The engine does not rewrite a lock's fingerprint by",
+  "seen": {
+    "plan/receipt-fingerprint.md#Q-no-migration": "4d0bfde41d5a",
+    "concept:receipt-not-content": "81cc20fd69c7"
+  },
+  "confirmed": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them"
+  },
+  "written_by": "mangsang 1.19.3"
+}

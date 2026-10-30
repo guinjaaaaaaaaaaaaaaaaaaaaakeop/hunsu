@@ -1,0 +1,8 @@
+{
+  "name": "receipt-not-content",
+  "means": "Codex's installer receipt, the file .codex-marketplace-install.json at a plugin copy's root, is the installer's record and not the plugin's content: the content fingerprint leaves out exactly that root file, so one release installed by Claude Code and by Codex is one content, while the same name deeper in the tree, every other .codex-* file, skills, code and manifests still count, and a lock that hashed the receipt is not migrated but relocked explicitly.",
+  "declared": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the prospective contract and source, without inventing user quotes or signatures; this sentence is the session's (claude-opus-5-5) wording of plan/receipt-fingerprint.md Q-receipt-ignored, Q-exact-path and Q-no-migration; no person read it"
+  },
+  "written_by": "mangsang 1.19.3"
+}

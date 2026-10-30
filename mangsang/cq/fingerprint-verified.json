@@ -1,0 +1,14 @@
+{
+  "id": "fingerprint-verified",
+  "text": "Is tree_fingerprint verified by a test?",
+  "verify": {
+    "kind": "coverage",
+    "predicate": "verifies",
+    "anchors": "hunsu.py:tree_fingerprint",
+    "as": "dst"
+  },
+  "declared": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619; the session declared test coverage of the one function this run changed, hunsu.py:tree_fingerprint — no claim about other symbols; no person read it"
+  },
+  "written_by": "mangsang 1.19.3"
+}

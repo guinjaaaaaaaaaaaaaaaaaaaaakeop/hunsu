@@ -1,0 +1,15 @@
+{
+  "id": "R-78a1bf05",
+  "src": "test_hunsu.py:test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten",
+  "predicate": "realizes",
+  "dst": "concept:receipt-not-content",
+  "evidence": "assert io.open(lock_path, \"rb\").read() == lock_bytes, \"check does not rewrite the lock's fingerprint\"",
+  "seen": {
+    "test_hunsu.py:test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten": "570d5191cbf7",
+    "concept:receipt-not-content": "81cc20fd69c7"
+  },
+  "confirmed": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them"
+  },
+  "written_by": "mangsang 1.19.3"
+}

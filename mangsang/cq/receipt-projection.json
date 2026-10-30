@@ -1,0 +1,22 @@
+{
+  "id": "receipt-projection",
+  "text": "Is the receipt rule realized in the contract, the engine and the tests alike?",
+  "verify": {
+    "kind": "projection",
+    "media": {
+      "doc": [
+        "plan/receipt-fingerprint.md"
+      ],
+      "code": [
+        "hunsu.py"
+      ],
+      "test": [
+        "test_hunsu.py"
+      ]
+    }
+  },
+  "declared": {
+    "delegated": "Owner's task statement for run-20261030-065025-f619 asked for a requirement-to-code-to-tests relationship; the session declared this invariant over the run's contract, hunsu.py and test_hunsu.py only — not a claim about the rest of the project; no person read it"
+  },
+  "written_by": "mangsang 1.19.3"
+}
