@@ -2875,7 +2875,8 @@ def source_version(root):
 
 def tree_fingerprint(root):
     """Identity of a plugin's content: every file's path and bytes, minus what the interpreter, the OS and the host leave
-    behind (Claude Code marks a cached copy it runs with `.in_use`). A version is the name of one content; this is how two
+    behind (Claude Code marks a cached copy it runs with `.in_use`; Codex writes the root file
+    `.codex-marketplace-install.json` as an installer receipt). A version is the name of one content; this is how two
     copies under one name are told apart."""
     import hashlib
     h = hashlib.sha256()
@@ -2885,6 +2886,8 @@ def tree_fingerprint(root):
             if f.endswith(".pyc") or f in (".DS_Store", ".in_use"):
                 continue
             rel = os.path.relpath(os.path.join(dirpath, f), root).replace(os.sep, "/")
+            if rel == ".codex-marketplace-install.json":
+                continue
             h.update(rel.encode("utf-8") + b"\0")
             with open(os.path.join(dirpath, f), "rb") as fh:
                 h.update(fh.read().replace(b"\r\n", b"\n") + b"\0")
