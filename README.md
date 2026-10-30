@@ -400,7 +400,7 @@ with a mode every group is judged (cost: 1 + groups calls).
 - `hunsu.local.json` `settings` — this machine's overlay over `settings` (never committed, like `.env.local` over
   `.env`): a product reads its own from hunsu.json and lets this machine's override it.
 - `reporters` — name → argv of the commands that report findings for the reviewer (`dwitbuk/findings@1`), e.g.
-  `["python", "{plugin:chongdae}/chongdae.py", "report", "--since", "{since}"]`. Locked; dwitbuk reads them from the
+  `["python3", "{plugin:chongdae}/chongdae.py", "report", "--since", "{since}"]`. Locked; dwitbuk reads them from the
   lock. hunsu's own is `check --findings` (drift, unread resolutions), marked `"standing": true`: it reads the
   environment as it is now, so a drift it stops reporting is gone, not owed.
 
@@ -495,6 +495,6 @@ plugin is not an update procedure for every remote installation.
 
 ## Self-check
 
-`python test_hunsu.py` — a fake host under a temp dir; every `check` error branch, `compose`'s gates, the sentinel's
+`python3 test_hunsu.py` — a fake host under a temp dir; every `check` error branch, `compose`'s gates, the sentinel's
 allow/deny, both SessionStart states, and the stale-session line (mismatch, match, worker) fire once. `outdated` is tested
 against local bare repositories standing for the publishers — no network.
