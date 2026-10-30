@@ -1,7 +1,7 @@
 {
   "artifact-type": "chongdae/task@1",
   "written_by": "chongdae 1.24.0",
-  "status": "todo",
+  "status": "done",
   "def": {
     "id": "receipt-tests",
     "role": "nitpick",
@@ -27,7 +27,13 @@
   "seq": 3,
   "added": "2026-10-30T06:52:30+00:00",
   "non-claims": [
-    "no check decides this task; done means the agent said so"
+    "no check decides this task; done means the agent said so",
+    "(provider) Q-no-migration: \"The remedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin> --take-content \\\"why\\\"` ...)\" is documented in README.md by the Q-docs task; test_hunsu.py does not assert README wording, as the contract decides.",
+    "(provider) Q-no-migration: 'computed for a fixture tree … with the current source gives 1.15.1's values' — the two literals were computed with the current hunsu.py, not cross-checked here against a separate copy of the locked 1.15.1. They rely on the session's statement that the two are byte-identical.",
+    "(provider) Q-exact-path: a case-variant root name (e.g. `.Codex-Marketplace-Install.json`) is not tested. On this case-insensitive macOS filesystem it is the same file as the receipt, so no test here can tell the two apart.",
+    "(provider) Q-cross-host is tested through the fake Claude host with a receipt added to the installed copy, or to a second copy registered as the install. No test runs `check` with AGENT_HOST=codex against a real or faked Codex plugin cache.",
+    "(provider) Q-receipt-ignored symlink case: the test raises Skip if the platform cannot make a symlink.",
+    "(provider) Already failing before these changes, and still failing on this machine: test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here, test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them, test_session_start_hook_reports_both_states. They fail the same way with the HEAD copy of test_hunsu.py, so `python3 test_hunsu.py` exits non-zero apart from these new tests."
   ],
   "stages": {
     "quibble": {
@@ -152,5 +158,117 @@
         "chongdae": "chongdae 1.24.0"
       }
     }
+  },
+  "response": {
+    "status": "done",
+    "summary": "I added 20 test functions for the receipt sections to test_hunsu.py, placed just before its `__main__` block. Existing tests are unchanged: the diff only adds lines (259). The tests use temporary trees and the file's fake Host only. Under python3 3.12, the 7 tests for Q-receipt-ignored, Q-cross-host and the old-lock part of Q-no-migration fail now, each for the right reason: the receipt is hashed, so the six states give six different values and check reports 'content differs' or 'the linked source … differs from the installed copy'. The Q-real-content, Q-exact-path and no-receipt Q-no-migration tests pass now, as the brief expects, which keeps the fix narrow. The two pinned literals from 1.15.1 are 0d39d9e3a3b7 without the receipt and 57633aa9234d with it. I computed them with the current tree_fingerprint, which the contract says is byte-identical to 1.15.1's. Three tests that were already in the file also fail on this machine: test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here, test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them and test_session_start_hook_reports_both_states. They fail the same way with the HEAD copy of test_hunsu.py, so these changes did not cause them, and the file as a whole exits non-zero.",
+    "tests": [
+      "test_hunsu.py"
+    ],
+    "covers": [
+      {
+        "section": "Q-receipt-ignored",
+        "tests": [
+          "test_Q_receipt_ignored_one_value_across_all_six_receipt_states",
+          "test_Q_receipt_ignored_a_root_symlink_to_a_file_is_the_receipt_too",
+          "test_Q_receipt_ignored_the_receipt_is_neither_deleted_nor_edited_by_fingerprinting"
+        ]
+      },
+      {
+        "section": "Q-cross-host",
+        "tests": [
+          "test_Q_cross_host_a_lock_from_a_claude_copy_checks_clean_on_a_copy_with_the_receipt",
+          "test_Q_cross_host_a_second_copy_with_the_receipt_checks_clean",
+          "test_Q_cross_host_a_linked_source_without_the_receipt_is_its_installed_copy_with_one"
+        ]
+      },
+      {
+        "section": "Q-real-content",
+        "tests": [
+          "test_Q_real_content_a_skill_md_edit_is_seen_with_the_receipt_present",
+          "test_Q_real_content_a_py_edit_is_seen_with_the_receipt_present",
+          "test_Q_real_content_a_root_plugin_json_edit_is_seen_with_the_receipt_present",
+          "test_Q_real_content_a_claude_plugin_manifest_edit_is_seen_with_the_receipt_present",
+          "test_Q_real_content_a_codex_plugin_manifest_edit_is_seen_with_the_receipt_present"
+        ]
+      },
+      {
+        "section": "Q-exact-path",
+        "tests": [
+          "test_Q_exact_path_the_name_below_the_root_still_counts",
+          "test_Q_exact_path_other_root_codex_entries_still_count",
+          "test_Q_exact_path_other_dotfiles_still_count",
+          "test_Q_exact_path_a_root_directory_of_the_receipts_name_is_content",
+          "test_Q_exact_path_the_existing_exclusions_and_crlf_normalization_stay"
+        ]
+      },
+      {
+        "section": "Q-no-migration",
+        "tests": [
+          "test_Q_no_migration_a_tree_without_the_receipt_fingerprints_as_1_15_1_did",
+          "test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten"
+        ]
+      }
+    ],
+    "non-claims": [
+      "Q-no-migration: \"The remedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin> --take-content \\\"why\\\"` ...)\" is documented in README.md by the Q-docs task; test_hunsu.py does not assert README wording, as the contract decides.",
+      "Q-no-migration: 'computed for a fixture tree … with the current source gives 1.15.1's values' — the two literals were computed with the current hunsu.py, not cross-checked here against a separate copy of the locked 1.15.1. They rely on the session's statement that the two are byte-identical.",
+      "Q-exact-path: a case-variant root name (e.g. `.Codex-Marketplace-Install.json`) is not tested. On this case-insensitive macOS filesystem it is the same file as the receipt, so no test here can tell the two apart.",
+      "Q-cross-host is tested through the fake Claude host with a receipt added to the installed copy, or to a second copy registered as the install. No test runs `check` with AGENT_HOST=codex against a real or faked Codex plugin cache.",
+      "Q-receipt-ignored symlink case: the test raises Skip if the platform cannot make a symlink.",
+      "Already failing before these changes, and still failing on this machine: test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here, test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them, test_session_start_hook_reports_both_states. They fail the same way with the HEAD copy of test_hunsu.py, so `python3 test_hunsu.py` exits non-zero apart from these new tests."
+    ],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 10,
+      "cost_usd": 0.577112
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T06:56:47+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched_by_provider": [
+    "test_hunsu.py"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "teujip",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 10,
+    "cost_usd": 0.577112,
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 8,
+      "commands-failed": 0
+    }
+  },
+  "checks": [],
+  "touched": [
+    "plan/receipt-fingerprint.md",
+    "test_hunsu.py"
+  ],
+  "done": {
+    "at": "2026-10-30T06:56:48+00:00",
+    "chongdae": "chongdae 1.24.0"
   }
 }
