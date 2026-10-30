@@ -1,0 +1,64 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-065025-f619",
+  "task": "environment",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Fix the confirmed hunsu tree_fingerprint false drift between identical Claude/Codex plugin payloads caused by Codex's root .codex-marketplace-install.json installer receipt: ignore that exact root path only, keep every real content change visible, and document that locks whose hash included the receipt need an explicit relock after payload verification",
+  "brief": "Adopt the bootstrap's environment files (declared environment, lock, judge verdicts, project plugin enablement, ignore lines) into this run; the released hunsu check must report errors 0",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "{plugin:hunsu}/hunsu.py",
+      "check",
+      "--target",
+      "."
+    ]
+  ],
+  "tests": [],
+  "response": "./.chongdae/run-20261030-065025-f619/local/environment.verify.response.json",
+  "touched": [
+    ".claude/settings.json",
+    ".gitignore",
+    "hunsu-judgments.json",
+    "hunsu.json",
+    "hunsu.lock.json"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      "hunsu.py"
+    ]
+  },
+  "attribution": {
+    "adopted": [
+      ".claude/settings.json",
+      ".gitignore",
+      "hunsu-judgments.json",
+      "hunsu.json",
+      "hunsu.lock.json"
+    ]
+  },
+  "since": {
+    ".": "72ff58fea25a814e6068907aba4b7e5799749d6c"
+  },
+  "checked": [
+    {
+      "command": "python3 '{plugin:hunsu}/hunsu.py' check --target .",
+      "exit": 0,
+      "tail": [
+        "info  6 finding(s) settled by the members' own text (sequenced / not co-active / duplicate, each on a verified sentence) — no resolution needed; see hunsu-conflicts.md",
+        "  (offline: a release is known here only from this machine's marketplace copies — `hunsu outdated` asks the marketplaces, read-only)",
+        "errors 0 · warnings 0 · info 1"
+      ],
+      "at": "2026-10-30T06:52:07+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}
