@@ -197,6 +197,15 @@ hook, with `hunsu.json` overriding). The rest — `judge`, `warnings`, `hooks`, 
 `roles-declared`, `host`, `artifact-type`, `plugins.*.source`/`marketplace`/`linked` — is for the person reading the
 lock in a diff: what was found and where it came from. Nothing decides on them; do not cite them as a mechanism.
 
+`.fingerprint` is the installed copy's content: every file's path and bytes (CRLF read as LF), leaving out `__pycache__/`,
+`.git/`, `*.pyc`, `.DS_Store`, the host's `.in_use` marker, and the receipt Codex's marketplace installer writes at a copy's
+root, `.codex-marketplace-install.json` (where it installed from, at which revision) — so one release installed by Claude
+Code and by Codex is one content. Only that root file is left out: the same name deeper in the tree, any other `.codex-*`
+file and other dotfiles are content. A lock written before this rule from a copy that carried the receipt (a lock written
+on Codex) hashed it in: `check` now says `content differs` for that plugin although the payload did not change, and
+nothing migrates it — verify the installed copy against its release, then `hunsu lock` again (`add --take-content` is for
+a release rewritten under its version, not for this). A lock written from a copy without the receipt keeps its fingerprints.
+
 ### `compose`
 
 the whole flow: init → add → engines → check → capabilities → judge → lock, stopping at each human decision with exit 2
