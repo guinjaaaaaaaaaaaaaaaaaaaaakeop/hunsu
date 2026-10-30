@@ -329,8 +329,12 @@ run-20261002-050435-e75b as the open run"). `check` warns of a finding whose mod
 and of a delegated reason that does (`policy` marks it); nothing is rewritten — `--stale` re-judges those situations, and
 also one whose mode quote is a sentence the mode does not say in an empty project, saying which and why. A still-fits whose
 quote or reason names one state records no delegation (`reviewed: false`); a class sentence that does is refused (`authority`). A plugin that brings a skill no situation has seen needs a new cluster round (stage 1). If a re-judged
-situation's findings differ from what its resolution was written against, `consume` marks that resolution `reviewed:
-false` — it stays, and dwitbuk lists it until a human re-reads.
+situation's findings differ from what its resolution was written against, the judge's `resolution_verdict` decides. A
+still-fits whose quote is verbatim in the members' text and names no state replaces `reviewed` with a delegation record
+(`{"delegated": "judge <host> <model>: <why>"}`) for a resolution already reviewed — by a person, by hand, or by an earlier
+delegation — and leaves a proposal nobody has read at `reviewed: false`: the judge's word does not turn an unread proposal
+into approved history. Any other verdict marks the resolution `reviewed: false`. Either way it stays, and dwitbuk lists a
+`reviewed: false` one until a human re-reads.
 
 What the judge reads is what a session reads, never a script's name. A skill is its SKILL.md. The project's committed
 instruction files — `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md` — are modes (`file:<path>`, members of every
