@@ -1,0 +1,46 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "provenance",
+    "role": "session",
+    "brief": "Provenance, recorded under corrected identity: this run's session is Claude Code session 8e681c21-b8f0-41a5-81be-ce92ab20ff48 (claude-opus-5-5), started by the umbrella tool from a Codex parent; until the coordinator fixed tools/umbrella mid-run it inherited the parent's CODEX_THREAD_ID (01a180b0…), with which chongdae signs a session as codex when AGENT_HOST is unset. Every record-writing engine call before the fix (chongdae, mangsang, dwitbuk, hunsu) was run with CODEX_THREAD_ID, CODEX_SESSION_ID, CODEX_TOOL_CALL_ID and CODEX_CI removed. Checked one by one after the fix: every session entry here reads claude-code claude-opus-5-5 (agent claude-code_2-1-314_agent); worker records name their own hosts (dakdol codex gpt-6-astra; teujip, sibi and dwitbuk eyes claude-code claude-opus-5-5); no record holds the parent's thread id. So no entry of this run was found mislabelled and none was relabelled; the actor of every session-authored entry is this Claude session. Mislabelled session entries were found in jokbo's run-20261030-063525-2d81, not here.",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [],
+    "gate": null,
+    "domain": "record"
+  },
+  "seq": 9,
+  "added": "2026-10-30T07:14:50+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so",
+    "provenance: done on the session's word by name (`run provenance`), with nothing of its own in the tree and no `did`"
+  ],
+  "checks": [],
+  "touched": [],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 2,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T07:14:50+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T07:14:59+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

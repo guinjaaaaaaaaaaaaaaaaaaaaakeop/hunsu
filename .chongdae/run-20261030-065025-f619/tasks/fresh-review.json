@@ -1,0 +1,24 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "todo",
+  "def": {
+    "id": "fresh-review",
+    "role": "session",
+    "brief": "After the writers stopped: a dwitbuk review by hand since 29b6e8e (late eyes need a review to consume into), then fresh late-eyes sessions (contract, record and fresh lenses) on the diff, the run record and plan/receipt-fingerprint.md, consumed through dwitbuk eyes consume; findings the tree can answer are fixed in a task of their own",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [],
+    "gate": null,
+    "domain": "review",
+    "scope": [
+      "reviews"
+    ]
+  },
+  "seq": 8,
+  "added": "2026-10-30T07:06:47+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so"
+  ]
+}
