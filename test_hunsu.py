@@ -2185,6 +2185,368 @@ def test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_a
         assert io.open(receipt, "rb").read() == receipt_bytes, "nor edits or deletes the receipt"
 
 
+
+# --- no writable temporary directory (Q-scratch-diagnostic, Q-no-false-pass, Q-entrypoints, Q-success-unchanged) ------------
+# A live Codex read-only check crashed in six projects with FileNotFoundError from tempfile.mkdtemp in role_prompts. The
+# boundary is simulated only around the command under test, after the fixture is built.
+
+SCRATCH_PHRASE = "no writable temporary directory"
+SCRATCH_LISTED = ["/private/var/folders/9z/hunsu-machine-q7/T", "/var/folders/9z/hunsu-machine-q7/T"]
+SUMMARY_RE = r"errors \d+ · warnings \d+ · info \d+"
+SCRATCH_SITECUSTOMIZE = r"""
+import errno, os, tempfile
+_mode = os.environ.get("HUNSU_TEST_SCRATCH")
+_listed = os.environ.get("HUNSU_TEST_SCRATCH_LISTED", "").split(os.pathsep)
+if _mode == "enoent":
+    def _none(*a, **k):
+        raise FileNotFoundError(errno.ENOENT, "No usable temporary directory found in %r" % _listed)
+    tempfile.tempdir = None
+    tempfile.gettempdir = _none
+    tempfile.gettempdirb = _none
+elif _mode == "eperm":
+    def _deny(*a, **k):
+        raise PermissionError(errno.EACCES, "Permission denied", os.path.join(_listed[0], "tmpq1w2e3"))
+    tempfile.mkdtemp = _deny
+"""
+
+
+def scratch_listed(h):
+    """What Python lists when it finds no temporary directory: this machine's own paths, and the cwd (the project)."""
+    return SCRATCH_LISTED + ["/tmp", "/var/tmp", "/usr/tmp", h.target]
+
+
+@contextlib.contextmanager
+def no_scratch(h, how):
+    """In this process: `enoent` — tempfile finds no usable directory; `eperm` — creating the scratch directory is refused."""
+    import errno
+    from unittest.mock import patch
+    listed = scratch_listed(h)
+    if how == "enoent":
+        def none(*a, **k):
+            raise FileNotFoundError(errno.ENOENT, "No usable temporary directory found in %r" % listed)
+        with patch.object(tempfile, "tempdir", None), patch.object(tempfile, "gettempdir", none), patch.object(tempfile, "gettempdirb", none):
+            yield
+    else:
+        def deny(*a, **k):
+            raise PermissionError(errno.EACCES, "Permission denied", os.path.join(listed[0], "tmpq1w2e3"))
+        with patch.object(tempfile, "mkdtemp", deny):
+            yield
+
+
+def run_seen(*argv):
+    """What a person sees from one in-process command: (exit code, stdout, stderr). An exception that escapes main() is what
+    the interpreter would print — a traceback — so it is returned as stderr text, never raised into the test."""
+    import traceback
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = hunsu.main(list(argv))
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 1
+            if not isinstance(e.code, int) and e.code is not None:
+                err.write(str(e.code) + "\n")
+        except BaseException:
+            code = "crashed"
+            err.write(traceback.format_exc())
+    return code, out.getvalue(), err.getvalue()
+
+
+def project_bytes(target):
+    """Every file under the project, by its bytes."""
+    seen = {}
+    for root, _, files in os.walk(target):
+        for f in files:
+            path = os.path.join(root, f)
+            seen[os.path.relpath(path, target)] = io.open(path, "rb").read()
+    return seen
+
+
+def scratch_project(h):
+    """A project that reaches role_prompts: the manifest declares a role a locked plugin provides, a mode injects text, and
+    judgments exist (no finding, so the lock is clean). Returns the plugin roots."""
+    gamma = h.add_plugin("m1", "gamma", "1.0.0", ["plan"], roles={"build": [sys.executable, "{plugin:gamma}/w.py", "--request", "{request}", "--response", "{response}", "--host", "{host}"]})
+    write(os.path.join(gamma, "w.py"), 'import sys\nprint("You are the builder. Ask no one; decide and report.") if "--prompt-only" in sys.argv else sys.exit(3)\n')
+    delta = h.add_plugin("m2", "delta", "1.0.0", [], hooks=MODE_HOOK)
+    mode_script(delta, "Before any decision, ask the user.")
+    h.flush()
+    run("init", "--target", h.target); run("add", "gamma", "--target", h.target); run("add", "delta", "--target", h.target)
+    manifest(h.target, engines={"claude-code": ">=0.0"}, roles={"implementer": "gamma:build", "planner": "session"})
+    d = os.path.join(h.home, "judge-round")
+    code, out = run("judge", "request", "--target", h.target, "--out", d)
+    assert code == 0, out
+    write(os.path.join(d, "cluster-response.json"), {"groups": [{"situation": "building", "members": ["gamma:build", "gamma:plan"], "why": "one"}]})
+    code, out = run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))
+    assert code == 0, out
+    write(os.path.join(d, "group-01-response.json"), {"findings": []})
+    code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "test")
+    assert code == 0, out
+    code, out = run("lock", "--target", h.target)
+    assert code == 0, out
+    for name in (hunsu.MANIFEST, hunsu.LOCK, hunsu.JUDGMENTS):
+        assert os.path.exists(os.path.join(h.target, name)), name
+    return {"gamma": gamma, "delta": delta}
+
+
+def assert_scratch_diagnostic(h, command, code, out, err, needed, roots=()):
+    """The diagnostic a person sees when the scratch space is missing: nonzero, no traceback, the phrase, the command, what
+    needed it, a supported way out (TMPDIR / a sandbox that allows writing), no bypass, no machine path."""
+    import re
+    seen = out + err
+    assert code != 0 and code != "crashed", "an unhandled exception, not a diagnostic: %r\n%s" % (code, seen)
+    assert "Traceback" not in seen, seen
+    assert SCRATCH_PHRASE in seen, "the diagnostic's phrase is missing: " + seen
+    assert re.search(r"\b%s\b" % re.escape(command), seen), "the diagnostic does not name %r: %s" % (command, seen)
+    assert re.search(needed, seen, re.I), "the diagnostic does not say what needed the scratch space (%s): %s" % (needed, seen)
+    assert "TMPDIR" in seen, "no supported writable scratch context suggested: " + seen
+    low = seen.lower()
+    for bypass in ("danger", "bypass", "yolo", "skip-permissions", "approval never", "--ask-for-approval never", "-a never", "untrusted"):
+        assert bypass not in low, "a sandbox, approval or trust bypass is suggested (%r): %s" % (bypass, seen)
+    machine = SCRATCH_LISTED + [h.home, h.target, h.claude, os.path.expanduser("~"), HERE] + [r for r in roots]
+    for path in machine:
+        assert path not in seen, "a machine path reaches the person (%s): %s" % (path, seen)
+    for listed in ("/var/tmp", "/usr/tmp"):
+        assert listed not in seen, "a directory Python lists reaches the person (%s): %s" % (listed, seen)
+    assert not re.search(r"(?<![\w$}])/tmp\b", seen), "a directory Python lists reaches the person (/tmp): " + seen
+    assert not re.search(SUMMARY_RE, seen), "a summary line on a failed check: " + seen
+    assert "environment matches" not in seen and "matches hunsu.json" not in seen, seen
+
+
+def scratch_env(h, how):
+    """The environment for a subprocess whose Python finds no scratch space: a sitecustomize.py on PYTHONPATH patches tempfile
+    in the engine (and in anything it starts with this environment). AGENT_WORKER unset."""
+    site = os.path.join(h.home, "site-noscratch")
+    write(os.path.join(site, "sitecustomize.py"), SCRATCH_SITECUSTOMIZE)
+    env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude, HUNSU_TEST_SCRATCH=how,
+               HUNSU_TEST_SCRATCH_LISTED=os.pathsep.join(scratch_listed(h)),
+               PYTHONPATH=os.pathsep.join([site] + ([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else [])))
+    env.pop("AGENT_WORKER", None)
+    return env
+
+
+def test_Q_tests_the_subprocess_boundary_really_takes_tempfile_away():
+    """The simulation itself: with the sitecustomize on PYTHONPATH, a child Python has no tempfile scratch space."""
+    with Host() as h:
+        for how, kind in (("enoent", "FileNotFoundError"), ("eperm", "PermissionError")):
+            done = subprocess.run([sys.executable, "-c", "import tempfile\ntry:\n tempfile.mkdtemp()\nexcept OSError as e:\n print(type(e).__name__)"],
+                                  capture_output=True, text=True, env=scratch_env(h, how))
+            assert done.stdout.strip() == kind, (how, done.stdout, done.stderr)
+
+
+def test_Q_scratch_diagnostic_check_with_no_usable_temporary_directory_is_a_diagnostic_not_a_traceback():
+    with Host() as h:
+        roots = scratch_project(h)
+        hunsu._ROLE_PROMPT.clear()
+        with no_scratch(h, "enoent"):
+            code, out, err = run_seen("check", "--target", h.target)
+        assert_scratch_diagnostic(h, "check", code, out, err, r"role|prompt", roots.values())
+
+
+def test_Q_scratch_diagnostic_check_when_creating_the_scratch_directory_is_refused():
+    with Host() as h:
+        roots = scratch_project(h)
+        hunsu._ROLE_PROMPT.clear()
+        with no_scratch(h, "eperm"):
+            code, out, err = run_seen("check", "--target", h.target)
+        assert_scratch_diagnostic(h, "check", code, out, err, r"role|prompt", roots.values())
+
+
+def test_Q_scratch_diagnostic_check_in_a_subprocess_prints_no_traceback_for_either_failure():
+    with Host() as h:
+        roots = scratch_project(h)
+        for how in ("enoent", "eperm"):
+            done = subprocess.run([sys.executable, os.path.join(HERE, "hunsu.py"), "check", "--target", h.target],
+                                  capture_output=True, text=True, encoding="utf-8", env=scratch_env(h, how), timeout=120)
+            assert_scratch_diagnostic(h, "check", done.returncode, done.stdout, done.stderr, r"role|prompt", roots.values())
+
+
+def test_Q_no_false_pass_a_failed_check_writes_no_project_file_and_says_nothing_about_roles_or_judgments():
+    with Host() as h:
+        scratch_project(h)
+        before = project_bytes(h.target)
+        for how in ("enoent", "eperm"):
+            hunsu._ROLE_PROMPT.clear()
+            with no_scratch(h, how):
+                code, out, err = run_seen("check", "--target", h.target)
+            seen = out + err
+            assert code != 0 and code != "crashed" and "Traceback" not in seen, (how, code, seen)
+            import re
+            assert not re.search(SUMMARY_RE, seen) and "environment matches" not in seen, seen
+            # a role whose text could not be rendered is neither absent nor judged: no verdict about it at all
+            for verdict in ("judged about other text", "never seen", "declares no role", "no conflict judgment", "printed no prompt"):
+                assert verdict not in seen, "a role or judgment was decided from text that was never rendered (%r): %s" % (verdict, seen)
+            assert project_bytes(h.target) == before, "a failed check wrote to the project"
+
+
+def test_Q_no_false_pass_check_findings_prints_no_findings_document_and_exits_nonzero():
+    with Host() as h:
+        roots = scratch_project(h)
+        before = project_bytes(h.target)
+        for how in ("enoent", "eperm"):
+            done = subprocess.run([sys.executable, os.path.join(HERE, "hunsu.py"), "check", "--findings", "--target", h.target],
+                                  capture_output=True, text=True, encoding="utf-8", env=scratch_env(h, how), timeout=120)
+            assert done.returncode != 0, (how, done.stdout, done.stderr)
+            assert '"findings"' not in done.stdout and '"source"' not in done.stdout, "a failed reporter printed a findings document: " + done.stdout
+            try:
+                json.loads(done.stdout)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("stdout is a JSON document on a failed reporter: " + done.stdout)
+            assert SCRATCH_PHRASE in done.stderr, "the diagnostic belongs on stderr: %r / %r" % (done.stdout, done.stderr)
+            assert_scratch_diagnostic(h, "check", done.returncode, "", done.stderr, r"role|prompt", roots.values())
+            assert project_bytes(h.target) == before
+
+
+def test_Q_no_false_pass_a_failed_check_leaves_no_cached_state_and_the_next_check_reports_as_it_would_have():
+    with Host() as h:
+        scratch_project(h)
+        hunsu._ROLE_PROMPT.clear()
+        code0, expected, _ = run_seen("check", "--target", h.target)
+        assert code0 != "crashed", expected
+        for how in ("enoent", "eperm"):
+            hunsu._ROLE_PROMPT.clear()
+            with no_scratch(h, how):
+                code, out, err = run_seen("check", "--target", h.target)
+            assert code != 0 and code != "crashed", "the failure must have been met and reported: %r %s" % (code, out + err)
+            # same process, temporary directory back: exactly as it would have reported
+            code1, again, _ = run_seen("check", "--target", h.target)
+            assert (code1, again) == (code0, expected), "after %s:\n%s\n--- expected ---\n%s" % (how, again, expected)
+
+
+def test_Q_entrypoints_compose_stops_naming_itself_and_writes_nothing():
+    with Host() as h:
+        roots = scratch_project(h)
+        before = project_bytes(h.target)
+        for how in ("enoent", "eperm"):
+            hunsu._ROLE_PROMPT.clear()
+            with no_scratch(h, how):
+                code, out, err = run_seen("compose", "--target", h.target)
+            assert_scratch_diagnostic(h, "compose", code, out, err, r"role|prompt|mode|lock", roots.values())
+            assert "locked" not in out, out
+            assert project_bytes(h.target) == before, "compose wrote project state on missing scratch space (%s)" % how
+
+
+def test_Q_entrypoints_lock_stops_naming_itself_and_keeps_the_lock_bytes():
+    with Host() as h:
+        roots = scratch_project(h)
+        before = project_bytes(h.target)
+        for how in ("enoent", "eperm"):
+            hunsu._ROLE_PROMPT.clear()
+            with no_scratch(h, how):
+                code, out, err = run_seen("lock", "--target", h.target)
+            assert_scratch_diagnostic(h, "lock", code, out, err, r"role|prompt|mode|lock", roots.values())
+            assert project_bytes(h.target) == before, "lock wrote project state on missing scratch space (%s)" % how
+
+
+def test_Q_entrypoints_the_mutation_lock_is_never_skipped_when_only_the_lock_needs_scratch():
+    """No role, no mode: the only scratch a `lock` needs is its mutation lock file. Where that cannot be created, `lock` stops —
+    it does not lock the project without the mutation lock."""
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip")
+        before = project_bytes(h.target)
+        assert hunsu.LOCK not in before
+        with no_scratch(h, "enoent"):
+            code, out, err = run_seen("lock", "--target", h.target)
+        assert_scratch_diagnostic(h, "lock", code, out, err, r"lock")
+        assert not os.path.exists(os.path.join(h.target, hunsu.LOCK)), "locked without the mutation lock"
+        assert project_bytes(h.target) == before
+        assert run("lock", "--target", h.target)[0] == 0, "and with scratch space back, lock works"
+
+
+def test_Q_entrypoints_judge_request_stops_naming_itself_and_writes_no_packet():
+    with Host() as h:
+        roots = scratch_project(h)
+        d = os.path.join(h.target, "judge-out")
+        before = project_bytes(h.target)
+        for how in ("enoent", "eperm"):
+            hunsu._ROLE_PROMPT.clear()
+            with no_scratch(h, how):
+                code, out, err = run_seen("judge", "request", "--target", h.target, "--out", d)
+            assert_scratch_diagnostic(h, "judge", code, out, err, r"role|prompt|mode|lock", roots.values())
+            assert "request" in out + err, "the diagnostic names `judge request`: " + out + err
+            assert project_bytes(h.target) == before, "judge request wrote on missing scratch space (%s)" % how
+            assert not os.path.exists(os.path.join(d, "cluster-request.json"))
+
+
+def test_Q_entrypoints_judge_consume_stops_naming_itself_and_keeps_the_judgments():
+    with Host() as h:
+        roots = scratch_project(h)
+        d = os.path.join(h.home, "judge-again")
+        assert run("judge", "request", "--target", h.target, "--out", d)[0] == 0
+        write(os.path.join(d, "cluster-response.json"), {"groups": [{"situation": "building", "members": ["gamma:build", "gamma:plan"], "why": "one"}]})
+        assert run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))[0] == 0
+        write(os.path.join(d, "group-01-response.json"), {"findings": [
+            {"kind": "contradiction", "members": ["gamma:build", "plugin:delta"], "quotes": {"gamma:build": "Ask no one", "plugin:delta": "ask the user"},
+             "why": "the worker inherits the mode", "proposed": {"accept": "unattended by design"}}]})
+        before = project_bytes(h.target)
+        for how in ("enoent", "eperm"):
+            hunsu._ROLE_PROMPT.clear()
+            with no_scratch(h, how):
+                code, out, err = run_seen("judge", "consume", "--target", h.target, "--dir", d, "--by", "test2")
+            assert_scratch_diagnostic(h, "judge", code, out, err, r"role|prompt|mode|lock", roots.values())
+            assert "consume" in out + err, "the diagnostic names `judge consume`: " + out + err
+            assert project_bytes(h.target) == before, "judge consume wrote on missing scratch space (%s)" % how
+
+
+def test_Q_entrypoints_check_remote_stops_naming_itself():
+    with Host() as h:
+        roots = scratch_project(h)
+        before = project_bytes(h.target)
+        for how in ("enoent", "eperm"):
+            hunsu._ROLE_PROMPT.clear()
+            with no_scratch(h, how):
+                code, out, err = run_seen("check", "--remote", "--target", h.target)
+            assert_scratch_diagnostic(h, "check", code, out, err, r"role|prompt|clone|outdated|marketplace", roots.values())
+            assert "up to date" not in out and "published" not in out, out
+            assert project_bytes(h.target) == before
+
+
+def test_Q_entrypoints_the_session_start_hook_says_check_could_not_complete():
+    with Host() as h:
+        roots = scratch_project(h)
+        before = project_bytes(h.target)
+        hook = os.path.join(HERE, "hooks", "session_start.py")
+        for how in ("enoent", "eperm"):
+            done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": h.target}), capture_output=True, text=True,
+                                  encoding="utf-8", env=scratch_env(h, how), timeout=120)
+            assert "Traceback" not in done.stdout + done.stderr, done.stdout + done.stderr
+            ctx = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
+            assert "environment matches" not in ctx and "environment differs" not in ctx and "matches hunsu.json" not in ctx, ctx
+            assert "could not complete" in ctx and "check" in ctx, ctx
+            assert SCRATCH_PHRASE in ctx, "the diagnostic's reason is missing from the hook's line: " + ctx
+            # the line about check (the lock's plugin roots, said on another line as before, are not this line)
+            said = "\n".join(l for l in ctx.splitlines() if "could not complete" in l or SCRATCH_PHRASE in l or "TMPDIR" in l)
+            for path in SCRATCH_LISTED + [h.home, h.target, h.claude, os.path.expanduser("~"), HERE] + list(roots.values()):
+                assert path not in said, "a machine path in the hook's line (%s): %s" % (path, said)
+            assert project_bytes(h.target) == before
+
+
+def test_Q_success_unchanged_roles_render_the_same_text_once_a_temporary_directory_is_back():
+    """May pass before the build: with scratch space, role prompts and the check report are what they were."""
+    with Host() as h:
+        scratch_project(h)
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))
+        hunsu._ROLE_PROMPT.clear()
+        expected = hunsu.role_prompts(m, hunsu.survey(h.target))
+        assert expected["gamma:build"]["text"] == "You are the builder. Ask no one; decide and report.", expected
+        for how in ("enoent", "eperm"):
+            hunsu._ROLE_PROMPT.clear()
+            with no_scratch(h, how):
+                try:
+                    hunsu.role_prompts(m, hunsu.survey(h.target))
+                except BaseException:
+                    pass
+            assert hunsu.role_prompts(m, hunsu.survey(h.target)) == expected, how
+            hunsu._ROLE_PROMPT.clear()
+            assert hunsu.role_prompts(m, hunsu.survey(h.target)) == expected, how
+        code, out = run("check", "--target", h.target)
+        import re
+        assert re.search(SUMMARY_RE, out.strip().splitlines()[-1]), out
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
