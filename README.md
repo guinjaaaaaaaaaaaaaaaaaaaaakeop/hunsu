@@ -152,8 +152,9 @@ plugins), `hunsu add X`, `hunsu check` and a `--stale` judge round for what it c
 M` and `codex plugin remove` + `add`.
 
 `check` reads project data without writing project state, but rendering role prompts and modes may need temporary
-scratch files; `--remote` also needs scratch space for marketplace clones, and the mutation lock that `compose`, `lock`
-and `judge` take first lives in a temporary directory. Where that space is unavailable (a completely read-only sandbox can
+scratch files; `--remote` also needs scratch space for marketplace clones, and the mutation lock that every command
+changing the project (`init`, `add`, `remove`, `install`, `link`/`unlink`, `dev`, `capability`, `role add`, `compose`,
+`lock`, `judge`) takes first lives in a temporary directory. Where that space is unavailable (a completely read-only sandbox can
 give none), the command stops nonzero with `no writable temporary directory` and what needed it: no summary line, no
 findings document, nothing judged or written; the SessionStart line says `check` could not complete. Set `TMPDIR` to a
 writable directory or use a sandbox that allows writing there (Codex `workspace-write`).
