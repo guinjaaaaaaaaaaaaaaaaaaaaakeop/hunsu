@@ -1,0 +1,11 @@
+{
+  "artifact-type": "chongdae/plan@1",
+  "written_by": "chongdae 1.24.0",
+  "goal": "Fix the confirmed hunsu tree_fingerprint false drift between identical Claude/Codex plugin payloads caused by Codex's root .codex-marketplace-install.json installer receipt: ignore that exact root path only, keep every real content change visible, and document that locks whose hash included the receipt need an explicit relock after payload verification",
+  "kind": "session",
+  "tasks": [],
+  "providers": {
+    "session": "session"
+  },
+  "from": "plan/receipt-fingerprint.md"
+}

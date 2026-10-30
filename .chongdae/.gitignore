@@ -1,0 +1,13 @@
+# chongdae: a run's local/ is this machine's work (requests, responses, sessions, pending, logs);
+# the run's root is the committed record
+local/
+sessions/
+*.transcript*.jsonl
+*.request.json
+*.request.*.json
+*.provider.log
+*.pending.json
+*.last.txt
+*.schema.json
+*.response.json
+*.response.*.json
