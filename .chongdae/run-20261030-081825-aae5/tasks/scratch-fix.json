@@ -1,0 +1,239 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "scratch-fix",
+    "role": "implementer",
+    "brief": "Small targeted error handling, per the contract: where hunsu.py asks tempfile for scratch space on the check, compose, lock and judge paths (role_prompts' mkdtemp, mode_text's mkdtemp, the mutation lock's gettempdir/makedirs/lock file, outdated's mkdtemp under check --remote), an unavailable temporary directory (FileNotFoundError from gettempdir, PermissionError or another OSError creating the directory or lock file) becomes one clear diagnostic and a nonzero exit — the exact phrase 'no writable temporary directory', the command's name, what needed the space, TMPDIR or a sandbox that allows writing there as the remedy, no bypass, no absolute machine path, no traceback — never a skipped mutation lock, omitted role, fresh/stale judgment or summary line. hooks/session_start.py says check could not complete instead of 'environment differs/matches'. No new runner or stdin protocol; no change to how roles are rendered when scratch is available. test_hunsu.py is protected; hostcall.py stays byte-identical; no version bump; never touch a plugin cache, ~/.claude or ~/.codex. python3 test_hunsu.py must pass in full on python3 3.11+, run with AGENT_WORKER unset (three existing hook tests fail under a worker's AGENT_WORKER=1)",
+    "closes": [
+      "Q-scratch-diagnostic",
+      "Q-no-false-pass",
+      "Q-entrypoints",
+      "Q-success-unchanged"
+    ],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "-c",
+        "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+      ],
+      [
+        "python3",
+        "-c",
+        "assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'"
+      ],
+      [
+        "python3",
+        "test_hunsu.py"
+      ]
+    ],
+    "tests": [
+      "test_hunsu.py"
+    ],
+    "gate": null,
+    "domain": "code",
+    "scope": [
+      "hooks/session_start.py",
+      "hunsu.py"
+    ]
+  },
+  "seq": 3,
+  "added": "2026-10-30T08:23:54+00:00",
+  "response": {
+    "status": "done",
+    "summary": "임시 공간 실패를 경로·traceback 없는 비정상 종료 진단으로 처리했습니다. 실패 시 렌더링 캐시를 비우고, SessionStart 메시지와 README를 수정했습니다. 전체 테스트가 통과했습니다.",
+    "verified": [
+      {
+        "check": "python3 -c \"assert __import__('sys').version_info >= (3, 11), __import__('sys').version\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c \"assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 test_hunsu.py",
+        "exit": 0
+      },
+      {
+        "check": "git diff --check",
+        "exit": 0
+      }
+    ],
+    "decisions": [],
+    "non-claims": [
+      "전체 테스트는 AGENT_WORKER를 해제한 상태에서 실행했습니다.",
+      "실제 호스트 설치 환경은 검증하지 않았습니다. 보호된 테스트, hostcall.py, 버전 및 실행 기록은 변경하지 않았습니다."
+    ],
+    "disputed-tests": [],
+    "worker": {
+      "host": "codex",
+      "model": "gpt-6-astra",
+      "effort": "medium"
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T08:25:44+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched_by_provider": [
+    "README.md",
+    "hooks/session_start.py"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "host": "codex",
+    "model": "gpt-6-astra",
+    "effort": "medium",
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 14,
+      "commands-failed": 0
+    }
+  },
+  "non-claims": [
+    "(provider) 전체 테스트는 AGENT_WORKER를 해제한 상태에서 실행했습니다.",
+    "(provider) 실제 호스트 설치 환경은 검증하지 않았습니다. 보호된 테스트, hostcall.py, 버전 및 실행 기록은 변경하지 않았습니다."
+  ],
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 -c 'assert __import__('\"'\"'sys'\"'\"').version_info >= (3, 11), __import__('\"'\"'sys'\"'\"').version'",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T08:25:44+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 -c 'assert __import__('\"'\"'hashlib'\"'\"').sha256(open('\"'\"'hostcall.py'\"'\"', '\"'\"'rb'\"'\"').read()).hexdigest() == '\"'\"'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\"'\"''",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T08:25:44+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 test_hunsu.py",
+        "exit": 0,
+        "tail": [
+          "PASS test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host",
+          "PASS test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed",
+          "PASS test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short",
+          "PASS test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run",
+          "PASS test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated",
+          "all passed"
+        ],
+        "at": "2026-10-30T08:25:51+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T08:25:52+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 10,
+      "cost_usd": 0.24715079999999998
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T08:26:18+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    "README.md": "a386c835e67912b6353dd0bb1120f56ca9caf75c",
+    "hooks/session_start.py": "d0acbc874a6f6110b56c616fc9ceb747eeacc1cf",
+    "test_hunsu.py": "808f181a91f98b7feb6427c66291104448b2557e",
+    "plan/scratch-space.md": "01180fe022fbd9a8c91f86b66098c0d471708f91"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 10,
+    "cost_usd": 0.24715079999999998,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "seen-non-claims": {
+    "by": "verifier of scratch-fix",
+    "texts": [
+      "(provider) 전체 테스트는 AGENT_WORKER를 해제한 상태에서 실행했습니다.",
+      "(provider) 실제 호스트 설치 환경은 검증하지 않았습니다. 보호된 테스트, hostcall.py, 버전 및 실행 기록은 변경하지 않았습니다."
+    ],
+    "at": "2026-10-30T08:26:18+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+    ],
+    [
+      "python3",
+      "-c",
+      "assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'"
+    ],
+    [
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "touched": [
+    "README.md",
+    "hooks/session_start.py",
+    "hunsu.py"
+  ],
+  "done": {
+    "at": "2026-10-30T08:26:19+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

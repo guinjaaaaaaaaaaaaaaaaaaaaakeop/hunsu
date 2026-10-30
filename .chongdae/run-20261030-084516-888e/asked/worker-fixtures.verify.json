@@ -1,0 +1,78 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-084516-888e",
+  "task": "worker-fixtures",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Bounded final hardening: (A) a re-judged situation whose resolution was never read by a person (reviewed: false) keeps reviewed: false on a grounded still-fits instead of becoming a judge delegation — unattended proposals are not turned into approved history; previously reviewed resolutions and valid delegated continuation keep today's behavior; (B) the three hook tests build a normal-session environment explicitly so the suite passes under an inherited AGENT_WORKER=1, without changing hooks or production environments",
+  "brief": "Q-worker-fixtures: in the three hook tests, the env given to a hook for a normal-session assertion removes AGENT_WORKER and HUNSU_SURVEY (as their neighbours do); a worker-suppression assertion keeps setting AGENT_WORKER=1 explicitly. No other test, hook or production code changes. Checked: the three under a normal parent and under an inherited AGENT_WORKER=1",
+  "closes": [
+    "Q-worker-fixtures"
+  ],
+  "contract": {
+    "Q-worker-fixtures": "contract/Q-worker-fixtures-2f109ea6.md"
+  },
+  "checks": [
+    [
+      "env",
+      "-u",
+      "AGENT_WORKER",
+      "-u",
+      "HUNSU_SURVEY",
+      "python3",
+      "-c",
+      "[getattr(__import__('test_hunsu'), n)() for n in ('test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here', 'test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them', 'test_session_start_hook_reports_both_states')]"
+    ],
+    [
+      "env",
+      "AGENT_WORKER=1",
+      "python3",
+      "-c",
+      "[getattr(__import__('test_hunsu'), n)() for n in ('test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here', 'test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them', 'test_session_start_hook_reports_both_states')]"
+    ]
+  ],
+  "tests": [],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-084516-888e/local/worker-fixtures.verify.response.json",
+  "touched": [
+    "test_hunsu.py"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "reviews/review-20261030-165120-086d.json",
+      "reviews/review-20261030-170132-9b67.json",
+      "reviews/review-20261030-173237-4dd7.json"
+    ]
+  },
+  "since": {
+    ".": "f6379d76ddad2cbd3d7562d508329cb063185e59"
+  },
+  "checked": [
+    {
+      "command": "env -u AGENT_WORKER -u HUNSU_SURVEY python3 -c '[getattr(__import__('\"'\"'test_hunsu'\"'\"'), n)() for n in ('\"'\"'test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here'\"'\"', '\"'\"'test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them'\"'\"', '\"'\"'test_session_start_hook_reports_both_states'\"'\"')]'",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T08:46:30+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "env AGENT_WORKER=1 python3 -c '[getattr(__import__('\"'\"'test_hunsu'\"'\"'), n)() for n in ('\"'\"'test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here'\"'\"', '\"'\"'test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_carries_them'\"'\"', '\"'\"'test_session_start_hook_reports_both_states'\"'\"')]'",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T08:46:30+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

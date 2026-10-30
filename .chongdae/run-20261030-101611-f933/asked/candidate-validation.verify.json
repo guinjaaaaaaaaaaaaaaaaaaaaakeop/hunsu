@@ -1,0 +1,81 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-101611-f933",
+  "task": "candidate-validation",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Prepare the hunsu 2.0.0 candidate (no publication, tag, install, cache or sibling change): set the five version values to 2.0.0, keep the three engines.python >=3.11, make README Versioning say timelessly that 2.0.0 raises the floor and drops Python 3.9 and 3.10, validate metadata, links, package paths and whitespace, run the existing suite once on Python 3.11.16 under a normal parent and once under AGENT_WORKER=1 bound to the candidate commit, and inventory the closed public record candidates privately",
+  "brief": "On candidate commit d54fb0c (tree 82402d1): the existing python3 test_hunsu.py once under a normal parent and once under AGENT_WORKER=1, both with python3 resolving to Python 3.11.16 for the parent and its child processes (a PATH shim given to this run call only); each run binds its full output, exact PASS/FAIL/SKIP counts, parent and child interpreter versions, HEAD commit/tree and source sha256 in run-local evidence. Then a disposable standalone clone of HEAD (no install, network or model): clone HEAD equals the candidate, five versions 2.0.0, three floors >=3.11, every hunsu.py subcommand's --help runs",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      ".chongdae/run-20261030-101611-f933/local/validation/suite.py",
+      "normal"
+    ],
+    [
+      "python3",
+      ".chongdae/run-20261030-101611-f933/local/validation/suite.py",
+      "worker"
+    ],
+    [
+      "python3",
+      ".chongdae/run-20261030-101611-f933/local/validation/clone_check.py"
+    ]
+  ],
+  "tests": [],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-101611-f933/local/candidate-validation.verify.response.json",
+  "touched": [],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "reviews/review-20261030-165120-086d.json",
+      "reviews/review-20261030-170132-9b67.json",
+      "reviews/review-20261030-173237-4dd7.json",
+      "reviews/review-20261030-175356-101c.json"
+    ]
+  },
+  "since": {
+    ".": "d54fb0c906ab8649e947ec7be1254370c1246277"
+  },
+  "checked": [
+    {
+      "command": "python3 .chongdae/run-20261030-101611-f933/local/validation/suite.py normal",
+      "exit": 0,
+      "tail": [
+        "suite normal: parent python 3.11.16, child python 3.11.16, PASS 87, FAIL 0, SKIP 0, exit 0, head d54fb0c906ab, tree 82402d1b07c4, tracked dirty: no"
+      ],
+      "at": "2026-10-30T10:18:33+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 .chongdae/run-20261030-101611-f933/local/validation/suite.py worker",
+      "exit": 0,
+      "tail": [
+        "suite worker: parent python 3.11.16, child python 3.11.16, PASS 87, FAIL 0, SKIP 0, exit 0, head d54fb0c906ab, tree 82402d1b07c4, tracked dirty: no"
+      ],
+      "at": "2026-10-30T10:18:40+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 .chongdae/run-20261030-101611-f933/local/validation/clone_check.py",
+      "exit": 0,
+      "tail": [
+        "clone_check: head d54fb0c906ab, python 3.11.16, versions ['2.0.0'], floors ['>=3.11'], 17 --help ok, 0 failure(s), clone removed: True"
+      ],
+      "at": "2026-10-30T10:18:40+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

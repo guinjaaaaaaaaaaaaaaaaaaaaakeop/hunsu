@@ -1,0 +1,122 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-065025-f619",
+  "task": "prior-adoption",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Fix the confirmed hunsu tree_fingerprint false drift between identical Claude/Codex plugin payloads caused by Codex's root .codex-marketplace-install.json installer receipt: ignore that exact root path only, keep every real content change visible, and document that locks whose hash included the receipt need an explicit relock after payload verification",
+  "brief": "Adopt for release, after review, the pre-run edits the owner authorized and the outer baseline hunsu.patch (sha256 16246c308243…) records: AGENTS.md and CLAUDE.md (new), README.md's install/Codex/host-entry/capability/manifest/sandbox/limits/versioning hunks, hunsu.py's CAPABILITY_HELP, the compose skill's engines sentence, and the >=3.11 floor in plugin.json and .claude-plugin/plugin.json. This run did not author them. Checked here: three manifests at >=3.11, the added links and anchors resolve, no whitespace errors, the suite passes. README.md and hunsu.py also hold this run's committed receipt hunks; the receipt tasks keep them in their own records",
+  "closes": [
+    "Q-prior-adoption"
+  ],
+  "contract": {
+    "Q-prior-adoption": "contract/Q-prior-adoption-9e062f03.md"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert [__import__('json').load(open(p))['engines']['python'] for p in ('plugin.json', '.claude-plugin/plugin.json', '.codex-plugin/plugin.json')] == ['>=3.11'] * 3"
+    ],
+    [
+      "python3",
+      "-c",
+      "assert all(__import__('os').path.exists(p) for p in ('AGENTS.md', 'CLAUDE.md', 'skills/compose/SKILL.md')) and all(h in open('README.md').read().splitlines() for h in ('## Install', '## Shared instructions and host entry points', '## Commands', '## Manifest', '## Limits', '## Versioning')) and open('CLAUDE.md').read().strip() == '@AGENTS.md'"
+    ],
+    [
+      "git",
+      "diff",
+      "--check"
+    ],
+    [
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "tests": [],
+  "domain": "docs",
+  "response": "./.chongdae/run-20261030-065025-f619/local/prior-adoption.verify.response.json",
+  "touched": [
+    ".claude-plugin/plugin.json",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "plugin.json",
+    "skills/compose/SKILL.md"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "hunsu.py"
+    ]
+  },
+  "attribution": {
+    "adopted": [
+      ".claude-plugin/plugin.json",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "plugin.json",
+      "skills/compose/SKILL.md"
+    ],
+    "held-at-start": [
+      "README.md",
+      "hunsu.py"
+    ]
+  },
+  "since": {
+    ".": "844cae45acbc30780412928aad33556586906266"
+  },
+  "checked": [
+    {
+      "command": "python3 -c 'assert [__import__('\"'\"'json'\"'\"').load(open(p))['\"'\"'engines'\"'\"']['\"'\"'python'\"'\"'] for p in ('\"'\"'plugin.json'\"'\"', '\"'\"'.claude-plugin/plugin.json'\"'\"', '\"'\"'.codex-plugin/plugin.json'\"'\"')] == ['\"'\"'>=3.11'\"'\"'] * 3'",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:43:10+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 -c 'assert all(__import__('\"'\"'os'\"'\"').path.exists(p) for p in ('\"'\"'AGENTS.md'\"'\"', '\"'\"'CLAUDE.md'\"'\"', '\"'\"'skills/compose/SKILL.md'\"'\"')) and all(h in open('\"'\"'README.md'\"'\"').read().splitlines() for h in ('\"'\"'## Install'\"'\"', '\"'\"'## Shared instructions and host entry points'\"'\"', '\"'\"'## Commands'\"'\"', '\"'\"'## Manifest'\"'\"', '\"'\"'## Limits'\"'\"', '\"'\"'## Versioning'\"'\"')) and open('\"'\"'CLAUDE.md'\"'\"').read().strip() == '\"'\"'@AGENTS.md'\"'\"''",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:43:10+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:43:10+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 test_hunsu.py",
+      "exit": 0,
+      "tail": [
+        "PASS test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host",
+        "PASS test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed",
+        "PASS test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short",
+        "PASS test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run",
+        "PASS test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated",
+        "all passed"
+      ],
+      "at": "2026-10-30T07:43:16+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

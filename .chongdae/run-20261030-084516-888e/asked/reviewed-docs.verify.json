@@ -1,0 +1,56 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-084516-888e",
+  "task": "reviewed-docs",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Bounded final hardening: (A) a re-judged situation whose resolution was never read by a person (reviewed: false) keeps reviewed: false on a grounded still-fits instead of becoming a judge delegation — unattended proposals are not turned into approved history; previously reviewed resolutions and valid delegated continuation keep today's behavior; (B) the three hook tests build a normal-session environment explicitly so the suite passes under an inherited AGENT_WORKER=1, without changing hooks or production environments",
+  "brief": "Q-docs-reviewed: README's Conflicts section says consume marks every re-judged resolution whose findings changed reviewed: false; in fact a grounded still-fits records a delegation for a resolution already reviewed (a person, by hand, an earlier delegation), leaves an unread proposal's reviewed: false, and anything else marks false. Say that; nothing else changes",
+  "closes": [
+    "Q-docs-reviewed"
+  ],
+  "contract": {
+    "Q-docs-reviewed": "contract/Q-docs-reviewed-ad48662e.md"
+  },
+  "checks": [
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "tests": [],
+  "domain": "docs",
+  "response": "./.chongdae/run-20261030-084516-888e/local/reviewed-docs.verify.response.json",
+  "touched": [
+    "README.md"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "hunsu.py",
+      "reviews/review-20261030-165120-086d.json",
+      "reviews/review-20261030-170132-9b67.json",
+      "reviews/review-20261030-173237-4dd7.json"
+    ]
+  },
+  "since": {
+    ".": "f6379d76ddad2cbd3d7562d508329cb063185e59"
+  },
+  "checked": [
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T08:51:40+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

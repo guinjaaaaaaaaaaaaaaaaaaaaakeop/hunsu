@@ -1,0 +1,67 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-065025-f619",
+  "task": "local-records",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Fix the confirmed hunsu tree_fingerprint false drift between identical Claude/Codex plugin payloads caused by Codex's root .codex-marketplace-install.json installer receipt: ignore that exact root path only, keep every real content change visible, and document that locks whose hash included the receipt need an explicit relock after payload verification",
+  "brief": "Set this machine's chongdae overlay settings.chongdae.commit-records to false in hunsu.local.json (gitignored, never committed): from here chongdae writes this run's records without committing them; the records and commits made so far stay as they are, private and unpushed. The released hunsu check must still report errors 0",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "import json; assert json.load(open('hunsu.local.json'))['settings']['chongdae']['commit-records'] is False"
+    ],
+    [
+      "python3",
+      "{plugin:hunsu}/hunsu.py",
+      "check",
+      "--target",
+      "."
+    ]
+  ],
+  "tests": [],
+  "domain": "environment",
+  "response": "./.chongdae/run-20261030-065025-f619/local/local-records.verify.response.json",
+  "touched": [],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "hunsu.py"
+    ]
+  },
+  "since": {
+    ".": "844cae45acbc30780412928aad33556586906266"
+  },
+  "checked": [
+    {
+      "command": "python3 -c 'import json; assert json.load(open('\"'\"'hunsu.local.json'\"'\"'))['\"'\"'settings'\"'\"']['\"'\"'chongdae'\"'\"']['\"'\"'commit-records'\"'\"'] is False'",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:37:54+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 '{plugin:hunsu}/hunsu.py' check --target .",
+      "exit": 0,
+      "tail": [
+        "info  6 finding(s) settled by the members' own text (sequenced / not co-active / duplicate, each on a verified sentence) — no resolution needed; see hunsu-conflicts.md",
+        "  (offline: a release is known here only from this machine's marketplace copies — `hunsu outdated` asks the marketplaces, read-only)",
+        "errors 0 · warnings 0 · info 1"
+      ],
+      "at": "2026-10-30T07:37:54+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

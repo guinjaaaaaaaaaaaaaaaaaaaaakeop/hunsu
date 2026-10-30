@@ -1,0 +1,44 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "build",
+  "run": "run-20261030-081825-aae5",
+  "task": "scratch-fix",
+  "role": "implementer",
+  "target": ".",
+  "goal": "A live Codex read-only candidate check crashed in all six projects with an unhandled FileNotFoundError from tempfile.mkdtemp in role_prompts: turn an unavailable temporary scratch directory on hunsu's check, compose, lock and judge paths into a clear nonzero diagnostic — no traceback, no machine paths, no silently omitted roles or stale judgments, no false pass — keep successful behavior, and document that check reads project data but may need temporary scratch files",
+  "brief": "Small targeted error handling, per the contract: where hunsu.py asks tempfile for scratch space on the check, compose, lock and judge paths (role_prompts' mkdtemp, mode_text's mkdtemp, the mutation lock's gettempdir/makedirs/lock file, outdated's mkdtemp under check --remote), an unavailable temporary directory (FileNotFoundError from gettempdir, PermissionError or another OSError creating the directory or lock file) becomes one clear diagnostic and a nonzero exit — the exact phrase 'no writable temporary directory', the command's name, what needed the space, TMPDIR or a sandbox that allows writing there as the remedy, no bypass, no absolute machine path, no traceback — never a skipped mutation lock, omitted role, fresh/stale judgment or summary line. hooks/session_start.py says check could not complete instead of 'environment differs/matches'. No new runner or stdin protocol; no change to how roles are rendered when scratch is available. test_hunsu.py is protected; hostcall.py stays byte-identical; no version bump; never touch a plugin cache, ~/.claude or ~/.codex. python3 test_hunsu.py must pass in full on python3 3.11+, run with AGENT_WORKER unset (three existing hook tests fail under a worker's AGENT_WORKER=1)",
+  "closes": [
+    "Q-scratch-diagnostic",
+    "Q-no-false-pass",
+    "Q-entrypoints",
+    "Q-success-unchanged"
+  ],
+  "contract": {
+    "Q-scratch-diagnostic": "contract/Q-scratch-diagnostic-90a399c2.md",
+    "Q-no-false-pass": "contract/Q-no-false-pass-4823f62b.md",
+    "Q-entrypoints": "contract/Q-entrypoints-3a9d39be.md",
+    "Q-success-unchanged": "contract/Q-success-unchanged-ee3014c8.md"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+    ],
+    [
+      "python3",
+      "-c",
+      "assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'"
+    ],
+    [
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "tests": [
+    "test_hunsu.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-081825-aae5/local/scratch-fix.response.json"
+}

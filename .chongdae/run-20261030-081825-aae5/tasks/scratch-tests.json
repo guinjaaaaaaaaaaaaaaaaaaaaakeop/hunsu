@@ -1,0 +1,171 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "scratch-tests",
+    "role": "nitpick",
+    "brief": "Add regression tests to the existing test_hunsu.py (plain test_ functions run by its __main__; keep every existing test unchanged) for an unavailable temporary directory on hunsu's check, compose, lock, judge and SessionStart-hook paths, per the contract. Build the fixture first, then make tempfile fail only around the command under test (gettempdir raising FileNotFoundError with machine-like paths in its message; mkdtemp raising PermissionError); observe exit code, output/stderr (one subprocess run, finding no Traceback) and project file bytes. They must fail against the current hunsu.py because of the real defect (the unhandled exception, traceback, missing diagnostic) — never because they import a name the fix has not added. A Q-success-unchanged test (roles render the same text once a temporary directory is available again) may pass before the build. Temporary trees and the file's fake hosts only — never a real plugin cache, ~/.claude, ~/.codex or another project. Run with AGENT_WORKER unset (three existing hook tests fail under a worker's AGENT_WORKER=1)",
+    "closes": [
+      "Q-scratch-diagnostic",
+      "Q-no-false-pass",
+      "Q-entrypoints",
+      "Q-success-unchanged",
+      "Q-tests"
+    ],
+    "needs": [],
+    "checks": [],
+    "tests": [
+      "test_hunsu.py"
+    ],
+    "gate": null,
+    "domain": "code"
+  },
+  "seq": 2,
+  "added": "2026-10-30T08:19:17+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so",
+    "(provider) Q-success-unchanged: \"existing tests stay as they are and pass, and `python3 test_hunsu.py` passes in full on Python 3.11 or newer\" — this is a property of the whole suite, not one test. Running the file decides it; no new test can.",
+    "(provider) Q-success-unchanged: \"modes are read as before\" is not checked on its own. The existing mode tests and the check report compared after recovery cover it indirectly.",
+    "(provider) Q-entrypoints: \"Small targeted error handling at the scratch sites (or one shared helper they call) — not a new runner, stdin protocol or change to how roles are rendered\" is about how the fix is built. No output test can see it. A review has to judge it, apart from the rendered role text, which the Q-success-unchanged test compares.",
+    "(provider) Q-entrypoints: \"The mutation lock is never skipped to get past the failure\" is decided only where the lock file is the only thing that needs scratch space (a project with no roles or modes and judge=skip): `lock` must stop and write no hunsu.lock.json. A fix that skips the lock but still stops later, when roles are rendered, would not be caught on the full fixture.",
+    "(provider) Q-entrypoints: for `compose` / `lock` / `judge`, the exact text of \"says what needed the scratch space\" is accepted as any of role/prompt/mode/lock. For `check --remote` it is accepted as any of role/prompt/clone/outdated/marketplace. No test makes `outdated`'s clone the only scratch site, so the clone wording itself is not decided.",
+    "(provider) Q-scratch-diagnostic: \"names the command\" is checked by finding the command's word (check, compose, lock, judge plus request or consume) anywhere in the output, not by the diagnostic's exact shape. For `lock`, the words 'mutation lock' would also match.",
+    "(provider) Q-scratch-diagnostic: \"never a sandbox, approval or hook-trust bypass\" is checked against a list of forbidden words (danger, bypass, yolo, skip-permissions, approval never, -a never, untrusted). Other ways of wording a bypass are not caught.",
+    "(provider) Q-scratch-diagnostic: \"no absolute machine path\" is checked against the specific paths the test knows: the injected temporary directories, /tmp, /var/tmp, /usr/tmp, home, the fake host and project, the plugin roots and hunsu's own directory. It is not a general ban on absolute paths. In the SessionStart hook test the check covers only the lines about check (lines containing the phrase, 'could not complete' or TMPDIR), because the hook's existing line listing the lock's plugin roots is not part of this contract.",
+    "(provider) Q-scratch-diagnostic: \"or another OSError\" — only FileNotFoundError and PermissionError are simulated, as Q-tests prescribes. Other OSError subclasses are not tested.",
+    "(provider) README / documentation (in the goal: \"document that check reads project data but may need temporary scratch files\") is not one of the contract sections this task closes, and no test covers it."
+  ],
+  "response": {
+    "status": "done",
+    "summary": "I added 15 tests to the end of test_hunsu.py and left every existing test unchanged (the diff removes no lines). With AGENT_WORKER unset, `python3 test_hunsu.py` gives 13 failures, all of them new tests. Every existing test passes. Each of the 13 fails because of the real defect: an unhandled FileNotFoundError or PermissionError from `tempfile.gettempdir` in `project_mutation` or from `tempfile.mkdtemp` in `role_prompts`, or because the SessionStart hook says \"environment differs\". None fails on a missing import. Two tests pass now: Q-success-unchanged, which the brief allows, and a sanity check that the subprocess setup really takes tempfile away.\n\nHow the tests are built: `scratch_project` makes a temporary fake host and a project that reaches `role_prompts`. It has a locked plugin that provides the declared role `implementer` (gamma:build), a mode plugin, and existing judgments. `no_scratch` patches tempfile only around the command under test. In one mode `gettempdir`/`gettempdirb` raise `FileNotFoundError(ENOENT, \"No usable temporary directory found in [...]\")` and the message lists machine-like paths and the project path. In the other mode `mkdtemp` raises PermissionError. `run_seen` captures the exit code, stdout and stderr, and turns an escaping exception into traceback text. `project_bytes` compares the bytes of every file in the project before and after. The subprocess tests put a `sitecustomize.py` on PYTHONPATH that patches tempfile, and they check that no `Traceback` appears. `assert_scratch_diagnostic` is shared by the diagnostic tests and checks:\n- a nonzero exit\n- the exact phrase `no writable temporary directory`\n- the command's name\n- what needed the scratch space\n- a mention of `TMPDIR`\n- no suggestion of a bypass\n- none of the listed temporary directories, the home directory, the project path, the plugin roots or hunsu's own directory\n- no summary line and no \"environment matches\"",
+    "tests": [
+      "test_hunsu.py"
+    ],
+    "covers": [
+      {
+        "section": "Q-scratch-diagnostic",
+        "tests": [
+          "test_Q_scratch_diagnostic_check_with_no_usable_temporary_directory_is_a_diagnostic_not_a_traceback",
+          "test_Q_scratch_diagnostic_check_when_creating_the_scratch_directory_is_refused",
+          "test_Q_scratch_diagnostic_check_in_a_subprocess_prints_no_traceback_for_either_failure"
+        ]
+      },
+      {
+        "section": "Q-no-false-pass",
+        "tests": [
+          "test_Q_no_false_pass_a_failed_check_writes_no_project_file_and_says_nothing_about_roles_or_judgments",
+          "test_Q_no_false_pass_check_findings_prints_no_findings_document_and_exits_nonzero",
+          "test_Q_no_false_pass_a_failed_check_leaves_no_cached_state_and_the_next_check_reports_as_it_would_have"
+        ]
+      },
+      {
+        "section": "Q-entrypoints",
+        "tests": [
+          "test_Q_entrypoints_compose_stops_naming_itself_and_writes_nothing",
+          "test_Q_entrypoints_lock_stops_naming_itself_and_keeps_the_lock_bytes",
+          "test_Q_entrypoints_the_mutation_lock_is_never_skipped_when_only_the_lock_needs_scratch",
+          "test_Q_entrypoints_judge_request_stops_naming_itself_and_writes_no_packet",
+          "test_Q_entrypoints_judge_consume_stops_naming_itself_and_keeps_the_judgments",
+          "test_Q_entrypoints_check_remote_stops_naming_itself",
+          "test_Q_entrypoints_the_session_start_hook_says_check_could_not_complete"
+        ]
+      },
+      {
+        "section": "Q-success-unchanged",
+        "tests": [
+          "test_Q_success_unchanged_roles_render_the_same_text_once_a_temporary_directory_is_back"
+        ]
+      },
+      {
+        "section": "Q-tests",
+        "tests": [
+          "test_Q_tests_the_subprocess_boundary_really_takes_tempfile_away",
+          "test_Q_scratch_diagnostic_check_in_a_subprocess_prints_no_traceback_for_either_failure",
+          "test_Q_no_false_pass_check_findings_prints_no_findings_document_and_exits_nonzero",
+          "test_Q_entrypoints_the_session_start_hook_says_check_could_not_complete"
+        ]
+      }
+    ],
+    "non-claims": [
+      "Q-success-unchanged: \"existing tests stay as they are and pass, and `python3 test_hunsu.py` passes in full on Python 3.11 or newer\" — this is a property of the whole suite, not one test. Running the file decides it; no new test can.",
+      "Q-success-unchanged: \"modes are read as before\" is not checked on its own. The existing mode tests and the check report compared after recovery cover it indirectly.",
+      "Q-entrypoints: \"Small targeted error handling at the scratch sites (or one shared helper they call) — not a new runner, stdin protocol or change to how roles are rendered\" is about how the fix is built. No output test can see it. A review has to judge it, apart from the rendered role text, which the Q-success-unchanged test compares.",
+      "Q-entrypoints: \"The mutation lock is never skipped to get past the failure\" is decided only where the lock file is the only thing that needs scratch space (a project with no roles or modes and judge=skip): `lock` must stop and write no hunsu.lock.json. A fix that skips the lock but still stops later, when roles are rendered, would not be caught on the full fixture.",
+      "Q-entrypoints: for `compose` / `lock` / `judge`, the exact text of \"says what needed the scratch space\" is accepted as any of role/prompt/mode/lock. For `check --remote` it is accepted as any of role/prompt/clone/outdated/marketplace. No test makes `outdated`'s clone the only scratch site, so the clone wording itself is not decided.",
+      "Q-scratch-diagnostic: \"names the command\" is checked by finding the command's word (check, compose, lock, judge plus request or consume) anywhere in the output, not by the diagnostic's exact shape. For `lock`, the words 'mutation lock' would also match.",
+      "Q-scratch-diagnostic: \"never a sandbox, approval or hook-trust bypass\" is checked against a list of forbidden words (danger, bypass, yolo, skip-permissions, approval never, -a never, untrusted). Other ways of wording a bypass are not caught.",
+      "Q-scratch-diagnostic: \"no absolute machine path\" is checked against the specific paths the test knows: the injected temporary directories, /tmp, /var/tmp, /usr/tmp, home, the fake host and project, the plugin roots and hunsu's own directory. It is not a general ban on absolute paths. In the SessionStart hook test the check covers only the lines about check (lines containing the phrase, 'could not complete' or TMPDIR), because the hook's existing line listing the lock's plugin roots is not part of this contract.",
+      "Q-scratch-diagnostic: \"or another OSError\" — only FileNotFoundError and PermissionError are simulated, as Q-tests prescribes. Other OSError subclasses are not tested.",
+      "README / documentation (in the goal: \"document that check reads project data but may need temporary scratch files\") is not one of the contract sections this task closes, and no test covers it."
+    ],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 12,
+      "cost_usd": 0.9751320000000001
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T08:23:08+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched_by_provider": [
+    "test_hunsu.py"
+  ],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "teujip",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 12,
+    "cost_usd": 0.9751320000000001,
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 10,
+      "commands-failed": 0
+    }
+  },
+  "checks": [],
+  "touched": [
+    "test_hunsu.py"
+  ],
+  "done": {
+    "at": "2026-10-30T08:23:08+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "seen-non-claims": {
+    "by": "verifier of scratch-fix",
+    "texts": [
+      "(provider) Q-success-unchanged: \"existing tests stay as they are and pass, and `python3 test_hunsu.py` passes in full on Python 3.11 or newer\" — this is a property of the whole suite, not one test. Running the file decides it; no new test can.",
+      "(provider) Q-success-unchanged: \"modes are read as before\" is not checked on its own. The existing mode tests and the check report compared after recovery cover it indirectly.",
+      "(provider) Q-entrypoints: \"Small targeted error handling at the scratch sites (or one shared helper they call) — not a new runner, stdin protocol or change to how roles are rendered\" is about how the fix is built. No output test can see it. A review has to judge it, apart from the rendered role text, which the Q-success-unchanged test compares.",
+      "(provider) Q-entrypoints: \"The mutation lock is never skipped to get past the failure\" is decided only where the lock file is the only thing that needs scratch space (a project with no roles or modes and judge=skip): `lock` must stop and write no hunsu.lock.json. A fix that skips the lock but still stops later, when roles are rendered, would not be caught on the full fixture.",
+      "(provider) Q-entrypoints: for `compose` / `lock` / `judge`, the exact text of \"says what needed the scratch space\" is accepted as any of role/prompt/mode/lock. For `check --remote` it is accepted as any of role/prompt/clone/outdated/marketplace. No test makes `outdated`'s clone the only scratch site, so the clone wording itself is not decided.",
+      "(provider) Q-scratch-diagnostic: \"names the command\" is checked by finding the command's word (check, compose, lock, judge plus request or consume) anywhere in the output, not by the diagnostic's exact shape. For `lock`, the words 'mutation lock' would also match.",
+      "(provider) Q-scratch-diagnostic: \"never a sandbox, approval or hook-trust bypass\" is checked against a list of forbidden words (danger, bypass, yolo, skip-permissions, approval never, -a never, untrusted). Other ways of wording a bypass are not caught.",
+      "(provider) Q-scratch-diagnostic: \"no absolute machine path\" is checked against the specific paths the test knows: the injected temporary directories, /tmp, /var/tmp, /usr/tmp, home, the fake host and project, the plugin roots and hunsu's own directory. It is not a general ban on absolute paths. In the SessionStart hook test the check covers only the lines about check (lines containing the phrase, 'could not complete' or TMPDIR), because the hook's existing line listing the lock's plugin roots is not part of this contract.",
+      "(provider) Q-scratch-diagnostic: \"or another OSError\" — only FileNotFoundError and PermissionError are simulated, as Q-tests prescribes. Other OSError subclasses are not tested.",
+      "(provider) README / documentation (in the goal: \"document that check reads project data but may need temporary scratch files\") is not one of the contract sections this task closes, and no test covers it."
+    ],
+    "at": "2026-10-30T08:26:18+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

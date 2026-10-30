@@ -1,0 +1,55 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-081825-aae5",
+  "task": "scratch-docs-lock",
+  "role": "verifier",
+  "target": ".",
+  "goal": "A live Codex read-only candidate check crashed in all six projects with an unhandled FileNotFoundError from tempfile.mkdtemp in role_prompts: turn an unavailable temporary scratch directory on hunsu's check, compose, lock and judge paths into a clear nonzero diagnostic — no traceback, no machine paths, no silently omitted roles or stale judgments, no false pass — keep successful behavior, and document that check reads project data but may need temporary scratch files",
+  "brief": "Answer the fresh eyes' anomaly: README's scratch-space paragraph says the mutation lock is taken by compose, lock and judge; every command that changes the project takes it first (init, add, remove, install, link, unlink, dev, capability, role add, compose, lock, judge). Say so; change nothing else",
+  "closes": [
+    "Q-scratch-docs"
+  ],
+  "contract": {
+    "Q-scratch-docs": "contract/Q-scratch-docs-e288e5a4.md"
+  },
+  "checks": [
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "tests": [],
+  "domain": "docs",
+  "response": "./.chongdae/run-20261030-081825-aae5/local/scratch-docs-lock.verify.response.json",
+  "touched": [
+    "README.md"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "hunsu.py",
+      "reviews/review-20261030-165120-086d.json",
+      "reviews/review-20261030-170132-9b67.json"
+    ]
+  },
+  "since": {
+    ".": "7923d94fc89f4297a27d77fc03f675310cf8fc7e"
+  },
+  "checked": [
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T08:30:02+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

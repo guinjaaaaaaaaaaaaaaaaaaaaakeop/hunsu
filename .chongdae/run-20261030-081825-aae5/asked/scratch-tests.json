@@ -1,0 +1,31 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "build",
+  "run": "run-20261030-081825-aae5",
+  "task": "scratch-tests",
+  "role": "nitpick",
+  "target": ".",
+  "goal": "A live Codex read-only candidate check crashed in all six projects with an unhandled FileNotFoundError from tempfile.mkdtemp in role_prompts: turn an unavailable temporary scratch directory on hunsu's check, compose, lock and judge paths into a clear nonzero diagnostic — no traceback, no machine paths, no silently omitted roles or stale judgments, no false pass — keep successful behavior, and document that check reads project data but may need temporary scratch files",
+  "brief": "Add regression tests to the existing test_hunsu.py (plain test_ functions run by its __main__; keep every existing test unchanged) for an unavailable temporary directory on hunsu's check, compose, lock, judge and SessionStart-hook paths, per the contract. Build the fixture first, then make tempfile fail only around the command under test (gettempdir raising FileNotFoundError with machine-like paths in its message; mkdtemp raising PermissionError); observe exit code, output/stderr (one subprocess run, finding no Traceback) and project file bytes. They must fail against the current hunsu.py because of the real defect (the unhandled exception, traceback, missing diagnostic) — never because they import a name the fix has not added. A Q-success-unchanged test (roles render the same text once a temporary directory is available again) may pass before the build. Temporary trees and the file's fake hosts only — never a real plugin cache, ~/.claude, ~/.codex or another project. Run with AGENT_WORKER unset (three existing hook tests fail under a worker's AGENT_WORKER=1)",
+  "closes": [
+    "Q-scratch-diagnostic",
+    "Q-no-false-pass",
+    "Q-entrypoints",
+    "Q-success-unchanged",
+    "Q-tests"
+  ],
+  "contract": {
+    "Q-scratch-diagnostic": "contract/Q-scratch-diagnostic-90a399c2.md",
+    "Q-no-false-pass": "contract/Q-no-false-pass-4823f62b.md",
+    "Q-entrypoints": "contract/Q-entrypoints-3a9d39be.md",
+    "Q-success-unchanged": "contract/Q-success-unchanged-ee3014c8.md",
+    "Q-tests": "contract/Q-tests-d691753e.md"
+  },
+  "checks": [],
+  "tests": [
+    "test_hunsu.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-081825-aae5/local/scratch-tests.response.json"
+}

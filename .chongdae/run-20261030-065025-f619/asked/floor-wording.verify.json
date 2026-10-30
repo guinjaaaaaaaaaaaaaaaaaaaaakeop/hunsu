@@ -1,0 +1,71 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-065025-f619",
+  "task": "floor-wording",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Fix the confirmed hunsu tree_fingerprint false drift between identical Claude/Codex plugin payloads caused by Codex's root .codex-marketplace-install.json installer receipt: ignore that exact root path only, keep every real content change visible, and document that locks whose hash included the receipt need an explicit relock after payload verification",
+  "brief": "Answer the fresh eyes' plan-vs-code finding in review-20261030-160653-7971: README's engines bullet says the six products declare python >=3.11 as if of released copies; most releases still declare >=3.9. Say it of their source manifests and that check reads the floor each installed copy declares; write the section Q-floor-wording; change nothing else",
+  "closes": [
+    "Q-floor-wording"
+  ],
+  "contract": {
+    "Q-floor-wording": "contract/Q-floor-wording-5c38d382.md"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert 'Codex manifests of their source' in open('README.md').read() and '## Q-floor-wording' in open('plan/receipt-fingerprint.md').read().splitlines()"
+    ],
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "tests": [],
+  "domain": "docs",
+  "response": "./.chongdae/run-20261030-065025-f619/local/floor-wording.verify.response.json",
+  "touched": [
+    "README.md",
+    "plan/receipt-fingerprint.md"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "hunsu.py",
+      "reviews/review-20261030-160653-7971.json"
+    ]
+  },
+  "since": {
+    ".": "844cae45acbc30780412928aad33556586906266"
+  },
+  "checked": [
+    {
+      "command": "python3 -c 'assert '\"'\"'Codex manifests of their source'\"'\"' in open('\"'\"'README.md'\"'\"').read() and '\"'\"'## Q-floor-wording'\"'\"' in open('\"'\"'plan/receipt-fingerprint.md'\"'\"').read().splitlines()'",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:47:38+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:47:38+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

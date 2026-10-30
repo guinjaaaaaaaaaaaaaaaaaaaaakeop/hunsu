@@ -1,0 +1,70 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-065025-f619",
+  "task": "python3-docs",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Fix the confirmed hunsu tree_fingerprint false drift between identical Claude/Codex plugin payloads caused by Codex's root .codex-marketplace-install.json installer receipt: ignore that exact root path only, keep every real content change visible, and document that locks whose hash included the receipt need an explicit relock after payload verification",
+  "brief": "Q-python3: compose skill step 1 drops its fallback to a bare python; README's reporter argv example says python3; README's Self-check runs python3 test_hunsu.py. Nothing else in any document changes",
+  "closes": [
+    "Q-python3"
+  ],
+  "contract": {
+    "Q-python3": "contract/Q-python3-d7adc148.md"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert 'on hosts that have no' not in open('skills/compose/SKILL.md').read() and '[\"python\",' not in open('README.md').read() and 'python test_hunsu.py' not in open('README.md').read()"
+    ],
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "tests": [],
+  "domain": "docs",
+  "response": "./.chongdae/run-20261030-065025-f619/local/python3-docs.verify.response.json",
+  "touched": [
+    "README.md",
+    "skills/compose/SKILL.md"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "hunsu.py"
+    ]
+  },
+  "since": {
+    ".": "844cae45acbc30780412928aad33556586906266"
+  },
+  "checked": [
+    {
+      "command": "python3 -c 'assert '\"'\"'on hosts that have no'\"'\"' not in open('\"'\"'skills/compose/SKILL.md'\"'\"').read() and '\"'\"'[\"python\",'\"'\"' not in open('\"'\"'README.md'\"'\"').read() and '\"'\"'python test_hunsu.py'\"'\"' not in open('\"'\"'README.md'\"'\"').read()'",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:45:03+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:45:03+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

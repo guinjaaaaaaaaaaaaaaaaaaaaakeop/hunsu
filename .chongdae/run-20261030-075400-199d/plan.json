@@ -1,0 +1,10 @@
+{
+  "artifact-type": "chongdae/plan@1",
+  "written_by": "chongdae 1.24.0",
+  "goal": "Synchronize the reviewed vendored hostcall.py exactly from hacheong commit 7aa70c6 (SHA256 fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b: worker host calls start children with their own identity), and say in Versioning that dropping a supported Python or host version is a breaking major change — the adopted >=3.11 floor belongs to an eventual 2.0, with no version bump now",
+  "kind": "session",
+  "tasks": [],
+  "providers": {
+    "session": "session"
+  }
+}

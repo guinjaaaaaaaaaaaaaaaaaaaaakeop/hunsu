@@ -1,0 +1,90 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-084516-888e",
+  "task": "final-verification",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Bounded final hardening: (A) a re-judged situation whose resolution was never read by a person (reviewed: false) keeps reviewed: false on a grounded still-fits instead of becoming a judge delegation — unattended proposals are not turned into approved history; previously reviewed resolutions and valid delegated continuation keep today's behavior; (B) the three hook tests build a normal-session environment explicitly so the suite passes under an inherited AGENT_WORKER=1, without changing hooks or production environments",
+  "brief": "Q-final-verification: the full python3 test_hunsu.py (3.11+) once under a normal parent and once under an inherited AGENT_WORKER=1, after the reviewed-gate fix (A) and the worker-context fixtures (B)",
+  "closes": [
+    "Q-final-verification"
+  ],
+  "contract": {
+    "Q-final-verification": "contract/Q-final-verification-5c5a99a8.md"
+  },
+  "checks": [
+    [
+      "env",
+      "-u",
+      "AGENT_WORKER",
+      "-u",
+      "HUNSU_SURVEY",
+      "python3",
+      "test_hunsu.py"
+    ],
+    [
+      "env",
+      "AGENT_WORKER=1",
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "tests": [],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-084516-888e/local/final-verification.verify.response.json",
+  "touched": [],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "hunsu.py",
+      "reviews/review-20261030-165120-086d.json",
+      "reviews/review-20261030-170132-9b67.json",
+      "reviews/review-20261030-173237-4dd7.json"
+    ]
+  },
+  "attribution": {
+    "held-at-start": [
+      "test_hunsu.py"
+    ]
+  },
+  "since": {
+    ".": "f6379d76ddad2cbd3d7562d508329cb063185e59"
+  },
+  "checked": [
+    {
+      "command": "env -u AGENT_WORKER -u HUNSU_SURVEY python3 test_hunsu.py",
+      "exit": 0,
+      "tail": [
+        "PASS test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host",
+        "PASS test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed",
+        "PASS test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short",
+        "PASS test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run",
+        "PASS test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated",
+        "all passed"
+      ],
+      "at": "2026-10-30T08:52:12+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "env AGENT_WORKER=1 python3 test_hunsu.py",
+      "exit": 0,
+      "tail": [
+        "PASS test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host",
+        "PASS test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed",
+        "PASS test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short",
+        "PASS test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run",
+        "PASS test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated",
+        "all passed"
+      ],
+      "at": "2026-10-30T08:52:20+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

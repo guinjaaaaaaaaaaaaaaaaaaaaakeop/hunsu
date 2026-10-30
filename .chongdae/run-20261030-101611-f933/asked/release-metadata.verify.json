@@ -1,0 +1,76 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-101611-f933",
+  "task": "release-metadata",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Prepare the hunsu 2.0.0 candidate (no publication, tag, install, cache or sibling change): set the five version values to 2.0.0, keep the three engines.python >=3.11, make README Versioning say timelessly that 2.0.0 raises the floor and drops Python 3.9 and 3.10, validate metadata, links, package paths and whitespace, run the existing suite once on Python 3.11.16 under a normal parent and once under AGENT_WORKER=1 bound to the candidate commit, and inventory the closed public record candidates privately",
+  "brief": "Set exactly the five version values to 2.0.0 — plugin.json, .claude-plugin/plugin.json, .codex-plugin/plugin.json, .claude-plugin/marketplace.json metadata.version and its hunsu plugins[].version — keeping all three engines.python at >=3.11 and inventing no version field in .agents/plugins/marketplace.json. In README Versioning replace the pending sentence ('ships with 2.0 … until then the manifests here still say 1.15.1') with timeless release-ready wording: 2.0.0 raises the python floor to >=3.11 and drops 3.9 and 3.10; historical examples elsewhere stay. hunsu.json/hunsu.lock.json keep naming the installed 1.15.1 that manages this project. Checked: versions, floors, package paths, internal links/anchors, Versioning wording, whitespace",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      ".chongdae/run-20261030-101611-f933/local/validation/meta_check.py"
+    ],
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "tests": [],
+  "domain": "docs",
+  "response": "./.chongdae/run-20261030-101611-f933/local/release-metadata.verify.response.json",
+  "touched": [
+    ".claude-plugin/marketplace.json",
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    "README.md",
+    "plugin.json"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "reviews/review-20261030-165120-086d.json",
+      "reviews/review-20261030-170132-9b67.json",
+      "reviews/review-20261030-173237-4dd7.json",
+      "reviews/review-20261030-175356-101c.json"
+    ]
+  },
+  "since": {
+    ".": "d9dc455e48991cf115720b9f1265836c8a60e80e"
+  },
+  "checked": [
+    {
+      "command": "python3 .chongdae/run-20261030-101611-f933/local/validation/meta_check.py",
+      "exit": 0,
+      "tail": [
+        "ok   README.md link #check resolves",
+        "ok   AGENTS.md link README.md resolves",
+        "ok   AGENTS.md link skills/compose/SKILL.md resolves",
+        "ok   Versioning names 2.0.0, >=3.11 and the dropped 3.9 and 3.10",
+        "ok   Versioning carries no pending wording",
+        "meta_check: 38 passed, 0 failed"
+      ],
+      "at": "2026-10-30T10:17:52+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T10:17:52+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

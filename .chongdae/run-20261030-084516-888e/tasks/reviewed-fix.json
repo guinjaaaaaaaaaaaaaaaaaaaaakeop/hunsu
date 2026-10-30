@@ -1,0 +1,241 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "reviewed-fix",
+    "role": "implementer",
+    "brief": "Narrow fix in judge consume's reviewed gate (hunsu.py, judge_consume, around 'the judge says the resolution still fits'): when a changed situation's resolution has reviewed exactly false and the verdict is a grounded still-fits, keep reviewed: false — no delegation record — and say in consume's output that the judge found it still fits but no person has read the proposal, so it stays unreviewed. Every other case keeps today's behavior: a previously reviewed resolution (true, {by}, no reviewed record, {delegated}) gets the delegation record on a grounded still-fits; negative, ungrounded or state-bound verdicts mark false. No new manifest field, no change to raw judge answers or other records, nothing else in hunsu.py. test_hunsu.py is protected; hostcall.py stays byte-identical; no version bump; never touch a plugin cache, ~/.claude or ~/.codex. Run the tests the change touches (the check below); the full suite is run once at the end of this run, in both contexts",
+    "closes": [
+      "Q-unread-stays-false",
+      "Q-reviewed-continuation",
+      "Q-unread-visible"
+    ],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "-c",
+        "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+      ],
+      [
+        "python3",
+        "-c",
+        "assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'"
+      ],
+      [
+        "python3",
+        "-c",
+        "[getattr(t, n)() for t in [__import__('test_hunsu')] for n in sorted(dir(t)) if n.startswith(('test_Q_unread', 'test_Q_reviewed', 'test_the_reviewed_gate', 'test_judge_packets', 'test_a_rejudge', 'test_policy'))]"
+      ]
+    ],
+    "tests": [
+      "test_hunsu.py"
+    ],
+    "gate": null,
+    "domain": "code",
+    "scope": [
+      "hunsu.py"
+    ]
+  },
+  "seq": 4,
+  "added": "2026-10-30T08:49:22+00:00",
+  "response": {
+    "status": "done",
+    "summary": "Updated judge_consume to preserve exactly reviewed: false on grounded still-fits and explain that the proposal remains unread. All 14 selected tests and the full suite in both contexts passed.",
+    "verified": [
+      {
+        "check": "python3 -c \"assert __import__('sys').version_info >= (3, 11), __import__('sys').version\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c \"assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c \"[getattr(t, n)() for t in [__import__('test_hunsu')] for n in sorted(dir(t)) if n.startswith(('test_Q_unread', 'test_Q_reviewed', 'test_the_reviewed_gate', 'test_judge_packets', 'test_a_rejudge', 'test_policy'))]\"",
+        "exit": 0
+      },
+      {
+        "check": "env -u AGENT_WORKER python3 test_hunsu.py",
+        "exit": 0
+      },
+      {
+        "check": "AGENT_WORKER=1 python3 test_hunsu.py",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c \"import hashlib; assert hashlib.sha256(open('test_hunsu.py', 'rb').read()).hexdigest() == '58abc101e04601c30a4ae9e2095db3a01b730dcc9d6115cb62f2822a56f63791'\"",
+        "exit": 0
+      },
+      {
+        "check": "git diff --check",
+        "exit": 0
+      }
+    ],
+    "decisions": [],
+    "non-claims": [
+      "The hook-test environment fixes were already present; the protected test file was unchanged.",
+      "Tests use fake hosts; live host behavior was not verified."
+    ],
+    "disputed-tests": [],
+    "worker": {
+      "host": "codex",
+      "model": "gpt-6-astra",
+      "effort": "medium"
+    }
+  },
+  "answered": {
+    "at": "2026-10-30T08:50:40+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "touched_by_provider": [],
+  "performed_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:hacheong}/worker.py",
+      "--member",
+      "dakdol",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "codex"
+    ],
+    "host": "codex",
+    "model": "gpt-6-astra",
+    "effort": "medium",
+    "versions": {
+      "used": {
+        "hacheong": "1.12.1",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "update ./hunsu.py"
+      ],
+      "commands-run": 17,
+      "commands-failed": 0
+    }
+  },
+  "non-claims": [
+    "(provider) The hook-test environment fixes were already present; the protected test file was unchanged.",
+    "(provider) Tests use fake hosts; live host behavior was not verified."
+  ],
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 -c 'assert __import__('\"'\"'sys'\"'\"').version_info >= (3, 11), __import__('\"'\"'sys'\"'\"').version'",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T08:50:40+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 -c 'assert __import__('\"'\"'hashlib'\"'\"').sha256(open('\"'\"'hostcall.py'\"'\"', '\"'\"'rb'\"'\"').read()).hexdigest() == '\"'\"'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\"'\"''",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T08:50:40+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 -c '[getattr(t, n)() for t in [__import__('\"'\"'test_hunsu'\"'\"')] for n in sorted(dir(t)) if n.startswith(('\"'\"'test_Q_unread'\"'\"', '\"'\"'test_Q_reviewed'\"'\"', '\"'\"'test_the_reviewed_gate'\"'\"', '\"'\"'test_judge_packets'\"'\"', '\"'\"'test_a_rejudge'\"'\"', '\"'\"'test_policy'\"'\"'))]'",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T08:50:41+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T08:50:41+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 4,
+      "cost_usd": 0.0962332
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T08:50:50+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    "test_hunsu.py": "7768306bb8216f1c01611d6b2e7ebace8a732fcd",
+    "plan/judgment-hardening.md": "732e6f80569faba63b89077dd30e02dbe38546b2"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 4,
+    "cost_usd": 0.0962332,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "seen-non-claims": {
+    "by": "verifier of reviewed-fix",
+    "texts": [
+      "(provider) The hook-test environment fixes were already present; the protected test file was unchanged.",
+      "(provider) Tests use fake hosts; live host behavior was not verified."
+    ],
+    "at": "2026-10-30T08:50:50+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+    ],
+    [
+      "python3",
+      "-c",
+      "assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'"
+    ],
+    [
+      "python3",
+      "-c",
+      "[getattr(t, n)() for t in [__import__('test_hunsu')] for n in sorted(dir(t)) if n.startswith(('test_Q_unread', 'test_Q_reviewed', 'test_the_reviewed_gate', 'test_judge_packets', 'test_a_rejudge', 'test_policy'))]"
+    ]
+  ],
+  "touched": [
+    "hunsu.py"
+  ],
+  "done": {
+    "at": "2026-10-30T08:50:50+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

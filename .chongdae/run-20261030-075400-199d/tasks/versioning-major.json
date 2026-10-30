@@ -1,0 +1,132 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "versioning-major",
+    "role": "session",
+    "brief": "README Versioning defines major only as an artifact, lock or record changing shape. Say also that dropping a supported Python or host version (raising an engines floor) is a breaking major change, and that the >=3.11 floor already in this source (adopted in prior-adoption, dropping 3.9 and 3.10) ships with an eventual 2.0, not a patch — while the source's manifests still say 1.15.1, the released version without it. No version bump now; nothing else in the README changes; no new tests",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "git",
+        "diff",
+        "--check"
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "domain": "docs",
+    "scope": [
+      "README.md"
+    ]
+  },
+  "seq": 2,
+  "added": "2026-10-30T07:58:47+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Document-only: one sentence in README's Versioning; the owner said document-only work may be the session's with a recorded reason",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T07:58:47+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "git diff --check",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T07:59:07+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T07:59:07+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 3,
+      "cost_usd": 0.06421260000000001
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T07:59:20+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    "README.md": "1a136883307b6e956c302510555d55802b8bde38",
+    "hostcall.py": "d7b8249dd926bda2f8d86bd2776fd35cbfeb07c5"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 3,
+    "cost_usd": 0.06421260000000001,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "checks": [
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "touched": [
+    "README.md"
+  ],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "edit ./README.md"
+      ],
+      "commands-run": 1,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T07:58:47+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T07:59:20+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

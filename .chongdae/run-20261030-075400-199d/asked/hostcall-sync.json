@@ -1,0 +1,83 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "build",
+  "run": "run-20261030-075400-199d",
+  "task": "hostcall-sync",
+  "role": "implementer",
+  "target": ".",
+  "goal": "Synchronize the reviewed vendored hostcall.py exactly from hacheong commit 7aa70c6 (SHA256 fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b: worker host calls start children with their own identity), and say in Versioning that dropping a supported Python or host version is a breaking major change — the adopted >=3.11 floor belongs to an eventual 2.0, with no version bump now",
+  "brief": "Deterministic vendored sync, not a new algorithm: make hostcall.py byte-identical to hostcall.py at commit 7aa70c6 of the sibling repository ../hacheong (read it with: git -C ../hacheong show 7aa70c6:hostcall.py) — SHA256 fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b. That commit adds worker_env(host), which drops CODEX_THREAD_ID, CLAUDE_CODE_SESSION_ID, CHONGDAE_SESSION, AI_AGENT, CLAUDE_PROJECT_DIR and CODEX_VERSION and sets AGENT_HOST and AGENT_WORKER=1 for the child, used by run_claude and run_codex. Read-only in ../hacheong: never edit, check out, stage or commit there. Change no other file in this project (test_hunsu.py is protected; judge_worker.py keeps its import as it is); add no import of another plugin; no version bump; never touch a plugin cache, ~/.claude or ~/.codex. python3 test_hunsu.py must pass in full on python3 3.11+",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'"
+    ],
+    [
+      "python3",
+      "-c",
+      "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+    ],
+    [
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "tests": [
+    "test_hunsu.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-075400-199d/local/hostcall-sync.response.json",
+  "attempts": [
+    {
+      "status": "blocked",
+      "summary": "hostcall.py now exactly matches the specified commit and SHA256. The required suite fails three tests with inherited AGENT_WORKER=1; all tests pass with that variable removed.",
+      "verified": [
+        {
+          "check": "python3 -c \"assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\"",
+          "exit": 0
+        },
+        {
+          "check": "python3 -c \"assert __import__('sys').version_info >= (3, 11), __import__('sys').version\"",
+          "exit": 0
+        },
+        {
+          "check": "python3 test_hunsu.py",
+          "exit": 1
+        },
+        {
+          "check": "env -u AGENT_WORKER python3 test_hunsu.py",
+          "exit": 0
+        },
+        {
+          "check": "git diff --check",
+          "exit": 0
+        }
+      ],
+      "decisions": [],
+      "non-claims": [
+        "Live host execution was not tested.",
+        "README Versioning was not changed: this slice explicitly permits changes only to hostcall.py.",
+        "Protected tests, judge_worker.py, versions, sibling repository, and existing run records were not changed."
+      ],
+      "retried": {
+        "delegated": "Routine decision the owner delegated, decided by the session: the three failing hook tests come from the worker sandbox's inherited AGENT_WORKER=1 (hooks step aside inside a worker), not from the sync — the builder's own env -u AGENT_WORKER run passed, as did the same three under the old hostcall.py in run-20261030-065025-f619. The contract's check stands as python3 test_hunsu.py where AGENT_WORKER is unset; chongdae ran it in the session (no AGENT_WORKER) for this retry. Nothing else to change: answer with the sync as it is in the tree",
+        "checked": [
+          "python3 test_hunsu.py",
+          "python3 -c \"assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\""
+        ],
+        "at": "2026-10-30T07:56:18+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      "review": null,
+      "disputed-tests": [],
+      "reopened": null
+    }
+  ],
+  "touched": [
+    "hostcall.py"
+  ]
+}

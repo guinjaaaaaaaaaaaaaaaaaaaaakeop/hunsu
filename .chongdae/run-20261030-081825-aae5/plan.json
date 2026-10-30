@@ -1,0 +1,11 @@
+{
+  "artifact-type": "chongdae/plan@1",
+  "written_by": "chongdae 1.24.0",
+  "goal": "A live Codex read-only candidate check crashed in all six projects with an unhandled FileNotFoundError from tempfile.mkdtemp in role_prompts: turn an unavailable temporary scratch directory on hunsu's check, compose, lock and judge paths into a clear nonzero diagnostic — no traceback, no machine paths, no silently omitted roles or stale judgments, no false pass — keep successful behavior, and document that check reads project data but may need temporary scratch files",
+  "kind": "session",
+  "tasks": [],
+  "providers": {
+    "session": "session"
+  },
+  "from": "plan/scratch-space.md"
+}

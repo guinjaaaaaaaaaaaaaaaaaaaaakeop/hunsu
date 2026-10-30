@@ -1,0 +1,49 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-075400-199d",
+  "task": "versioning-major",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Synchronize the reviewed vendored hostcall.py exactly from hacheong commit 7aa70c6 (SHA256 fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b: worker host calls start children with their own identity), and say in Versioning that dropping a supported Python or host version is a breaking major change — the adopted >=3.11 floor belongs to an eventual 2.0, with no version bump now",
+  "brief": "README Versioning defines major only as an artifact, lock or record changing shape. Say also that dropping a supported Python or host version (raising an engines floor) is a breaking major change, and that the >=3.11 floor already in this source (adopted in prior-adoption, dropping 3.9 and 3.10) ships with an eventual 2.0, not a patch — while the source's manifests still say 1.15.1, the released version without it. No version bump now; nothing else in the README changes; no new tests",
+  "closes": [],
+  "contract": {},
+  "checks": [
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "tests": [],
+  "domain": "docs",
+  "response": "./.chongdae/run-20261030-075400-199d/local/versioning-major.verify.response.json",
+  "touched": [
+    "README.md"
+  ],
+  "built": null,
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "reviews/review-20261030-165120-086d.json"
+    ]
+  },
+  "since": {
+    ".": "8525466a8bc558705560ec41aea261ed8c5a767e"
+  },
+  "checked": [
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T07:59:07+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

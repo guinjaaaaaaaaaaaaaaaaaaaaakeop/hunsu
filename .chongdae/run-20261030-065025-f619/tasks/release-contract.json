@@ -1,0 +1,52 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "release-contract",
+    "role": "session",
+    "brief": "Extend the run's contract with Q-prior-adoption (the owner-authorized pre-run edits — shared AGENTS/CLAUDE, README, CAPABILITY_HELP, compose skill, >=3.11 manifests — matched to the outer baseline hunsu.patch, adopted for release after review, not authored by this run) and Q-python3 (one python3 instruction across the adopted docs, no broadening)",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [],
+    "gate": null,
+    "domain": "plan",
+    "scope": [
+      "plan/receipt-fingerprint.md"
+    ]
+  },
+  "seq": 12,
+  "added": "2026-10-30T07:41:59+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so"
+  ],
+  "checks": [],
+  "touched": [
+    "plan/receipt-fingerprint.md"
+  ],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "edit ./plan/receipt-fingerprint.md"
+      ],
+      "commands-run": 2,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T07:41:59+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T07:42:30+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

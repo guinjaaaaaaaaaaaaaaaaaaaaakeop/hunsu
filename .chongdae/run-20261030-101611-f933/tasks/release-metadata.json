@@ -1,0 +1,165 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "release-metadata",
+    "role": "session",
+    "brief": "Set exactly the five version values to 2.0.0 — plugin.json, .claude-plugin/plugin.json, .codex-plugin/plugin.json, .claude-plugin/marketplace.json metadata.version and its hunsu plugins[].version — keeping all three engines.python at >=3.11 and inventing no version field in .agents/plugins/marketplace.json. In README Versioning replace the pending sentence ('ships with 2.0 … until then the manifests here still say 1.15.1') with timeless release-ready wording: 2.0.0 raises the python floor to >=3.11 and drops 3.9 and 3.10; historical examples elsewhere stay. hunsu.json/hunsu.lock.json keep naming the installed 1.15.1 that manages this project. Checked: versions, floors, package paths, internal links/anchors, Versioning wording, whitespace",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        ".chongdae/run-20261030-101611-f933/local/validation/meta_check.py"
+      ],
+      [
+        "git",
+        "diff",
+        "--check"
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "domain": "docs",
+    "scope": [
+      ".claude-plugin/marketplace.json",
+      ".claude-plugin/plugin.json",
+      ".codex-plugin/plugin.json",
+      "README.md",
+      "plugin.json"
+    ]
+  },
+  "seq": 1,
+  "added": "2026-10-30T10:17:30+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Release-preparation metadata and one README sentence, authorized by the root owner for the 2.0.0 candidate: no runtime code, test, shared hostcall or instruction text changes, so nothing for a builder and no red-before-build applies",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T10:17:30+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 .chongdae/run-20261030-101611-f933/local/validation/meta_check.py",
+        "exit": 0,
+        "tail": [
+          "ok   README.md link #check resolves",
+          "ok   AGENTS.md link README.md resolves",
+          "ok   AGENTS.md link skills/compose/SKILL.md resolves",
+          "ok   Versioning names 2.0.0, >=3.11 and the dropped 3.9 and 3.10",
+          "ok   Versioning carries no pending wording",
+          "meta_check: 38 passed, 0 failed"
+        ],
+        "at": "2026-10-30T10:17:52+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "git diff --check",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T10:17:52+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T10:17:53+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 3,
+      "cost_usd": 0.0757148
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T10:18:01+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    ".claude-plugin/marketplace.json": "6bcca606baaeaa33837d9f31dc81d07d33043ab9",
+    ".claude-plugin/plugin.json": "96b1c9c8b7f4b87a43f1216083573ed4beadbb78",
+    ".codex-plugin/plugin.json": "02c9e5ddb00144b5ee462468c067cf19929a1961",
+    "README.md": "f1e3366a5a88af3ae57fbdd9a30973a3884891e0",
+    "plugin.json": "fb10d0a5d0dd46ed11c4609601b68fccba9162d8"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 3,
+    "cost_usd": 0.0757148,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "checks": [
+    [
+      "python3",
+      ".chongdae/run-20261030-101611-f933/local/validation/meta_check.py"
+    ],
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "touched": [
+    ".claude-plugin/marketplace.json",
+    ".claude-plugin/plugin.json",
+    ".codex-plugin/plugin.json",
+    "README.md",
+    "plugin.json"
+  ],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "edit ./README.md"
+      ],
+      "commands-run": 2,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T10:17:30+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T10:18:01+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

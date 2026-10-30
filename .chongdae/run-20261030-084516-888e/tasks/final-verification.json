@@ -1,0 +1,173 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "final-verification",
+    "role": "session",
+    "brief": "Q-final-verification: the full python3 test_hunsu.py (3.11+) once under a normal parent and once under an inherited AGENT_WORKER=1, after the reviewed-gate fix (A) and the worker-context fixtures (B)",
+    "closes": [
+      "Q-final-verification"
+    ],
+    "needs": [],
+    "checks": [
+      [
+        "env",
+        "-u",
+        "AGENT_WORKER",
+        "-u",
+        "HUNSU_SURVEY",
+        "python3",
+        "test_hunsu.py"
+      ],
+      [
+        "env",
+        "AGENT_WORKER=1",
+        "python3",
+        "test_hunsu.py"
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "domain": "code"
+  },
+  "seq": 6,
+  "added": "2026-10-30T08:52:05+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Verification only, nothing to build: the run's one grouped full-suite pass after A and B, in both parent contexts, as the contract's Q-final-verification says",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T08:52:05+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "env -u AGENT_WORKER -u HUNSU_SURVEY python3 test_hunsu.py",
+        "exit": 0,
+        "tail": [
+          "PASS test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host",
+          "PASS test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed",
+          "PASS test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short",
+          "PASS test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run",
+          "PASS test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated",
+          "all passed"
+        ],
+        "at": "2026-10-30T08:52:12+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "env AGENT_WORKER=1 python3 test_hunsu.py",
+        "exit": 0,
+        "tail": [
+          "PASS test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host",
+          "PASS test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed",
+          "PASS test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short",
+          "PASS test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run",
+          "PASS test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated",
+          "all passed"
+        ],
+        "at": "2026-10-30T08:52:20+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T08:52:20+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 2,
+      "cost_usd": 0.0436352
+    },
+    "non-claims": [
+      "accepted without reading the tree: the eyes opened no file and ran no command — the verdict rests on the packet alone"
+    ]
+  },
+  "verdict-given": {
+    "at": "2026-10-30T08:52:27+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    "README.md": "400a4245b1a3b37a719740c2809319df794b8993",
+    "test_hunsu.py": "7768306bb8216f1c01611d6b2e7ebace8a732fcd",
+    "plan/judgment-hardening.md": "732e6f80569faba63b89077dd30e02dbe38546b2"
+  },
+  "non-claims": [
+    "(verifier) accepted without reading the tree: the eyes opened no file and ran no command — the verdict rests on the packet alone"
+  ],
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 2,
+    "cost_usd": 0.0436352,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "checks": [
+    [
+      "env",
+      "-u",
+      "AGENT_WORKER",
+      "-u",
+      "HUNSU_SURVEY",
+      "python3",
+      "test_hunsu.py"
+    ],
+    [
+      "env",
+      "AGENT_WORKER=1",
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "touched": [],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T08:52:05+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T08:52:27+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

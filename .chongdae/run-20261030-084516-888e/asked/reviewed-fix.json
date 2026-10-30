@@ -1,0 +1,43 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "build",
+  "run": "run-20261030-084516-888e",
+  "task": "reviewed-fix",
+  "role": "implementer",
+  "target": ".",
+  "goal": "Bounded final hardening: (A) a re-judged situation whose resolution was never read by a person (reviewed: false) keeps reviewed: false on a grounded still-fits instead of becoming a judge delegation — unattended proposals are not turned into approved history; previously reviewed resolutions and valid delegated continuation keep today's behavior; (B) the three hook tests build a normal-session environment explicitly so the suite passes under an inherited AGENT_WORKER=1, without changing hooks or production environments",
+  "brief": "Narrow fix in judge consume's reviewed gate (hunsu.py, judge_consume, around 'the judge says the resolution still fits'): when a changed situation's resolution has reviewed exactly false and the verdict is a grounded still-fits, keep reviewed: false — no delegation record — and say in consume's output that the judge found it still fits but no person has read the proposal, so it stays unreviewed. Every other case keeps today's behavior: a previously reviewed resolution (true, {by}, no reviewed record, {delegated}) gets the delegation record on a grounded still-fits; negative, ungrounded or state-bound verdicts mark false. No new manifest field, no change to raw judge answers or other records, nothing else in hunsu.py. test_hunsu.py is protected; hostcall.py stays byte-identical; no version bump; never touch a plugin cache, ~/.claude or ~/.codex. Run the tests the change touches (the check below); the full suite is run once at the end of this run, in both contexts",
+  "closes": [
+    "Q-unread-stays-false",
+    "Q-reviewed-continuation",
+    "Q-unread-visible"
+  ],
+  "contract": {
+    "Q-unread-stays-false": "contract/Q-unread-stays-false-50b9b963.md",
+    "Q-reviewed-continuation": "contract/Q-reviewed-continuation-232f438f.md",
+    "Q-unread-visible": "contract/Q-unread-visible-933e0b9f.md"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+    ],
+    [
+      "python3",
+      "-c",
+      "assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'"
+    ],
+    [
+      "python3",
+      "-c",
+      "[getattr(t, n)() for t in [__import__('test_hunsu')] for n in sorted(dir(t)) if n.startswith(('test_Q_unread', 'test_Q_reviewed', 'test_the_reviewed_gate', 'test_judge_packets', 'test_a_rejudge', 'test_policy'))]"
+    ]
+  ],
+  "tests": [
+    "test_hunsu.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-084516-888e/local/reviewed-fix.response.json"
+}

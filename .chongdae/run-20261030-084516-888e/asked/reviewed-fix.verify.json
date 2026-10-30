@@ -1,0 +1,139 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-084516-888e",
+  "task": "reviewed-fix",
+  "role": "verifier",
+  "target": ".",
+  "goal": "Bounded final hardening: (A) a re-judged situation whose resolution was never read by a person (reviewed: false) keeps reviewed: false on a grounded still-fits instead of becoming a judge delegation — unattended proposals are not turned into approved history; previously reviewed resolutions and valid delegated continuation keep today's behavior; (B) the three hook tests build a normal-session environment explicitly so the suite passes under an inherited AGENT_WORKER=1, without changing hooks or production environments",
+  "brief": "Narrow fix in judge consume's reviewed gate (hunsu.py, judge_consume, around 'the judge says the resolution still fits'): when a changed situation's resolution has reviewed exactly false and the verdict is a grounded still-fits, keep reviewed: false — no delegation record — and say in consume's output that the judge found it still fits but no person has read the proposal, so it stays unreviewed. Every other case keeps today's behavior: a previously reviewed resolution (true, {by}, no reviewed record, {delegated}) gets the delegation record on a grounded still-fits; negative, ungrounded or state-bound verdicts mark false. No new manifest field, no change to raw judge answers or other records, nothing else in hunsu.py. test_hunsu.py is protected; hostcall.py stays byte-identical; no version bump; never touch a plugin cache, ~/.claude or ~/.codex. Run the tests the change touches (the check below); the full suite is run once at the end of this run, in both contexts",
+  "closes": [
+    "Q-unread-stays-false",
+    "Q-reviewed-continuation",
+    "Q-unread-visible"
+  ],
+  "contract": {
+    "Q-unread-stays-false": "contract/Q-unread-stays-false-50b9b963.md",
+    "Q-reviewed-continuation": "contract/Q-reviewed-continuation-232f438f.md",
+    "Q-unread-visible": "contract/Q-unread-visible-933e0b9f.md"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+    ],
+    [
+      "python3",
+      "-c",
+      "assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'"
+    ],
+    [
+      "python3",
+      "-c",
+      "[getattr(t, n)() for t in [__import__('test_hunsu')] for n in sorted(dir(t)) if n.startswith(('test_Q_unread', 'test_Q_reviewed', 'test_the_reviewed_gate', 'test_judge_packets', 'test_a_rejudge', 'test_policy'))]"
+    ]
+  ],
+  "tests": [
+    "test_hunsu.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-084516-888e/local/reviewed-fix.verify.response.json",
+  "touched": [],
+  "built": {
+    "summary": "Updated judge_consume to preserve exactly reviewed: false on grounded still-fits and explain that the proposal remains unread. All 14 selected tests and the full suite in both contexts passed.",
+    "verified": [
+      {
+        "check": "python3 -c \"assert __import__('sys').version_info >= (3, 11), __import__('sys').version\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c \"assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c \"[getattr(t, n)() for t in [__import__('test_hunsu')] for n in sorted(dir(t)) if n.startswith(('test_Q_unread', 'test_Q_reviewed', 'test_the_reviewed_gate', 'test_judge_packets', 'test_a_rejudge', 'test_policy'))]\"",
+        "exit": 0
+      },
+      {
+        "check": "env -u AGENT_WORKER python3 test_hunsu.py",
+        "exit": 0
+      },
+      {
+        "check": "AGENT_WORKER=1 python3 test_hunsu.py",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c \"import hashlib; assert hashlib.sha256(open('test_hunsu.py', 'rb').read()).hexdigest() == '58abc101e04601c30a4ae9e2095db3a01b730dcc9d6115cb62f2822a56f63791'\"",
+        "exit": 0
+      },
+      {
+        "check": "git diff --check",
+        "exit": 0
+      }
+    ],
+    "non-claims": [
+      "The hook-test environment fixes were already present; the protected test file was unchanged.",
+      "Tests use fake hosts; live host behavior was not verified."
+    ]
+  },
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "reviews/review-20261030-165120-086d.json",
+      "reviews/review-20261030-170132-9b67.json",
+      "reviews/review-20261030-173237-4dd7.json"
+    ]
+  },
+  "touched_since": [
+    "hunsu.py"
+  ],
+  "since": {
+    ".": "f6379d76ddad2cbd3d7562d508329cb063185e59"
+  },
+  "tests_non_claims": {
+    "reviewed-tests": [
+      "Q-unread-stays-false, \"consume's output says the judge found it still fits but no person has read the proposal, so it stays unreviewed\": the test does not pin the exact wording. It checks that the consume line for the situation contains 'still fits', 'unreviewed' and 'proposal', and that no 'delegation recorded' appears anywhere in the output.",
+      "Q-unread-stays-false, \"The judge's raw answer stays where it was written (the judge round's response files)\": the test checks that the response file is still there with the verdict's `why` in it, and that this text does not appear in hunsu.json. It does not check other records consume may write, such as hunsu-judgments.json.",
+      "Q-reviewed-continuation, \"No existing record is migrated, re-signed or rewritten\": the test only covers a resolution in a situation whose findings did not change (false, delegated, or no record), comparing its JSON before and after. It does not check the lock or the judgments file.",
+      "Q-reviewed-continuation guards (delegation on still-fits for a prior true / {by} / no record / {delegated}; false for negative, ungrounded, missing or state-bound verdicts) already pass before the build, as Q-tests-A allows.",
+      "The three hook tests' AGENT_WORKER edits (goal B) were already in the working tree, and I did not make them. The full suite was run with AGENT_WORKER=1: only the 5 new Q-unread tests fail."
+    ]
+  },
+  "checked": [
+    {
+      "command": "python3 -c 'assert __import__('\"'\"'sys'\"'\"').version_info >= (3, 11), __import__('\"'\"'sys'\"'\"').version'",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T08:50:40+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 -c 'assert __import__('\"'\"'hashlib'\"'\"').sha256(open('\"'\"'hostcall.py'\"'\"', '\"'\"'rb'\"'\"').read()).hexdigest() == '\"'\"'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\"'\"''",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T08:50:40+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 -c '[getattr(t, n)() for t in [__import__('\"'\"'test_hunsu'\"'\"')] for n in sorted(dir(t)) if n.startswith(('\"'\"'test_Q_unread'\"'\"', '\"'\"'test_Q_reviewed'\"'\"', '\"'\"'test_the_reviewed_gate'\"'\"', '\"'\"'test_judge_packets'\"'\"', '\"'\"'test_a_rejudge'\"'\"', '\"'\"'test_policy'\"'\"'))]'",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T08:50:41+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

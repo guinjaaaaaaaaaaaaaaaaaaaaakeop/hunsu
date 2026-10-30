@@ -1,0 +1,158 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "candidate-validation",
+    "role": "session",
+    "brief": "On candidate commit d54fb0c (tree 82402d1): the existing python3 test_hunsu.py once under a normal parent and once under AGENT_WORKER=1, both with python3 resolving to Python 3.11.16 for the parent and its child processes (a PATH shim given to this run call only); each run binds its full output, exact PASS/FAIL/SKIP counts, parent and child interpreter versions, HEAD commit/tree and source sha256 in run-local evidence. Then a disposable standalone clone of HEAD (no install, network or model): clone HEAD equals the candidate, five versions 2.0.0, three floors >=3.11, every hunsu.py subcommand's --help runs",
+    "closes": [],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        ".chongdae/run-20261030-101611-f933/local/validation/suite.py",
+        "normal"
+      ],
+      [
+        "python3",
+        ".chongdae/run-20261030-101611-f933/local/validation/suite.py",
+        "worker"
+      ],
+      [
+        "python3",
+        ".chongdae/run-20261030-101611-f933/local/validation/clone_check.py"
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "domain": "code"
+  },
+  "seq": 2,
+  "added": "2026-10-30T10:18:26+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Verification only, nothing to build: the candidate's one full-suite run per parent context and a disposable standalone clone check, run by chongdae as this task's checks so they are not repeated",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T10:18:26+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 .chongdae/run-20261030-101611-f933/local/validation/suite.py normal",
+        "exit": 0,
+        "tail": [
+          "suite normal: parent python 3.11.16, child python 3.11.16, PASS 87, FAIL 0, SKIP 0, exit 0, head d54fb0c906ab, tree 82402d1b07c4, tracked dirty: no"
+        ],
+        "at": "2026-10-30T10:18:33+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 .chongdae/run-20261030-101611-f933/local/validation/suite.py worker",
+        "exit": 0,
+        "tail": [
+          "suite worker: parent python 3.11.16, child python 3.11.16, PASS 87, FAIL 0, SKIP 0, exit 0, head d54fb0c906ab, tree 82402d1b07c4, tracked dirty: no"
+        ],
+        "at": "2026-10-30T10:18:40+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 .chongdae/run-20261030-101611-f933/local/validation/clone_check.py",
+        "exit": 0,
+        "tail": [
+          "clone_check: head d54fb0c906ab, python 3.11.16, versions ['2.0.0'], floors ['>=3.11'], 17 --help ok, 0 failure(s), clone removed: True"
+        ],
+        "at": "2026-10-30T10:18:40+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T10:18:41+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 10,
+      "cost_usd": 0.14089800000000002
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T10:19:08+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {},
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 10,
+    "cost_usd": 0.14089800000000002,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "checks": [
+    [
+      "python3",
+      ".chongdae/run-20261030-101611-f933/local/validation/suite.py",
+      "normal"
+    ],
+    [
+      "python3",
+      ".chongdae/run-20261030-101611-f933/local/validation/suite.py",
+      "worker"
+    ],
+    [
+      "python3",
+      ".chongdae/run-20261030-101611-f933/local/validation/clone_check.py"
+    ]
+  ],
+  "touched": [],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 1,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T10:18:26+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T10:19:08+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

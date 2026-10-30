@@ -1,0 +1,29 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "build",
+  "run": "run-20261030-084516-888e",
+  "task": "reviewed-tests",
+  "role": "nitpick",
+  "target": ".",
+  "goal": "Bounded final hardening: (A) a re-judged situation whose resolution was never read by a person (reviewed: false) keeps reviewed: false on a grounded still-fits instead of becoming a judge delegation — unattended proposals are not turned into approved history; previously reviewed resolutions and valid delegated continuation keep today's behavior; (B) the three hook tests build a normal-session environment explicitly so the suite passes under an inherited AGENT_WORKER=1, without changing hooks or production environments",
+  "brief": "Add regression tests to the existing test_hunsu.py (plain test_ functions run by its __main__; keep every existing test unchanged) for judge consume's reviewed gate, per the contract: a resolution with reviewed: false whose re-judged findings changed and whose resolution_verdict is a grounded still-fits must keep reviewed: false (no delegation record), be said by consume as still unreviewed, and still be reported as unreviewed by check --findings, policy and the session's policy line; guards: previously reviewed (true / {by} / hand-written / {delegated}) keeps today's delegation on still-fits, and negative, ungrounded or state-bound verdicts still mark false. Build the round the way test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed does. The Q-unread tests must fail against the current hunsu.py because reviewed becomes a delegation — not on a missing name; guards may pass before the build. Temporary trees and the file's fake hosts only. The suite now passes under a worker's AGENT_WORKER=1 too",
+  "closes": [
+    "Q-unread-stays-false",
+    "Q-reviewed-continuation",
+    "Q-unread-visible",
+    "Q-tests-A"
+  ],
+  "contract": {
+    "Q-unread-stays-false": "contract/Q-unread-stays-false-50b9b963.md",
+    "Q-reviewed-continuation": "contract/Q-reviewed-continuation-232f438f.md",
+    "Q-unread-visible": "contract/Q-unread-visible-933e0b9f.md",
+    "Q-tests-A": "contract/Q-tests-A-170857fe.md"
+  },
+  "checks": [],
+  "tests": [
+    "test_hunsu.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-084516-888e/local/reviewed-tests.response.json"
+}

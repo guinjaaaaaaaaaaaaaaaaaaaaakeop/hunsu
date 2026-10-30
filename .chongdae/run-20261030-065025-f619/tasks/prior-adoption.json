@@ -1,0 +1,224 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "prior-adoption",
+    "role": "session",
+    "brief": "Adopt for release, after review, the pre-run edits the owner authorized and the outer baseline hunsu.patch (sha256 16246c308243…) records: AGENTS.md and CLAUDE.md (new), README.md's install/Codex/host-entry/capability/manifest/sandbox/limits/versioning hunks, hunsu.py's CAPABILITY_HELP, the compose skill's engines sentence, and the >=3.11 floor in plugin.json and .claude-plugin/plugin.json. This run did not author them. Checked here: three manifests at >=3.11, the added links and anchors resolve, no whitespace errors, the suite passes. README.md and hunsu.py also hold this run's committed receipt hunks; the receipt tasks keep them in their own records",
+    "closes": [
+      "Q-prior-adoption"
+    ],
+    "needs": [],
+    "checks": [
+      [
+        "python3",
+        "-c",
+        "assert [__import__('json').load(open(p))['engines']['python'] for p in ('plugin.json', '.claude-plugin/plugin.json', '.codex-plugin/plugin.json')] == ['>=3.11'] * 3"
+      ],
+      [
+        "python3",
+        "-c",
+        "assert all(__import__('os').path.exists(p) for p in ('AGENTS.md', 'CLAUDE.md', 'skills/compose/SKILL.md')) and all(h in open('README.md').read().splitlines() for h in ('## Install', '## Shared instructions and host entry points', '## Commands', '## Manifest', '## Limits', '## Versioning')) and open('CLAUDE.md').read().strip() == '@AGENTS.md'"
+      ],
+      [
+        "git",
+        "diff",
+        "--check"
+      ],
+      [
+        "python3",
+        "test_hunsu.py"
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "domain": "docs",
+    "scope": [
+      ".claude-plugin/plugin.json",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "README.md",
+      "hunsu.py",
+      "plugin.json",
+      "skills/compose/SKILL.md"
+    ]
+  },
+  "seq": 13,
+  "added": "2026-10-30T07:42:57+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Adoption and review of owner-authorized pre-run documentation, instruction and manifest edits (outer baseline hunsu.patch, taken before this run): nothing to build — the edits exist; this task reviews them against the code and manifests and commits them under their own provenance. Document-only work, by the owner's word that it may be the session's with a recorded reason",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T07:42:57+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "adopted": [
+    {
+      "by": {
+        "agent": "claude-code claude-opus-5-5"
+      },
+      "why": "Pre-run work the owner authorized for release, not authored by this run: these files hash to the outer self-host baseline (hunsu.patch sha256 16246c308243… applied to 29b6e8e; AGENTS.md and CLAUDE.md to the baseline metadata's sha256), recorded before this run began. README.md and hunsu.py are not adopted: adopting them would take them out of receipt-fix/receipt-docs's touched; their pre-run hunks are this task's by its scope and contract",
+      "files": [
+        ".claude-plugin/plugin.json",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "plugin.json",
+        "skills/compose/SKILL.md"
+      ],
+      "at": "2026-10-30T07:43:04+00:00",
+      "chongdae": "chongdae 1.24.0"
+    }
+  ],
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "python3 -c 'assert [__import__('\"'\"'json'\"'\"').load(open(p))['\"'\"'engines'\"'\"']['\"'\"'python'\"'\"'] for p in ('\"'\"'plugin.json'\"'\"', '\"'\"'.claude-plugin/plugin.json'\"'\"', '\"'\"'.codex-plugin/plugin.json'\"'\"')] == ['\"'\"'>=3.11'\"'\"'] * 3'",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T07:43:10+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 -c 'assert all(__import__('\"'\"'os'\"'\"').path.exists(p) for p in ('\"'\"'AGENTS.md'\"'\"', '\"'\"'CLAUDE.md'\"'\"', '\"'\"'skills/compose/SKILL.md'\"'\"')) and all(h in open('\"'\"'README.md'\"'\"').read().splitlines() for h in ('\"'\"'## Install'\"'\"', '\"'\"'## Shared instructions and host entry points'\"'\"', '\"'\"'## Commands'\"'\"', '\"'\"'## Manifest'\"'\"', '\"'\"'## Limits'\"'\"', '\"'\"'## Versioning'\"'\"')) and open('\"'\"'CLAUDE.md'\"'\"').read().strip() == '\"'\"'@AGENTS.md'\"'\"''",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T07:43:10+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "git diff --check",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T07:43:10+00:00",
+        "chongdae": "chongdae 1.24.0"
+      },
+      {
+        "command": "python3 test_hunsu.py",
+        "exit": 0,
+        "tail": [
+          "PASS test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host",
+          "PASS test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed",
+          "PASS test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short",
+          "PASS test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run",
+          "PASS test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated",
+          "all passed"
+        ],
+        "at": "2026-10-30T07:43:16+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T07:43:16+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 11,
+      "cost_usd": 0.20796299999999998
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T07:43:36+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    ".claude-plugin/plugin.json": "c1a964f33a9104906f87e64c9ea78997d6567074",
+    "README.md": "91465b3948354b41003539f6d47eac23cabcb891",
+    "plan/receipt-fingerprint.md": "2f6415a9d3bbd08fdfb8825ca2273370ce65b3bd",
+    "plugin.json": "7f990d192ba4e4ac1db7c00acfc0e2cddb54dedb",
+    "skills/compose/SKILL.md": "2e6d9b44c5b4ed430775ea5719ab04f80a26fa74",
+    "AGENTS.md": "a2d25664fe92af537b3f8ba491cb9574650b6cef",
+    "CLAUDE.md": "c140473a3a5fbe89301c99d9d0d1b76c5971f2c3"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 11,
+    "cost_usd": 0.20796299999999998,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert [__import__('json').load(open(p))['engines']['python'] for p in ('plugin.json', '.claude-plugin/plugin.json', '.codex-plugin/plugin.json')] == ['>=3.11'] * 3"
+    ],
+    [
+      "python3",
+      "-c",
+      "assert all(__import__('os').path.exists(p) for p in ('AGENTS.md', 'CLAUDE.md', 'skills/compose/SKILL.md')) and all(h in open('README.md').read().splitlines() for h in ('## Install', '## Shared instructions and host entry points', '## Commands', '## Manifest', '## Limits', '## Versioning')) and open('CLAUDE.md').read().strip() == '@AGENTS.md'"
+    ],
+    [
+      "git",
+      "diff",
+      "--check"
+    ],
+    [
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "touched": [
+    ".claude-plugin/plugin.json",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "plugin.json",
+    "skills/compose/SKILL.md"
+  ],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 2,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T07:42:57+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T07:43:37+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

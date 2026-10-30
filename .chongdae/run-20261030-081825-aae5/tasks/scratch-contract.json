@@ -1,0 +1,53 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "scratch-contract",
+    "role": "session",
+    "brief": "Write the contract plan/scratch-space.md: the diagnostic, no false pass, the entrypoints, unchanged success, the docs, and what is out of scope — from the owner's bounded defect statement and the root's live Codex evidence",
+    "closes": [],
+    "needs": [],
+    "checks": [],
+    "tests": [],
+    "gate": null,
+    "domain": "plan",
+    "scope": [
+      "plan/scratch-space.md"
+    ]
+  },
+  "seq": 1,
+  "added": "2026-10-30T08:18:25+00:00",
+  "non-claims": [
+    "no check decides this task; done means the agent said so"
+  ],
+  "checks": [],
+  "touched": [
+    "plan/scratch-space.md"
+  ],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "write ./plan/scratch-space.md",
+        "edit ./plan/scratch-space.md"
+      ],
+      "commands-run": 3,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T08:18:25+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T08:19:09+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}

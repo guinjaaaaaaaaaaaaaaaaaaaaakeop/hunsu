@@ -1,0 +1,140 @@
+{
+  "artifact-type": "chongdae/request@1",
+  "written_by": "chongdae 1.24.0",
+  "stage": "verify",
+  "run": "run-20261030-081825-aae5",
+  "task": "scratch-fix",
+  "role": "verifier",
+  "target": ".",
+  "goal": "A live Codex read-only candidate check crashed in all six projects with an unhandled FileNotFoundError from tempfile.mkdtemp in role_prompts: turn an unavailable temporary scratch directory on hunsu's check, compose, lock and judge paths into a clear nonzero diagnostic — no traceback, no machine paths, no silently omitted roles or stale judgments, no false pass — keep successful behavior, and document that check reads project data but may need temporary scratch files",
+  "brief": "Small targeted error handling, per the contract: where hunsu.py asks tempfile for scratch space on the check, compose, lock and judge paths (role_prompts' mkdtemp, mode_text's mkdtemp, the mutation lock's gettempdir/makedirs/lock file, outdated's mkdtemp under check --remote), an unavailable temporary directory (FileNotFoundError from gettempdir, PermissionError or another OSError creating the directory or lock file) becomes one clear diagnostic and a nonzero exit — the exact phrase 'no writable temporary directory', the command's name, what needed the space, TMPDIR or a sandbox that allows writing there as the remedy, no bypass, no absolute machine path, no traceback — never a skipped mutation lock, omitted role, fresh/stale judgment or summary line. hooks/session_start.py says check could not complete instead of 'environment differs/matches'. No new runner or stdin protocol; no change to how roles are rendered when scratch is available. test_hunsu.py is protected; hostcall.py stays byte-identical; no version bump; never touch a plugin cache, ~/.claude or ~/.codex. python3 test_hunsu.py must pass in full on python3 3.11+, run with AGENT_WORKER unset (three existing hook tests fail under a worker's AGENT_WORKER=1)",
+  "closes": [
+    "Q-scratch-diagnostic",
+    "Q-no-false-pass",
+    "Q-entrypoints",
+    "Q-success-unchanged"
+  ],
+  "contract": {
+    "Q-scratch-diagnostic": "contract/Q-scratch-diagnostic-90a399c2.md",
+    "Q-no-false-pass": "contract/Q-no-false-pass-4823f62b.md",
+    "Q-entrypoints": "contract/Q-entrypoints-3a9d39be.md",
+    "Q-success-unchanged": "contract/Q-success-unchanged-ee3014c8.md"
+  },
+  "checks": [
+    [
+      "python3",
+      "-c",
+      "assert __import__('sys').version_info >= (3, 11), __import__('sys').version"
+    ],
+    [
+      "python3",
+      "-c",
+      "assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'"
+    ],
+    [
+      "python3",
+      "test_hunsu.py"
+    ]
+  ],
+  "tests": [
+    "test_hunsu.py"
+  ],
+  "domain": "code",
+  "response": "./.chongdae/run-20261030-081825-aae5/local/scratch-fix.verify.response.json",
+  "touched": [
+    "README.md",
+    "hooks/session_start.py"
+  ],
+  "built": {
+    "summary": "임시 공간 실패를 경로·traceback 없는 비정상 종료 진단으로 처리했습니다. 실패 시 렌더링 캐시를 비우고, SessionStart 메시지와 README를 수정했습니다. 전체 테스트가 통과했습니다.",
+    "verified": [
+      {
+        "check": "python3 -c \"assert __import__('sys').version_info >= (3, 11), __import__('sys').version\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 -c \"assert __import__('hashlib').sha256(open('hostcall.py', 'rb').read()).hexdigest() == 'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\"",
+        "exit": 0
+      },
+      {
+        "check": "python3 test_hunsu.py",
+        "exit": 0
+      },
+      {
+        "check": "git diff --check",
+        "exit": 0
+      }
+    ],
+    "non-claims": [
+      "전체 테스트는 AGENT_WORKER를 해제한 상태에서 실행했습니다.",
+      "실제 호스트 설치 환경은 검증하지 않았습니다. 보호된 테스트, hostcall.py, 버전 및 실행 기록은 변경하지 않았습니다."
+    ]
+  },
+  "excluded": {
+    "record-paths": [
+      ".dwitbuk/review.lock",
+      "reviews/review-20261030-165120-086d.json",
+      "reviews/review-20261030-170132-9b67.json"
+    ]
+  },
+  "touched_since": [
+    "hunsu.py"
+  ],
+  "since": {
+    ".": "7923d94fc89f4297a27d77fc03f675310cf8fc7e"
+  },
+  "tests_non_claims": {
+    "scratch-tests": [
+      "Q-success-unchanged: \"existing tests stay as they are and pass, and `python3 test_hunsu.py` passes in full on Python 3.11 or newer\" — this is a property of the whole suite, not one test. Running the file decides it; no new test can.",
+      "Q-success-unchanged: \"modes are read as before\" is not checked on its own. The existing mode tests and the check report compared after recovery cover it indirectly.",
+      "Q-entrypoints: \"Small targeted error handling at the scratch sites (or one shared helper they call) — not a new runner, stdin protocol or change to how roles are rendered\" is about how the fix is built. No output test can see it. A review has to judge it, apart from the rendered role text, which the Q-success-unchanged test compares.",
+      "Q-entrypoints: \"The mutation lock is never skipped to get past the failure\" is decided only where the lock file is the only thing that needs scratch space (a project with no roles or modes and judge=skip): `lock` must stop and write no hunsu.lock.json. A fix that skips the lock but still stops later, when roles are rendered, would not be caught on the full fixture.",
+      "Q-entrypoints: for `compose` / `lock` / `judge`, the exact text of \"says what needed the scratch space\" is accepted as any of role/prompt/mode/lock. For `check --remote` it is accepted as any of role/prompt/clone/outdated/marketplace. No test makes `outdated`'s clone the only scratch site, so the clone wording itself is not decided.",
+      "Q-scratch-diagnostic: \"names the command\" is checked by finding the command's word (check, compose, lock, judge plus request or consume) anywhere in the output, not by the diagnostic's exact shape. For `lock`, the words 'mutation lock' would also match.",
+      "Q-scratch-diagnostic: \"never a sandbox, approval or hook-trust bypass\" is checked against a list of forbidden words (danger, bypass, yolo, skip-permissions, approval never, -a never, untrusted). Other ways of wording a bypass are not caught.",
+      "Q-scratch-diagnostic: \"no absolute machine path\" is checked against the specific paths the test knows: the injected temporary directories, /tmp, /var/tmp, /usr/tmp, home, the fake host and project, the plugin roots and hunsu's own directory. It is not a general ban on absolute paths. In the SessionStart hook test the check covers only the lines about check (lines containing the phrase, 'could not complete' or TMPDIR), because the hook's existing line listing the lock's plugin roots is not part of this contract.",
+      "Q-scratch-diagnostic: \"or another OSError\" — only FileNotFoundError and PermissionError are simulated, as Q-tests prescribes. Other OSError subclasses are not tested.",
+      "README / documentation (in the goal: \"document that check reads project data but may need temporary scratch files\") is not one of the contract sections this task closes, and no test covers it."
+    ]
+  },
+  "checked": [
+    {
+      "command": "python3 -c 'assert __import__('\"'\"'sys'\"'\"').version_info >= (3, 11), __import__('\"'\"'sys'\"'\"').version'",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T08:25:44+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 -c 'assert __import__('\"'\"'hashlib'\"'\"').sha256(open('\"'\"'hostcall.py'\"'\"', '\"'\"'rb'\"'\"').read()).hexdigest() == '\"'\"'fa06077c00e1aa8514be54689567bad7abcb5c5f21794e1b5f551ebb1e07873b'\"'\"''",
+      "exit": 0,
+      "tail": [
+        ""
+      ],
+      "at": "2026-10-30T08:25:44+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    },
+    {
+      "command": "python3 test_hunsu.py",
+      "exit": 0,
+      "tail": [
+        "PASS test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host",
+        "PASS test_the_reviewed_gate_is_delegated_to_the_judge_and_fails_closed",
+        "PASS test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_short",
+        "PASS test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run",
+        "PASS test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated",
+        "all passed"
+      ],
+      "at": "2026-10-30T08:25:51+00:00",
+      "chongdae": "chongdae 1.24.0",
+      "source": "the task's checks, run by chongdae to decide it",
+      "changed_since": []
+    }
+  ]
+}

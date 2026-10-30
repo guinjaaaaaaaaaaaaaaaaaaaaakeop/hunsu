@@ -1,0 +1,10 @@
+{
+  "artifact-type": "chongdae/plan@1",
+  "written_by": "chongdae 1.24.0",
+  "goal": "Prepare the hunsu 2.0.0 candidate (no publication, tag, install, cache or sibling change): set the five version values to 2.0.0, keep the three engines.python >=3.11, make README Versioning say timelessly that 2.0.0 raises the floor and drops Python 3.9 and 3.10, validate metadata, links, package paths and whitespace, run the existing suite once on Python 3.11.16 under a normal parent and once under AGENT_WORKER=1 bound to the candidate commit, and inventory the closed public record candidates privately",
+  "kind": "session",
+  "tasks": [],
+  "providers": {
+    "session": "session"
+  }
+}

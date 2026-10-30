@@ -1,0 +1,136 @@
+{
+  "artifact-type": "chongdae/task@1",
+  "written_by": "chongdae 1.24.0",
+  "status": "done",
+  "def": {
+    "id": "scratch-docs-lock",
+    "role": "session",
+    "brief": "Answer the fresh eyes' anomaly: README's scratch-space paragraph says the mutation lock is taken by compose, lock and judge; every command that changes the project takes it first (init, add, remove, install, link, unlink, dev, capability, role add, compose, lock, judge). Say so; change nothing else",
+    "closes": [
+      "Q-scratch-docs"
+    ],
+    "needs": [],
+    "checks": [
+      [
+        "git",
+        "diff",
+        "--check"
+      ]
+    ],
+    "tests": [],
+    "gate": null,
+    "domain": "docs",
+    "scope": [
+      "README.md"
+    ]
+  },
+  "seq": 5,
+  "added": "2026-10-30T08:29:51+00:00",
+  "self-performed": {
+    "instead-of": "implementer",
+    "why": "Document-only: one clause, after the fresh eyes found the README naming only three of the commands that take the mutation lock; the owner said document-only work may be the session's with a recorded reason",
+    "by": {
+      "agent": "claude-code claude-opus-5-5"
+    },
+    "at": "2026-10-30T08:29:51+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "checks-passed": {
+    "ran": [
+      {
+        "command": "git diff --check",
+        "exit": 0,
+        "tail": [
+          ""
+        ],
+        "at": "2026-10-30T08:30:02+00:00",
+        "chongdae": "chongdae 1.24.0"
+      }
+    ],
+    "at": "2026-10-30T08:30:02+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "review": {
+    "artifact-type": "dwitbuk/review@1",
+    "verdict": "accept",
+    "findings": [],
+    "worker": {
+      "host": "claude-code",
+      "model": "claude-opus-5-5",
+      "turns": 7,
+      "cost_usd": 0.10457520000000001
+    }
+  },
+  "verdict-given": {
+    "at": "2026-10-30T08:30:31+00:00",
+    "chongdae": "chongdae 1.24.0"
+  },
+  "reviewed_tree": {
+    "README.md": "97e4f2d10cf82ba98244df4060e096f8df8c6b30",
+    "hooks/session_start.py": "d0acbc874a6f6110b56c616fc9ceb747eeacc1cf",
+    "test_hunsu.py": "808f181a91f98b7feb6427c66291104448b2557e",
+    "plan/scratch-space.md": "01180fe022fbd9a8c91f86b66098c0d471708f91"
+  },
+  "verified_by": {
+    "provider": "command",
+    "argv": [
+      "python3",
+      "{plugin:dwitbuk}/eyes_worker.py",
+      "--request",
+      "{request}",
+      "--response",
+      "{response}",
+      "--host",
+      "claude"
+    ],
+    "host": "claude-code",
+    "model": "claude-opus-5-5",
+    "turns": 7,
+    "cost_usd": 0.10457520000000001,
+    "versions": {
+      "used": {
+        "dwitbuk": "1.16.0",
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 0,
+      "commands-failed": 0
+    }
+  },
+  "checks": [
+    [
+      "git",
+      "diff",
+      "--check"
+    ]
+  ],
+  "touched": [
+    "README.md"
+  ],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [
+        "edit ./README.md"
+      ],
+      "commands-run": 1,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T08:29:51+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T08:30:31+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
+}
