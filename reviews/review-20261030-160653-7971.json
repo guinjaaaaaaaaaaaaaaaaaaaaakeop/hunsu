@@ -44,67 +44,144 @@
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "undecided @ Q-receipt-ignored: Every case listed is a regular file. The contract doesn't say what happens when the root entry with that name is a directory (with files under it) or a symlink. Is the whole entry left out, or only a regular file? A builder writing an exact-path filter has to pick one. — “`tree_fingerprint` returns the same value when `.codex-marketplace-install.json` at the tree's root is absent, present, or\npresent with different contents (another `revision`, another `source`, empty, not JSON).”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-receipt-ignored (task contract-answers): a root file entry of that name, or a symlink to one, is the receipt; a root directory of that name is content. Tested by test_Q_receipt_ignored_a_root_symlink_to_a_file_is_the_receipt_too and test_Q_exact_path_a_root_directory_of_the_receipts_name_is_content.",
+        "by": null,
+        "finding_text": "undecided @ Q-receipt-ignored: Every case listed is a regular file. The contract doesn't say what happens when the root entry with that name is a directory (with files under it) or a symlink. Is the whole entry left out, or only a regular file? A builder writing an exact-path filter has to pick one. — “`tree_fingerprint` returns the same value when `.codex-marketplace-install.json` at the tree's root is absent, present, or\npresent with different contents (another `revision`, another `source`, empty, not JSON).”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "undecided @ Q-no-migration: Once the build changes `tree_fingerprint`, nothing records what 1.15.1 produced. Should the test pin a literal digest for a fixture tree, or compute the old algorithm separately? Comparing the function's output to itself proves nothing. The brief expects this test to pass both before and after the build, so the reference value has to come from somewhere that stays fixed. — “A tree with no root receipt fingerprints exactly as hunsu 1.15.1 fingerprints it”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-no-migration: reference values are literals pinned for a fixture the test writes, computed while tree_fingerprint was byte-identical to 1.15.1's (0d39d9e3a3b7 without the receipt); test_Q_no_migration_a_tree_without_the_receipt_fingerprints_as_1_15_1_did passed before and after the build.",
+        "by": null,
+        "finding_text": "undecided @ Q-no-migration: Once the build changes `tree_fingerprint`, nothing records what 1.15.1 produced. Should the test pin a literal digest for a fixture tree, or compute the old algorithm separately? Comparing the function's output to itself proves nothing. The brief expects this test to pass both before and after the build, so the reference value has to come from somewhere that stays fixed. — “A tree with no root receipt fingerprints exactly as hunsu 1.15.1 fingerprints it”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "undecided @ Q-no-migration: After the fix, a test can't produce a hash that includes the receipt by calling the engine, so the source of that pre-fix hash (a pinned literal?) is undecided. The brief also doesn't sort this test in either direction. It names only Q-receipt-ignored and Q-cross-host as must-fail, and only the no-receipt fingerprint and exclusions of Q-no-migration as must-pass. Against the current hunsu.py this sentence's test would fail, because the receipt-bearing lock matches. — “A lock written before this fix from a copy that carried a receipt (a lock\nwritten on Codex) recorded a hash that included it; after the fix `check` reports \"content differs\" for it, honestly.”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-no-migration: the old-lock test (receipt-including literal 57633aa9234d) must fail before the build and pass after it; it was red in the pre-build run and green after.",
+        "by": null,
+        "finding_text": "undecided @ Q-no-migration: After the fix, a test can't produce a hash that includes the receipt by calling the engine, so the source of that pre-fix hash (a pinned literal?) is undecided. The brief also doesn't sort this test in either direction. It names only Q-receipt-ignored and Q-cross-host as must-fail, and only the no-receipt fingerprint and exclusions of Q-no-migration as must-pass. Against the current hunsu.py this sentence's test would fail, because the receipt-bearing lock matches. — “A lock written before this fix from a copy that carried a receipt (a lock\nwritten on Codex) recorded a hash that included it; after the fix `check` reports \"content differs\" for it, honestly.”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "contradiction @ brief vs Q-exact-path: The contract puts this sentence under Q-exact-path, but the brief calls them \"existing exclusions of Q-no-migration\". A sentence is decided by a test whose name contains the section id, so the two disagree on which id the exclusion and CRLF tests must carry. — “The existing exclusions (`__pycache__/`, `.git/`, `.in_use` as file or folder, `*.pyc`, `.DS_Store`) and the CRLF→LF\nnormalization stay as they are.”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-exact-path: the exclusions and CRLF sentence belongs to Q-exact-path, the brief's attribution to Q-no-migration was wrong; the test carries that id (test_Q_exact_path_the_existing_exclusions_and_crlf_normalization_stay).",
+        "by": null,
+        "finding_text": "contradiction @ brief vs Q-exact-path: The contract puts this sentence under Q-exact-path, but the brief calls them \"existing exclusions of Q-no-migration\". A sentence is decided by a test whose name contains the section id, so the two disagree on which id the exclusion and CRLF tests must carry. — “The existing exclusions (`__pycache__/`, `.git/`, `.in_use` as file or folder, `*.pyc`, `.DS_Store`) and the CRLF→LF\nnormalization stay as they are.”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "undecided @ Q-no-migration: The goal says to document this, but the contract doesn't say where: README, a skill doc, or the text of the \"content differs\" error from `check`. It also doesn't say whether the check output must mention the receipt or the relock remedy. — “The\nremedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin>\n--take-content \"why\"` when a release was rewritten under its version).”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-no-migration and Q-docs: the relock remedy is documented in README's lock section (commit 4329bec) and check's message stays as it is.",
+        "by": null,
+        "finding_text": "undecided @ Q-no-migration: The goal says to document this, but the contract doesn't say where: README, a skill doc, or the text of the \"content differs\" error from `check`. It also doesn't say whether the check output must mention the receipt or the relock remedy. — “The\nremedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin>\n--take-content \"why\"` when a release was rewritten under its version).”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "unchecked @ Q-no-migration: If the remedy lives only in documentation, no test_ function in test_hunsu.py can observe it. A check would have to read a named doc file or check output for a stated string, and the contract names neither. — “The\nremedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin>\n--take-content \"why\"` when a release was rewritten under its version).”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-no-migration: test_hunsu.py does not assert README wording; the docs were read by the late eyes and the verifiers, and the tests task said so in its non-claims.",
+        "by": null,
+        "finding_text": "unchecked @ Q-no-migration: If the remedy lives only in documentation, no test_ function in test_hunsu.py can observe it. A check would have to read a named doc file or check output for a stated string, and the contract names neither. — “The\nremedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin>\n--take-content \"why\"` when a release was rewritten under its version).”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "unchecked @ Q-receipt-ignored: No check is listed. A check must run test_hunsu.py under python3 3.11+ with a test whose name contains Q-receipt-ignored (or a -k key that selects it). That test must assert equal fingerprints across absent, present, and each listed variant: other revision, other source, empty, not JSON. — “`tree_fingerprint` returns the same value when `.codex-marketplace-install.json` at the tree's root is absent, present, or\npresent with different contents (another `revision`, another `source`, empty, not JSON).”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-suite: test_Q_receipt_ignored_one_value_across_all_six_receipt_states asserts one value across the six receipt states; the build's check python3 test_hunsu.py ran it green on 3.12 and 3.11.",
+        "by": null,
+        "finding_text": "unchecked @ Q-receipt-ignored: No check is listed. A check must run test_hunsu.py under python3 3.11+ with a test whose name contains Q-receipt-ignored (or a -k key that selects it). That test must assert equal fingerprints across absent, present, and each listed variant: other revision, other source, empty, not JSON. — “`tree_fingerprint` returns the same value when `.codex-marketplace-install.json` at the tree's root is absent, present, or\npresent with different contents (another `revision`, another `source`, empty, not JSON).”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "unchecked @ Q-cross-host: No check is listed. A check must select a Q-cross-host test that runs `check` on a lock written from a receipt-less copy against a receipt-bearing copy and finds no \"content differs\". It must also exercise the linked-source comparison path through `check` with a fake Host, not just call `tree_fingerprint` directly. Otherwise the \"because both go through\" claim goes unobserved. — “The comparison of a linked\nsource with its installed copy treats a receipt the same way, because both go through `tree_fingerprint`.”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-cross-host: both halves are observed through check on a fake host, by test_Q_cross_host_a_lock_from_a_claude_copy_checks_clean_on_a_copy_with_the_receipt and test_Q_cross_host_a_linked_source_without_the_receipt_is_its_installed_copy_with_one.",
+        "by": null,
+        "finding_text": "unchecked @ Q-cross-host: No check is listed. A check must select a Q-cross-host test that runs `check` on a lock written from a receipt-less copy against a receipt-bearing copy and finds no \"content differs\". It must also exercise the linked-source comparison path through `check` with a fake Host, not just call `tree_fingerprint` directly. Otherwise the \"because both go through\" claim goes unobserved. — “The comparison of a linked\nsource with its installed copy treats a receipt the same way, because both go through `tree_fingerprint`.”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "unchecked @ Q-real-content: No check is listed. A check must select Q-real-content tests covering each of the five named files. Each test must assert both a fingerprint change and a \"content differs\" failure from `check`, with the receipt present on the changed copy. — “Every real content change still changes the fingerprint and still fails `check` with \"content differs\": a skill's\n`SKILL.md`, Python code (an engine or hook `.py`), and each manifest (`plugin.json`, `.claude-plugin/plugin.json`,\n`.codex-plugin/plugin.json`).”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-real-content: five tests, one per named file, each asserting a changed fingerprint and a content-differs error with the receipt present on the changed copy.",
+        "by": null,
+        "finding_text": "unchecked @ Q-real-content: No check is listed. A check must select Q-real-content tests covering each of the five named files. Each test must assert both a fingerprint change and a \"content differs\" failure from `check`, with the receipt present on the changed copy. — “Every real content change still changes the fingerprint and still fails `check` with \"content differs\": a skill's\n`SKILL.md`, Python code (an engine or hook `.py`), and each manifest (`plugin.json`, `.claude-plugin/plugin.json`,\n`.codex-plugin/plugin.json`).”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "unchecked @ Q-exact-path: No check is listed. A check must select Q-exact-path tests showing that each listed near-miss changes the fingerprint: `skills/<x>/…` and `sub/…` copies of the receipt name, `.codex-plugin/plugin.json`, `.codex-hooks.json`, `.codex-marketplace-install.json.bak`, `.gitignore`, and `.agents/…`. — “Only the exact root-relative path `.codex-marketplace-install.json` is left out.”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-exact-path: test_Q_exact_path_the_name_below_the_root_still_counts, _other_root_codex_entries_still_count and _other_dotfiles_still_count assert that each listed near-miss changes the fingerprint.",
+        "by": null,
+        "finding_text": "unchecked @ Q-exact-path: No check is listed. A check must select Q-exact-path tests showing that each listed near-miss changes the fingerprint: `skills/<x>/…` and `sub/…` copies of the receipt name, `.codex-plugin/plugin.json`, `.codex-hooks.json`, `.codex-marketplace-install.json.bak`, `.gitignore`, and `.agents/…`. — “Only the exact root-relative path `.codex-marketplace-install.json` is left out.”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "stage-finding",
       "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
       "text": "unchecked @ Q-no-migration: No check is listed. A check must select Q-no-migration tests that, after `check` runs on an old-hash lock, confirm three things: the lock file's bytes are unchanged, no taken/accepted entry was added, and the receipt file's bytes are unchanged. They must also confirm that `check` exits with the error. — “The engine does not rewrite a lock's fingerprint by\nitself, does not accept a mismatch as taken, does not delete or edit a receipt, and does not report an old-hash lock as\ncurrent.”",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Decided in plan Q-no-migration: test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten asserts content differs, unchanged lock bytes, no content-taken entry and unchanged receipt bytes.",
+        "by": null,
+        "finding_text": "unchecked @ Q-no-migration: No check is listed. A check must select Q-no-migration tests that, after `check` runs on an old-hash lock, confirm three things: the lock file's bytes are unchanged, no taken/accepted entry was added, and the receipt file's bytes are unchanged. They must also confirm that `check` exits with the error. — “The engine does not rewrite a lock's fingerprint by\nitself, does not accept a mismatch as taken, does not delete or edit a receipt, and does not report an old-hash lock as\ncurrent.”",
+        "where": "run-20261030-065025-f619/receipt-tests (quibble, before)"
+      }
     },
     {
       "kind": "delegated",
@@ -224,25 +301,53 @@
       "kind": "outside-run",
       "where": "AGENTS.md, CLAUDE.md, README.md, plugin.json … (+1)",
       "text": "5 file(s) changed since 29b6e8e; no completed run recorded touching them",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Pre-run work by the owner, matched byte for byte to the outer self-host baseline hunsu.patch (sha256 16246c308243...); adopted for release by task prior-adoption and committed in ab7ab52. README's receipt paragraph is receipt-docs' own (4329bec).",
+        "by": null,
+        "finding_text": "5 file(s) changed since 29b6e8e; no completed run recorded touching them",
+        "where": "AGENTS.md, CLAUDE.md, README.md, plugin.json … (+1)"
+      }
     },
     {
       "kind": "outside-run",
       "where": ".claude-plugin/plugin.json",
       "text": "1 file(s) changed since 29b6e8e; no completed run recorded touching them",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "The >=3.9 to >=3.11 floor in .claude-plugin/plugin.json is pre-run baseline work, adopted by prior-adoption in ab7ab52; .codex-plugin/plugin.json already declared >=3.11 at 29b6e8e.",
+        "by": null,
+        "finding_text": "1 file(s) changed since 29b6e8e; no completed run recorded touching them",
+        "where": ".claude-plugin/plugin.json"
+      }
     },
     {
       "kind": "outside-run",
       "where": "plan/receipt-fingerprint.md",
       "text": "1 file(s) changed since 29b6e8e; no completed run recorded touching them",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "This run's own contract (tasks contract, contract-answers, release-contract, floor-wording), flagged because the run had not completed; committed in 4cd958f, f47c225 and 6322476.",
+        "by": null,
+        "finding_text": "1 file(s) changed since 29b6e8e; no completed run recorded touching them",
+        "where": "plan/receipt-fingerprint.md"
+      }
     },
     {
       "kind": "outside-run",
       "where": "skills/compose/SKILL.md",
       "text": "1 file(s) changed since 29b6e8e; no completed run recorded touching them",
-      "layer": "objection"
+      "layer": "objection",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "The compose skill's engines sentence is pre-run baseline work adopted in ab7ab52; its step-1 fallback to a bare python was fixed by task python3-docs in 4990c7a.",
+        "by": null,
+        "finding_text": "1 file(s) changed since 29b6e8e; no completed run recorded touching them",
+        "where": "skills/compose/SKILL.md"
+      }
     },
     {
       "kind": "non-claim",
@@ -253,17 +358,55 @@
     {
       "kind": "anomaly",
       "where": "plan/receipt-fingerprint.md Out of scope + Q-docs; README.md `lock` section; plugin.json / .claude-plugin/plugin.json",
-      "text": "The new README paragraph uses version 1.15.1 as the cutoff between engines that hash the receipt and engines that don't. With no version bump, the fixed tree still declares `\"version\": \"1.15.1\"` in both plugin.json files. So locks written by the released 1.15.1 include the receipt in the hash, and locks written by this tree's 1.15.1 leave it out. The version number the README tells readers to go by can't tell the two engines apart. That also cuts against the tree_fingerprint docstring at hunsu.py:2881: \"A version is the name of one content\". — tree: “written by hunsu 1.15.1 or earlier from a copy that carried the receipt (a lock written on Codex) hashed it in: `check` now says `content differs`”"
+      "text": "The new README paragraph uses version 1.15.1 as the cutoff between engines that hash the receipt and engines that don't. With no version bump, the fixed tree still declares `\"version\": \"1.15.1\"` in both plugin.json files. So locks written by the released 1.15.1 include the receipt in the hash, and locks written by this tree's 1.15.1 leave it out. The version number the README tells readers to go by can't tell the two engines apart. That also cuts against the tree_fingerprint docstring at hunsu.py:2881: \"A version is the name of one content\". — tree: “written by hunsu 1.15.1 or earlier from a copy that carried the receipt (a lock written on Codex) hashed it in: `check` now says `content differs`”",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Fixed by task receipt-docs-cutoff: the README's \"hunsu 1.15.1 or earlier\" became \"before this rule\" (commit 4329bec).",
+        "by": null,
+        "finding_text": "The new README paragraph uses version 1.15.1 as the cutoff between engines that hash the receipt and engines that don't. With no version bump, the fixed tree still declares `\"version\": \"1.15.1\"` in both plugin.json files. So locks written by the released 1.15.1 include the receipt in the hash, and locks written by this tree's 1.15.1 leave it out. The version number the README tells readers to go by can't tell the two engines apart. That also cuts against the tree_fingerprint docstring at hunsu.py:2881: \"A version is the name of one content\". — tree: “written by hunsu 1.15.1 or earlier from a copy that carried the receipt (a lock written on Codex) hashed it in: `check` now says `content differs`”",
+        "where": "plan/receipt-fingerprint.md Out of scope + Q-docs; README.md `lock` section; plugin.json / .claude-plugin/plugin.json"
+      }
     },
     {
       "kind": "contradiction",
       "where": "run-20261030-065025-f619/receipt-tests — test_hunsu.py",
-      "text": "record-vs-tree: The diff adds 18 `test_Q_*` functions: 3 receipt_ignored, 3 cross_host, 5 real_content, 5 exact_path and 2 no_migration. The record's own `covers` list also has 18. The other 5 new defs (receipt_tree, receipt_host, real_content_case, exact_path_changes, literal_tree) are helpers that the file's `__main__` does not run as tests. So the claimed count of 20 matches neither the tests nor the defs (23). — record: “I added 20 test functions for the receipt sections to test_hunsu.py, placed just before its `__main__` block.” — tree: “def test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten():”"
+      "text": "record-vs-tree: The diff adds 18 `test_Q_*` functions: 3 receipt_ignored, 3 cross_host, 5 real_content, 5 exact_path and 2 no_migration. The record's own `covers` list also has 18. The other 5 new defs (receipt_tree, receipt_host, real_content_case, exact_path_changes, literal_tree) are helpers that the file's `__main__` does not run as tests. So the claimed count of 20 matches neither the tests nor the defs (23). — record: “I added 20 test functions for the receipt sections to test_hunsu.py, placed just before its `__main__` block.” — tree: “def test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten():”",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "True: the tests writer's summary says 20 test functions; the tree has 18 test_Q_ functions and its covers list names 18. The worker's answer is kept as written.",
+        "by": null,
+        "finding_text": "record-vs-tree: The diff adds 18 `test_Q_*` functions: 3 receipt_ignored, 3 cross_host, 5 real_content, 5 exact_path and 2 no_migration. The record's own `covers` list also has 18. The other 5 new defs (receipt_tree, receipt_host, real_content_case, exact_path_changes, literal_tree) are helpers that the file's `__main__` does not run as tests. So the claimed count of 20 matches neither the tests nor the defs (23). — record: “I added 20 test functions for the receipt sections to test_hunsu.py, placed just before its `__main__` block.” — tree: “def test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten():”",
+        "where": "run-20261030-065025-f619/receipt-tests — test_hunsu.py"
+      }
     },
     {
       "kind": "anomaly",
       "where": "README.md `lock` section and Release and adoption; plugin.json / .claude-plugin/plugin.json version",
       "text": "The README treats 1.15.1 as the old fingerprint behavior. But every manifest in the tree still says `\"version\": \"1.15.1\"` while shipping the changed tree_fingerprint and the raised `\"python\": \">=3.11\"` floor. Under one version name, \"1.15.1 or earlier\" now covers both behaviors. The same diff adds a policy that \"Documentation and shared instruction edits also need a patch bump\", and the earlier versioning text says `check` fails a copy whose content differs under one version, so an unbumped behavior change is the exact case it warns about. — tree: “A lock written by hunsu 1.15.1 or earlier from a copy that carried the receipt (a lock written on Codex) hashed it in”"
+    },
+    {
+      "kind": "contradiction",
+      "where": "plan/receipt-fingerprint.md Q-prior-adoption (Not claimed) vs README.md ## Manifest, `engines` bullet (adopted hunk)",
+      "text": "plan-vs-code: The README states this in the present tense, inside a bullet about `check` reading the floor each installed plugin declares. A reader will take it to describe the plugin copies they actually install. By the plan's own account, most released manifests of the other five products don't declare >=3.11 yet, and this run adopted the sentence without qualifying it. A user installing a current release of chongdae, mangsang or another of the five will therefore see a floor that differs from what the README says. — record: “Not claimed: that a host integration (Codex hooks, a sandbox) was exercised live; that the other five products' *released* manifests declare `>=3.11` — their source trees do, most of their releases do not yet.” — tree: “The six active products (hunsu, chongdae, mangsang, jokbo, hacheong,\n  dwitbuk) declare `python >=3.11` in their root, Claude and Codex manifests.”",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "Fixed by task floor-wording (commit 6322476): the sentence now speaks of the six products' source manifests and says check reads the floor each installed copy declares.",
+        "by": null,
+        "finding_text": "plan-vs-code: The README states this in the present tense, inside a bullet about `check` reading the floor each installed plugin declares. A reader will take it to describe the plugin copies they actually install. By the plan's own account, most released manifests of the other five products don't declare >=3.11 yet, and this run adopted the sentence without qualifying it. A user installing a current release of chongdae, mangsang or another of the five will therefore see a floor that differs from what the README says. — record: “Not claimed: that a host integration (Codex hooks, a sandbox) was exercised live; that the other five products' *released* manifests declare `>=3.11` — their source trees do, most of their releases do not yet.” — tree: “The six active products (hunsu, chongdae, mangsang, jokbo, hacheong,\n  dwitbuk) declare `python >=3.11` in their root, Claude and Codex manifests.”",
+        "where": "plan/receipt-fingerprint.md Q-prior-adoption (Not claimed) vs README.md ## Manifest, `engines` bullet (adopted hunk)"
+      }
+    },
+    {
+      "kind": "contradiction",
+      "where": "run-20261030-065025-f619/receipt-model — mangsang/relations/R-c623255f.json, R-57b1aac9.json, R-760c89ad.json, R-cab27757.json",
+      "text": "record-vs-tree: The brief says README's lock section is related to the concept (\"to it\"). The only README relation in the tree points at hunsu.py:tree_fingerprint, not at concept:receipt-not-content. Three of the regression tests (R-57b1aac9, R-760c89ad, R-cab27757) also have dst hunsu.py:tree_fingerprint, not the concept. So the net does not connect README's lock section to the concept, which is what the task recorded as done. — record: “relate the contract sections, hunsu.py:tree_fingerprint, the regression tests and README's lock section to it with quoted evidence” — tree: “\"src\": \"README.md#`lock`\",\n  \"predicate\": \"documents\",\n  \"dst\": \"hunsu.py:tree_fingerprint\",”",
+      "disposition": {
+        "as": "accepted",
+        "delegated": "True of the brief's wording: README's lock section documents hunsu.py:tree_fingerprint and three tests verify it, and that symbol realizes the concept; the net was left as built, and fingerprint-documented and fingerprint-verified hold.",
+        "by": null,
+        "finding_text": "record-vs-tree: The brief says README's lock section is related to the concept (\"to it\"). The only README relation in the tree points at hunsu.py:tree_fingerprint, not at concept:receipt-not-content. Three of the regression tests (R-57b1aac9, R-760c89ad, R-cab27757) also have dst hunsu.py:tree_fingerprint, not the concept. So the net does not connect README's lock section to the concept, which is what the task recorded as done. — record: “relate the contract sections, hunsu.py:tree_fingerprint, the regression tests and README's lock section to it with quoted evidence” — tree: “\"src\": \"README.md#`lock`\",\n  \"predicate\": \"documents\",\n  \"dst\": \"hunsu.py:tree_fingerprint\",”",
+        "where": "run-20261030-065025-f619/receipt-model — mangsang/relations/R-c623255f.json, R-57b1aac9.json, R-760c89ad.json, R-cab27757.json"
+      }
     }
   ]
 }
