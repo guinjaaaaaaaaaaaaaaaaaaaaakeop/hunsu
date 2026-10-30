@@ -1625,7 +1625,7 @@ def judge_consume(args, target, manifest, j):
         r["findings-fingerprint"] = hashlib.sha256(json.dumps([(f["kind"], f["members"], f["quotes"]) for f in r["findings"]], sort_keys=True).encode("utf-8")).hexdigest()[:12]
     # A resolution a human wrote is about the findings they read. When a re-judged situation's findings differ, the judge's
     # own `resolution_verdict` decides: still-fits with a verbatim quote keeps the resolution (a delegation record replaces
-    # `reviewed`); anything else — does-not-fit, cannot-tell, no verdict, a quote not in the texts — marks `reviewed: false`
+    # `reviewed`, unless it is already exactly false); anything else — does-not-fit, cannot-tell, no verdict, a quote not in the texts — marks `reviewed: false`
     # for a human. Fail closed: the machine only closes the gate on grounded evidence. dwitbuk lists the unreviewed ones.
     before = {r["situation"]: r.get("findings-fingerprint") for r in existing.get("situations", [])}
     changed = [r["situation"] for r in results if r["situation"] in before and before[r["situation"]] != r["findings-fingerprint"]
@@ -1637,6 +1637,10 @@ def judge_consume(args, target, manifest, j):
         quote = str(v.get("quote") or "")
         bound = state_bound(quote) + state_bound(v.get("why"))
         if v.get("verdict") == "still-fits" and quote.strip() and quote_norm(quote) in quote_norm(packed) and not bound:
+            if manifest["resolutions"][sit].get("reviewed") is False:
+                unread.append(sit)
+                print("situation %r: findings changed — the judge says the resolution still fits (quote verified); no person has read the proposal, so it stays unreviewed (reviewed: false)" % sit)
+                continue
             # whole: a record cut at 200 kept half a sentence in the manifest and the lock (guin-site, 2026-09-28); where a line must be
             # short, it is cut where it is printed, not where it is stored
             manifest["resolutions"][sit]["reviewed"] = {"delegated": "judge %s: %s" % (account, str(v.get("why") or ""))}
