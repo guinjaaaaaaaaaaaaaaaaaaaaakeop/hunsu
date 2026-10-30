@@ -2550,6 +2550,195 @@ def test_Q_success_unchanged_roles_render_the_same_text_once_a_temporary_directo
         assert re.search(SUMMARY_RE, out.strip().splitlines()[-1]), out
 
 
+# --- Q-unread-stays-false / Q-reviewed-continuation / Q-unread-visible: an unread proposal is not turned into approved history ---
+
+_ABSENT = object()
+
+
+def unread_project(h, reviewed, extra=None):
+    """The gate test's project: two situations judged, 'reviewing a change' with an overlap finding; its resolution written with
+    REVIEWED (_ABSENT: a hand-written one with no `reviewed` record). 'building' carries EXTRA, a resolution nobody re-judges."""
+    h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
+    h.add_plugin("m2", "beta", "2.0.0", ["review"])
+    h.flush()
+    run("init", "--target", h.target)
+    run("add", "alpha", "--target", h.target)
+    run("add", "beta", "--target", h.target)
+    d = os.path.join(h.target, "judge")
+    run("judge", "request", "--target", h.target, "--out", d)
+    write(os.path.join(d, "cluster-response.json"), {"groups": [
+        {"situation": "reviewing a change", "members": ["alpha:critique", "beta:review"], "why": "both review"},
+        {"situation": "building", "members": ["alpha:build"], "why": "alone"}]})
+    run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))
+    write(os.path.join(d, "group-01-response.json"), {"findings": [
+        {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique", "beta:review": "does review"},
+         "why": "same work", "proposed": {"use": "alpha:critique", "deny": ["beta:review"]}}]})
+    assert run("judge", "consume", "--target", h.target, "--dir", d, "--by", "test")[0] == 0
+    res = {"use": "alpha:critique", "deny": ["beta:review"], "note": "the judge's proposal"}
+    if reviewed is not _ABSENT:
+        res["reviewed"] = reviewed
+    resolutions = {"reviewing a change": res}
+    if extra is not None:
+        resolutions["building"] = extra
+    manifest(h.target, resolutions=resolutions)
+    return d
+
+
+def unread_round(h, d, new_desc, verdict, finding_quote=None):
+    """Change alpha:critique's text (stales 'reviewing a change'), request --stale, answer with VERDICT, consume."""
+    alpha = h.installed["alpha@m1"][0]["installPath"]
+    write(os.path.join(alpha, "skills", "critique", "SKILL.md"), "---\nname: critique\ndescription: %s\n---\n" % new_desc)
+    code, out = run("judge", "request", "--target", h.target, "--out", d, "--stale")
+    assert code == 0 and "1 group packets" in out, out
+    name = next(n for n in sorted(os.listdir(d)) if n.startswith("group-") and n.endswith("-request.json"))
+    req = hunsu.load_json(os.path.join(d, name))
+    assert "existing_resolution" in req, req
+    response = {"worker": {"host": "claude-code", "model": "opus-x"},
+                "findings": [{"kind": "overlap", "members": ["alpha:critique", "beta:review"],
+                              "quotes": {"alpha:critique": finding_quote or new_desc, "beta:review": "does review"}, "why": "still same work", "proposed": {}}]}
+    if verdict is not None:
+        response["resolution_verdict"] = verdict
+    rpath = os.path.join(d, name.replace("-request", "-response"))
+    write(rpath, response)
+    code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "test2")
+    return code, out, rpath
+
+
+def resolutions_of(h):
+    return hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["resolutions"]
+
+
+FITS = lambda quote, why="the use and deny still hold": {"verdict": "still-fits", "why": why, "quote": quote}
+
+
+def test_Q_unread_stays_false_a_grounded_still_fits_keeps_reviewed_false_and_writes_no_delegation():
+    with Host() as h:
+        d = unread_project(h, False)
+        before = resolutions_of(h)["reviewing a change"]
+        code, out, _ = unread_round(h, d, "does critique, now with style", FITS("does critique, now with style"))
+        assert code == 0, out
+        res = resolutions_of(h)["reviewing a change"]
+        assert res["reviewed"] is False, res   # an unread proposal is not turned into approved history
+        assert res == before, (before, res)    # the resolution stays; no other key changes
+        assert "delegated" not in io.open(os.path.join(h.target, hunsu.MANIFEST), encoding="utf-8").read()
+
+
+def test_Q_unread_stays_false_consume_says_it_still_fits_but_stays_unreviewed():
+    with Host() as h:
+        d = unread_project(h, False)
+        code, out, _ = unread_round(h, d, "does critique, now with style", FITS("does critique, now with style"))
+        assert code == 0, out
+        assert "delegation recorded" not in out, out
+        line = [l for l in out.splitlines() if "reviewing a change" in l and "still fits" in l]
+        assert line, out
+        assert "unreviewed" in line[0] and "proposal" in line[0], line   # nobody has read the proposal, so it stays unreviewed
+
+
+def test_Q_unread_stays_false_the_raw_answer_stays_in_the_response_file_and_no_manifest_field_is_added():
+    with Host() as h:
+        d = unread_project(h, False, extra={"order": ["alpha:build"], "reviewed": {"by": "kim", "why": "read it"}})
+        m_before = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))
+        code, out, rpath = unread_round(h, d, "does critique, now with style", FITS("does critique, now with style", "the deny still holds: " + "y" * 250))
+        assert code == 0, out
+        assert os.path.isfile(rpath), "the judge round's response file stays where it was written"
+        assert hunsu.load_json(rpath)["resolution_verdict"]["why"] == "the deny still holds: " + "y" * 250
+        m_after = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))
+        assert set(m_after) == set(m_before), (sorted(m_before), sorted(m_after))
+        assert m_after["resolutions"] == m_before["resolutions"], (m_before["resolutions"], m_after["resolutions"])
+        assert "y" * 250 not in json.dumps(m_after), "the judge's raw answer is not copied into the manifest"
+
+
+def test_Q_unread_stays_false_a_second_round_still_fits_again_and_it_is_still_false():
+    with Host() as h:
+        d = unread_project(h, False)
+        for i, desc in enumerate(("does critique, now with style", "does critique, again changed")):
+            code, out, _ = unread_round(h, d, desc, FITS(desc))
+            assert code == 0, out
+            assert resolutions_of(h)["reviewing a change"]["reviewed"] is False, (i, resolutions_of(h))
+        # and a false written by an earlier fail-closed round (a negative verdict) is not delegated by a later still-fits either
+    with Host() as h:
+        d = unread_project(h, True)
+        unread_round(h, d, "does critique, differently", {"verdict": "does-not-fit", "why": "the overlap moved", "quote": "does critique, differently"})
+        assert resolutions_of(h)["reviewing a change"]["reviewed"] is False
+        code, out, _ = unread_round(h, d, "does critique, a third way", FITS("does critique, a third way"))
+        assert code == 0 and resolutions_of(h)["reviewing a change"]["reviewed"] is False, (out, resolutions_of(h))
+
+
+def test_Q_unread_visible_check_policy_and_the_session_line_still_say_unreviewed():
+    with Host() as h:
+        d = unread_project(h, False)
+        code, out, _ = unread_round(h, d, "does critique, now with style", FITS("does critique, now with style"))
+        assert code == 0, out
+        code, out = run("check", "--findings", "--target", h.target)
+        assert [f["kind"] for f in json.loads(out)["findings"] if f["kind"] == "unreviewed"] == ["unreviewed"], out
+        res = resolutions_of(h)["reviewing a change"]
+        lines = hunsu.policy_lines({"resolutions": {"reviewing a change": res}})
+        assert lines[0].endswith("[unreviewed — applied from the judge's proposal]"), lines
+        code, out = run("policy", "--target", h.target)
+        assert "settled: nobody yet — the judge's proposal, applied unread" in out, out
+        manifest(h.target, engines={"claude-code": ">=0.0"})
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
+        env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)
+        done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "session_start.py")], input=json.dumps({"cwd": h.target}),
+                              capture_output=True, text=True, encoding="utf-8", env=env)
+        text = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
+        line = [l for l in text.splitlines() if "reviewing a change" in l]
+        assert line and line[0].endswith("[unreviewed — applied from the judge's proposal]"), text
+
+
+def test_Q_reviewed_continuation_previously_reviewed_resolutions_get_the_delegation_on_still_fits():
+    for reviewed in (True, {"by": "kim", "why": "read the conflicts doc"}, _ABSENT, {"delegated": "judge codex gpt-y: an older reading"}):
+        with Host() as h:
+            d = unread_project(h, reviewed)
+            code, out, _ = unread_round(h, d, "does critique, now with style", FITS("does critique, now with style"))
+            assert code == 0 and "still fits (quote verified); kept, delegation recorded" in out, (reviewed, out)
+            res = resolutions_of(h)["reviewing a change"]
+            assert res["reviewed"] == {"delegated": "judge claude-code opus-x: the use and deny still hold"}, (reviewed, res)
+            assert res["use"] == "alpha:critique" and res["deny"] == ["beta:review"], res
+
+
+def test_Q_reviewed_continuation_negative_ungrounded_or_absent_verdicts_mark_false_whatever_it_held():
+    verdicts = (("does-not-fit", lambda q: {"verdict": "does-not-fit", "why": "the overlap moved", "quote": q}),
+                ("cannot-tell", lambda q: {"verdict": "cannot-tell", "why": "unclear", "quote": q}),
+                ("no verdict", lambda q: None),
+                ("not verbatim", lambda q: FITS("a sentence nobody wrote")),
+                ("reason names a state", lambda q: FITS(q, "run-20261002-050435-e75b is the open run, so the deny holds")))
+    for reviewed in (True, {"by": "kim"}, _ABSENT, {"delegated": "judge codex gpt-y: an older reading"}, False):
+        for label, make in verdicts:
+            with Host() as h:
+                d = unread_project(h, reviewed)
+                desc = "does critique, now with style"
+                code, out, _ = unread_round(h, d, desc, make(desc))
+                res = resolutions_of(h)["reviewing a change"]
+                assert res["reviewed"] is False, (reviewed, label, res, out)
+                assert res["use"] == "alpha:critique" and res["deny"] == ["beta:review"], (label, res)
+
+
+def test_Q_reviewed_continuation_a_quote_naming_one_state_marks_false():
+    for reviewed in (True, False):
+        with Host() as h:
+            d = unread_project(h, reviewed)
+            desc = "does critique. Last run run-20261002-050435-e75b"
+            code, out, _ = unread_round(h, d, desc, FITS("Last run run-20261002-050435-e75b"), finding_quote="does critique.")
+            res = resolutions_of(h)["reviewing a change"]
+            assert res["reviewed"] is False and "delegation recorded" not in out, (reviewed, res, out)
+
+
+def test_Q_reviewed_continuation_situations_whose_findings_did_not_change_are_not_touched():
+    for kept in ({"order": ["alpha:build"], "reviewed": False}, {"order": ["alpha:build"], "reviewed": {"delegated": "judge codex gpt-y: an older reading"}},
+                 {"order": ["alpha:build"]}):
+        with Host() as h:
+            d = unread_project(h, True, extra=kept)
+            raw = lambda: json.dumps(resolutions_of(h)["building"], sort_keys=True)
+            before = raw()
+            code, out, _ = unread_round(h, d, "does critique, now with style", FITS("does critique, now with style"))
+            assert code == 0, out
+            assert raw() == before, (kept, before, raw())   # not migrated, re-signed or rewritten
+            assert "reviewed" in resolutions_of(h)["reviewing a change"]
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
