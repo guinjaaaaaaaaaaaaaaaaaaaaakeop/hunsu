@@ -1,0 +1,269 @@
+{
+  "artifact-type": "dwitbuk/review@1",
+  "id": "review-20261030-160653-7971",
+  "since": "29b6e8e",
+  "head": "92c52302eb89953d7fdef8435a9401fc0d351b91",
+  "findings": [
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['reviewing a change (before a gate or a merge, disputing, testing or trying a slice)']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['a run or review stopped at a decision for the person']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection"
+    },
+    {
+      "kind": "unreviewed",
+      "where": "hunsu.json resolutions['asking what happened, what is open, or what was decided']",
+      "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges",
+      "standing": true,
+      "reporter": "hunsu",
+      "layer": "objection"
+    },
+    {
+      "kind": "self-performed",
+      "where": "run-20261030-065025-f619/environment",
+      "text": "the session did this itself instead of the lock's implementer (decided by the session (claude-code claude-opus-5-5)): Environment adoption, not a build: hunsu.json, hunsu.lock.json, hunsu-judgments.json, .claude/settings.json and the four .gitignore lines were written by the bootstrap session 5310f313 (released hunsu compose and lock under the owner's delegated setup policy); this task only adopts them into the run and checks them with the released hunsu check",
+      "layer": "observation"
+    },
+    {
+      "kind": "session-judged",
+      "where": "run-20261030-065025-f619/environment",
+      "text": "adopt .claude/settings.json, .gitignore, hunsu-judgments.json, hunsu.json, hunsu.lock.json decided by the session (claude-code claude-opus-5-5), not a person: Written before this task existed by the bootstrap session 5310f313 (released hunsu init/compose/lock and claude plugin install, project scope); unchanged since the bootstrap's report — hashes match the session's baseline taken before this run",
+      "layer": "observation"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "undecided @ Q-receipt-ignored: Every case listed is a regular file. The contract doesn't say what happens when the root entry with that name is a directory (with files under it) or a symlink. Is the whole entry left out, or only a regular file? A builder writing an exact-path filter has to pick one. — “`tree_fingerprint` returns the same value when `.codex-marketplace-install.json` at the tree's root is absent, present, or\npresent with different contents (another `revision`, another `source`, empty, not JSON).”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "undecided @ Q-no-migration: Once the build changes `tree_fingerprint`, nothing records what 1.15.1 produced. Should the test pin a literal digest for a fixture tree, or compute the old algorithm separately? Comparing the function's output to itself proves nothing. The brief expects this test to pass both before and after the build, so the reference value has to come from somewhere that stays fixed. — “A tree with no root receipt fingerprints exactly as hunsu 1.15.1 fingerprints it”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "undecided @ Q-no-migration: After the fix, a test can't produce a hash that includes the receipt by calling the engine, so the source of that pre-fix hash (a pinned literal?) is undecided. The brief also doesn't sort this test in either direction. It names only Q-receipt-ignored and Q-cross-host as must-fail, and only the no-receipt fingerprint and exclusions of Q-no-migration as must-pass. Against the current hunsu.py this sentence's test would fail, because the receipt-bearing lock matches. — “A lock written before this fix from a copy that carried a receipt (a lock\nwritten on Codex) recorded a hash that included it; after the fix `check` reports \"content differs\" for it, honestly.”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "contradiction @ brief vs Q-exact-path: The contract puts this sentence under Q-exact-path, but the brief calls them \"existing exclusions of Q-no-migration\". A sentence is decided by a test whose name contains the section id, so the two disagree on which id the exclusion and CRLF tests must carry. — “The existing exclusions (`__pycache__/`, `.git/`, `.in_use` as file or folder, `*.pyc`, `.DS_Store`) and the CRLF→LF\nnormalization stay as they are.”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "undecided @ Q-no-migration: The goal says to document this, but the contract doesn't say where: README, a skill doc, or the text of the \"content differs\" error from `check`. It also doesn't say whether the check output must mention the receipt or the relock remedy. — “The\nremedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin>\n--take-content \"why\"` when a release was rewritten under its version).”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "unchecked @ Q-no-migration: If the remedy lives only in documentation, no test_ function in test_hunsu.py can observe it. A check would have to read a named doc file or check output for a stated string, and the contract names neither. — “The\nremedy is explicit: verify the installed payload against its release, then `hunsu lock` again (or `hunsu add <plugin>\n--take-content \"why\"` when a release was rewritten under its version).”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "unchecked @ Q-receipt-ignored: No check is listed. A check must run test_hunsu.py under python3 3.11+ with a test whose name contains Q-receipt-ignored (or a -k key that selects it). That test must assert equal fingerprints across absent, present, and each listed variant: other revision, other source, empty, not JSON. — “`tree_fingerprint` returns the same value when `.codex-marketplace-install.json` at the tree's root is absent, present, or\npresent with different contents (another `revision`, another `source`, empty, not JSON).”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "unchecked @ Q-cross-host: No check is listed. A check must select a Q-cross-host test that runs `check` on a lock written from a receipt-less copy against a receipt-bearing copy and finds no \"content differs\". It must also exercise the linked-source comparison path through `check` with a fake Host, not just call `tree_fingerprint` directly. Otherwise the \"because both go through\" claim goes unobserved. — “The comparison of a linked\nsource with its installed copy treats a receipt the same way, because both go through `tree_fingerprint`.”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "unchecked @ Q-real-content: No check is listed. A check must select Q-real-content tests covering each of the five named files. Each test must assert both a fingerprint change and a \"content differs\" failure from `check`, with the receipt present on the changed copy. — “Every real content change still changes the fingerprint and still fails `check` with \"content differs\": a skill's\n`SKILL.md`, Python code (an engine or hook `.py`), and each manifest (`plugin.json`, `.claude-plugin/plugin.json`,\n`.codex-plugin/plugin.json`).”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "unchecked @ Q-exact-path: No check is listed. A check must select Q-exact-path tests showing that each listed near-miss changes the fingerprint: `skills/<x>/…` and `sub/…` copies of the receipt name, `.codex-plugin/plugin.json`, `.codex-hooks.json`, `.codex-marketplace-install.json.bak`, `.gitignore`, and `.agents/…`. — “Only the exact root-relative path `.codex-marketplace-install.json` is left out.”",
+      "layer": "objection"
+    },
+    {
+      "kind": "stage-finding",
+      "where": "run-20261030-065025-f619/receipt-tests (quibble, before)",
+      "text": "unchecked @ Q-no-migration: No check is listed. A check must select Q-no-migration tests that, after `check` runs on an old-hash lock, confirm three things: the lock file's bytes are unchanged, no taken/accepted entry was added, and the receipt file's bytes are unchanged. They must also confirm that `check` exits with the error. — “The engine does not rewrite a lock's fingerprint by\nitself, does not accept a mismatch as taken, does not delete or edit a receipt, and does not report an old-hash lock as\ncurrent.”",
+      "layer": "objection"
+    },
+    {
+      "kind": "delegated",
+      "where": "run-20261030-065025-f619/receipt-tests quibble",
+      "text": "quibble findings (11) accepted by delegation: Owner's task statement handed this delegated split to the session ('no user question required for this delegated split'); the session decided all 11 quibble findings in plan/receipt-fingerprint.md (task contract-answers) from the owner's acceptance list; no person read these decisions",
+      "layer": "observation"
+    },
+    {
+      "kind": "verifier-non-claim",
+      "where": "run-20261030-065025-f619",
+      "text": "environment: (verifier) accepted without reading the tree: the eyes opened no file and ran no command — the verdict rests on the packet alone",
+      "layer": "observation"
+    },
+    {
+      "kind": "seen-non-claims",
+      "where": "run-20261030-065025-f619/receipt-fix (3), run-20261030-065025-f619/receipt-tests (6)",
+      "text": "9 provider non-claim(s) went to the verifier with the work and it accepted — read there, said here, not charged; each stays in its task's `non-claims`",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-0642497d hunsu.py:tree_fingerprint realizes concept:receipt-not-content",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-234577cd plan/receipt-fingerprint.md#Q-exact-path realizes concept:receipt-not-content",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-3dfaddc5 plan/receipt-fingerprint.md#Q-receipt-ignored realizes concept:receipt-not-content",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-57b1aac9 test_hunsu.py:test_Q_receipt_ignored_one_value_across_all_six_receipt_states verifies hunsu.py:tree_fingerprint",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-684fadb0 plan/receipt-fingerprint.md#Q-no-migration realizes concept:receipt-not-content",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-760c89ad test_hunsu.py:test_Q_exact_path_the_name_below_the_root_still_counts verifies hunsu.py:tree_fingerprint",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-78a1bf05 test_hunsu.py:test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten realizes concept:receipt-not-content",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-8760cf8a test_hunsu.py:test_Q_real_content_a_skill_md_edit_is_seen_with_the_receipt_present realizes concept:receipt-not-content",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-c623255f README.md#`lock` documents hunsu.py:tree_fingerprint",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-c65a1808 plan/receipt-fingerprint.md#Q-cross-host realizes concept:receipt-not-content",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-cab27757 test_hunsu.py:test_Q_exact_path_other_root_codex_entries_still_count verifies hunsu.py:tree_fingerprint",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "delegated",
+      "where": "R-df785118 test_hunsu.py:test_Q_cross_host_a_lock_from_a_claude_copy_checks_clean_on_a_copy_with_the_receipt realizes concept:receipt-not-content",
+      "text": "re-confirmed by delegation: Owner's task statement for run-20261030-065025-f619 asked for a focused requirement-to-code-to-tests relationship grounded in the contract and source; the session (claude-opus-5-5) proposed these from plan/receipt-fingerprint.md, the build's hunsu.py:tree_fingerprint, the nitpick's tests and README's lock paragraph, each quote verbatim; no person read them",
+      "standing": true,
+      "reporter": "mangsang",
+      "layer": "observation"
+    },
+    {
+      "kind": "outside-run",
+      "where": "AGENTS.md, CLAUDE.md, README.md, plugin.json … (+1)",
+      "text": "5 file(s) changed since 29b6e8e; no completed run recorded touching them",
+      "layer": "objection"
+    },
+    {
+      "kind": "outside-run",
+      "where": ".claude-plugin/plugin.json",
+      "text": "1 file(s) changed since 29b6e8e; no completed run recorded touching them",
+      "layer": "objection"
+    },
+    {
+      "kind": "outside-run",
+      "where": "plan/receipt-fingerprint.md",
+      "text": "1 file(s) changed since 29b6e8e; no completed run recorded touching them",
+      "layer": "objection"
+    },
+    {
+      "kind": "outside-run",
+      "where": "skills/compose/SKILL.md",
+      "text": "1 file(s) changed since 29b6e8e; no completed run recorded touching them",
+      "layer": "objection"
+    },
+    {
+      "kind": "non-claim",
+      "where": "run-20261030-065025-f619",
+      "text": "no check decides this task  [tasks contract, receipt-tests, contract-answers, receipt-docs, receipt-model, fresh-review]",
+      "layer": "observation"
+    },
+    {
+      "kind": "anomaly",
+      "where": "plan/receipt-fingerprint.md Out of scope + Q-docs; README.md `lock` section; plugin.json / .claude-plugin/plugin.json",
+      "text": "The new README paragraph uses version 1.15.1 as the cutoff between engines that hash the receipt and engines that don't. With no version bump, the fixed tree still declares `\"version\": \"1.15.1\"` in both plugin.json files. So locks written by the released 1.15.1 include the receipt in the hash, and locks written by this tree's 1.15.1 leave it out. The version number the README tells readers to go by can't tell the two engines apart. That also cuts against the tree_fingerprint docstring at hunsu.py:2881: \"A version is the name of one content\". — tree: “written by hunsu 1.15.1 or earlier from a copy that carried the receipt (a lock written on Codex) hashed it in: `check` now says `content differs`”"
+    },
+    {
+      "kind": "contradiction",
+      "where": "run-20261030-065025-f619/receipt-tests — test_hunsu.py",
+      "text": "record-vs-tree: The diff adds 18 `test_Q_*` functions: 3 receipt_ignored, 3 cross_host, 5 real_content, 5 exact_path and 2 no_migration. The record's own `covers` list also has 18. The other 5 new defs (receipt_tree, receipt_host, real_content_case, exact_path_changes, literal_tree) are helpers that the file's `__main__` does not run as tests. So the claimed count of 20 matches neither the tests nor the defs (23). — record: “I added 20 test functions for the receipt sections to test_hunsu.py, placed just before its `__main__` block.” — tree: “def test_Q_no_migration_an_old_lock_that_hashed_the_receipt_is_content_differs_and_nothing_is_rewritten():”"
+    },
+    {
+      "kind": "anomaly",
+      "where": "README.md `lock` section and Release and adoption; plugin.json / .claude-plugin/plugin.json version",
+      "text": "The README treats 1.15.1 as the old fingerprint behavior. But every manifest in the tree still says `\"version\": \"1.15.1\"` while shipping the changed tree_fingerprint and the raised `\"python\": \">=3.11\"` floor. Under one version name, \"1.15.1 or earlier\" now covers both behaviors. The same diff adds a policy that \"Documentation and shared instruction edits also need a patch bump\", and the earlier versioning text says `check` fails a copy whose content differs under one version, so an unbumped behavior change is the exact case it warns about. — tree: “A lock written by hunsu 1.15.1 or earlier from a copy that carried the receipt (a lock written on Codex) hashed it in”"
+    }
+  ]
+}
