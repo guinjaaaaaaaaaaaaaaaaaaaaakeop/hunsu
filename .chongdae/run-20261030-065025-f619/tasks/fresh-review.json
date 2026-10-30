@@ -1,7 +1,7 @@
 {
   "artifact-type": "chongdae/task@1",
   "written_by": "chongdae 1.24.0",
-  "status": "todo",
+  "status": "done",
   "def": {
     "id": "fresh-review",
     "role": "session",
@@ -20,5 +20,31 @@
   "added": "2026-10-30T07:06:47+00:00",
   "non-claims": [
     "no check decides this task; done means the agent said so"
-  ]
+  ],
+  "checks": [],
+  "touched": [
+    "reviews/review-20261030-160653-7971.json"
+  ],
+  "performed_by": {
+    "provider": "session",
+    "host": "claude-code",
+    "agent": "claude-code_2-1-314_agent",
+    "effort": "xhigh",
+    "model": "claude-opus-5-5",
+    "versions": {
+      "used": {
+        "chongdae": "1.24.0"
+      }
+    },
+    "trace": {
+      "changed": [],
+      "commands-run": 26,
+      "command-lines": "kept in the local session transcript, not in the record",
+      "window-from": "2026-10-30T07:06:47+00:00"
+    }
+  },
+  "done": {
+    "at": "2026-10-30T07:17:11+00:00",
+    "chongdae": "chongdae 1.24.0"
+  }
 }
