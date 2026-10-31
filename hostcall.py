@@ -25,7 +25,7 @@ def worker_env(host):
     else:
         raise ValueError("unsupported host: %r" % (host,))
     env = dict(os.environ)
-    for key in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "CHONGDAE_SESSION", "AI_AGENT", "CLAUDE_PROJECT_DIR", "CODEX_VERSION"):
+    for key in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CHONGDAE_SESSION", "AI_AGENT", "CLAUDE_PROJECT_DIR", "CODEX_VERSION"):
         env.pop(key, None)
     env.update(AGENT_HOST=agent_host, AGENT_WORKER="1")
     return env
