@@ -547,12 +547,14 @@ def check(target):
     s = survey(target)
     found = ([], [], [])
     check_local_files(target, found)
+    check_host_profile(target, found)
     check_behind(target, manifest, s, found)
     check_capabilities(manifest, found)   # hunsu.json and the host table only: asked even while plugins are missing
+    check_codex_hooks(target, manifest, s, found)   # a plugin update is when a generated hook's copy goes, and when plugins differ
     if check_plugins(target, manifest, s, found):
         return found
-    check_session(manifest, found)
-    check_engines(manifest, s, found)
+    check_session(target, manifest, s, found)
+    check_engines(target, manifest, s, found)
     check_hooks(target, manifest, s, found)
     check_local_skills(target, manifest, s, found)
     check_skill_overlap(target, manifest, s, found)
@@ -610,17 +612,28 @@ def install_scope(target, name, market):
     return install_entry(entries, target).get("scope") or "project"
 
 
-def update_steps(name, market, goal, installed=None, pinned=None, locked=None, copy=None, scope="project"):
+def update_steps(name, market, goal, installed=None, pinned=None, locked=None, copy=None, scope="project", linked=False):
     """The steps, in order, that bring this project to `goal` of `name` — written out so nobody greps old transcripts for them
     (guin-site, 10-13: twice). `installed` is what this host has installed for the project, `pinned` hunsu.json's version,
-    `locked` the lock's, `copy` the version this machine's copy of the marketplace has (None when unknown). Each step only
+    `locked` the lock's, `copy` the version this machine's copy of the marketplace has (None when unknown), `linked` whether this
+    machine links the plugin to a development source (hunsu.local.json). Each step only
     when it is owed: an install already at `goal` needs no update, a manifest already at it no `add`. The session restarts
     whenever the plugins it runs may differ from what is installed: a host loads plugins once, at start."""
     steps = []
     if installed != goal:
-        if HOST == "codex":
-            steps.append("`codex plugin marketplace upgrade %s` — this machine's snapshot of the marketplace" % market)
-            steps.append("`codex plugin remove %s@%s` then `codex plugin add %s@%s` — Codex keeps a plugin's snapshot until it is added again" % (name, market, name, market))
+        if HOST == "codex" and linked:
+            # a linked development source is re-snapshotted, not upgraded: remove + add, through `install --refresh`
+            steps.append("`hunsu install --refresh %s` — this machine links %s to a development source; the refresh re-snapshots it (remove + add)" % (name, name))
+        elif HOST == "codex":
+            # the named upgrade refreshes the marketplace's Git snapshot and the plugins installed from it (the 2.0.1 adoption:
+            # four upgrades, no `plugin add`, every receipt naming the approved revision, the copies byte-exact): a routine
+            # remove + add is not owed. Reinstalling stays for a corrupted copy (`check` says so) and `install --refresh` for a
+            # linked source. Either way the generated Codex hooks name the old copy until `hunsu lock` on Codex regenerates them
+            steps.append("`codex plugin marketplace upgrade %s` — refreshes this machine's Git snapshot of the marketplace and the plugins installed from it" % market)
+            steps.append("verify what Codex now has for %s: its copy in the Codex plugin cache (`plugins/cache/%s/%s/%s/`) exists, the "
+                         "`.codex-marketplace-install.json` at its root names the revision the release %s was published from, and its files are that "
+                         "release's — an upgrade takes what the marketplace publishes now, which by itself proves no version, and `hunsu check` "
+                         "compares content only with what a lock recorded for the same version" % (name, market, name, goal, goal))
         else:
             if copy != goal:
                 steps.append("`claude plugin marketplace update %s` — this machine's copy of the marketplace" % market)
@@ -742,34 +755,182 @@ def check_plugins(target, manifest, s, found):
     return False
 
 
-def check_session(manifest, found):
-    errors, warnings, info = found
-    # 1b. the session this check runs in: a sandboxed Codex session cannot start the roles' workers (a nested `codex exec` dies
-    # at "app-server client: Operation not permitted"), so a lock with command-provider roles cannot be run from here
-    if os.environ.get("CODEX_SANDBOX") and any(isinstance(v, list) for v in manifest.get("roles", {}).values()):
-        warnings.append("session: sandboxed (CODEX_SANDBOX=%s) — the roles' workers (%s) are `codex exec` processes and cannot start from inside a sandboxed session; "
-                        "run a session that drives them with --dangerously-bypass-approvals-and-sandbox (the write guard is then the guard), or run the workers outside it"
-                        % (os.environ["CODEX_SANDBOX"], ", ".join(r for r, v in manifest["roles"].items() if isinstance(v, list))))
+HOST_ENGINE = {"claude": "claude-code", "claude-code": "claude-code", "codex": "codex"}   # a worker's `--host` -> the `engines` name of its host
 
 
-def check_engines(manifest, s, found):
+def host_profile(target):
+    """(hosts, why not) — this machine's hunsu.local.json `hosts`: (None, None) when it does not say; (the hosts, None) for a
+    usable profile, a non-empty list of known host names; (None, why) for anything else — a dict, a nested list, null, a
+    misspelled name, an empty list. A profile hunsu cannot read is never read as a narrower one: it selects nothing."""
+    doc = load_json(os.path.join(target, LOCAL))
+    if not isinstance(doc, dict) or "hosts" not in doc:
+        return None, None
+    raw = doc["hosts"]
+    if not isinstance(raw, list):
+        return None, "not a list"
+    if not raw:
+        return None, "an empty list selects no host"
+    bad = [h for h in raw if not (isinstance(h, str) and h in HOST_EXE)]
+    if bad:
+        return None, "not a host hunsu knows: %s" % ", ".join(json.dumps(h) for h in bad)
+    return set(raw), None
+
+
+def machine_hosts(target, manifest):
+    """(the hosts this machine runs for the project, written?) — a usable hunsu.local.json `hosts` (this machine's statement,
+    never committed), else every host the manifest's `engines` names: the shared mixed configuration is the default, a session's
+    host need not be its workers', and a profile that does not read (check_host_profile's error) suppresses no probe."""
+    hosts, _ = host_profile(target)
+    if hosts is not None:
+        return hosts, True
+    return {e for e in manifest.get("engines", {}) if e in HOST_EXE}, False
+
+
+def check_host_profile(target, found):
     errors, warnings, info = found
-    # 2. engines — the floor the team requires, checked against what this machine actually has
-    for engine, spec in manifest.get("engines", {}).items():
-        found = version_of(HOST_EXE.get(engine, engine))
-        if not satisfies(found, spec):
-            errors.append("engine %s: requires %s, found %s" % (engine, spec, found or "nothing"))
+    # 0b. this machine's host profile: one that does not read is an error, and every host `engines` names is checked meanwhile
+    _, why = host_profile(target)
+    if why:
+        errors.append("%s `hosts`: %s — %s; a profile is a non-empty list of the hosts this machine runs (%s), e.g. [\"codex\"]. Until "
+                      "it reads, every host `engines` names is checked, as if it were absent"
+                      % (LOCAL, json.dumps(load_json(os.path.join(target, LOCAL)).get("hosts")), why, ", ".join(sorted(HOST_EXE))))
+
+
+def worker_of(manifest, s, provider):
+    """The host (`claude-code`/`codex`) a role's worker runs on, read from the argv a runner would spawn: an argv as written,
+    `plugin:role` resolved first to what the plugin declares (`{host}` filled with this host as `lock` does; a fixed `--host`
+    stays). None for `session` and `native:` (the host's own subagent runs where the session runs), for a command that is not
+    a worker, and for a `plugin:role` that does not resolve (check_roles says why)."""
+    if isinstance(provider, list):
+        argv = [str(a) for a in provider]
+    elif isinstance(provider, str) and provider != "session" and not provider.startswith("native:"):
+        argv = role_argv(manifest, s, provider)[0]
+    else:
+        return None
+    return HOST_ENGINE.get(worker_host(argv)) if argv else None
+
+
+def role_hosts(manifest, s):
+    """({host: [plain roles]}, {host: [alternates]}) — whose workers run on each host. A plain role is hired for every task of
+    its kind; a `<role>@<cap>` alternate only for a task that requires those capabilities."""
+    plain, alternates = {}, {}
+    for name, provider in sorted((manifest.get("roles") or {}).items()):
+        host = worker_of(manifest, s, provider)
+        if host:
+            (alternates if ALTERNATE.match(name) else plain).setdefault(host, []).append(name)
+    return plain, alternates
+
+
+def hosts_in_use(target, manifest, s):
+    """The hosts that run anything for this project on this machine: its hosts, a plain role's worker host (required whatever
+    `hosts` says), an alternate's host that `hosts` does not leave out, and the host this check runs on."""
+    selected, written = machine_hosts(target, manifest)
+    plain, alternates = role_hosts(manifest, s)
+    return selected | set(plain) | (set() if written else set(alternates)) | {HOST}
+
+
+def required_hosts(manifest, s):
+    """The host engines this machine must probe whatever its `hosts` says: a plain role's worker host, and a host an enabled
+    plugin's own `engines` (plugin.json) names. An alternate's host is not among them: it is hired only for a task that requires it."""
+    plain, _ = role_hosts(manifest, s)
+    plugins = {e for name, want in (manifest.get("plugins") or {}).items() for e in ((enabled(s, name, want) or {}).get("engines") or {})}
+    return set(plain) | {e for e in plugins if e in HOST_EXE}
+
+
+def unprobed_hosts(target, manifest, s):
+    """The host engines neither `check` nor `lock` runs `--version` for: `engines` names them, a usable hunsu.local.json `hosts`
+    leaves them out, and nothing here requires them (required_hosts). Empty without a profile: the shared mixed configuration
+    probes every host `engines` names. The lock records them as null — not probed, not missing."""
+    selected, written = machine_hosts(target, manifest)
+    if not written:
+        return set()
+    needed = required_hosts(manifest, s)
+    return {e for e in manifest.get("engines", {}) if e in HOST_EXE and e not in selected and e not in needed}
+
+
+def check_session(target, manifest, s, found):
+    errors, warnings, info = found
+    # 1b. the session this check runs in: inside a Codex sandbox, a nested `codex exec` has failed to start ("failed to initialize
+    # in-process app-server client: Operation not permitted"). Only a worker that runs on Codex is a nested `codex exec`: a Claude
+    # worker, a plain command, `session` and `native:` are not, so they bring no line. Nothing is probed and nothing is recommended
+    # that turns a sandbox off.
+    if not os.environ.get("CODEX_SANDBOX"):
+        return
+    selected, written = machine_hosts(target, manifest)
+    plain, alternates = role_hosts(manifest, s)
+    names = plain.get("codex", []) + ([] if written and "codex" not in selected else alternates.get("codex", []))
+    if names:
+        warnings.append("session: sandboxed (CODEX_SANDBOX=%s) — %s run their workers on Codex (a nested `codex exec`), which has failed to start "
+                        "inside tested read-only and workspace-write sandboxes (\"failed to initialize in-process app-server client: Operation not "
+                        "permitted\"); hunsu does not probe this session. If hiring them fails so, run them from a session whose sandbox lets them "
+                        "start, or the team declares `native:` providers for them" % (os.environ["CODEX_SANDBOX"], ", ".join(sorted(names))))
+
+
+def check_engines(target, manifest, s, found):
+    errors, warnings, info = found
+    # 2. engines — the floor the team requires, checked against what this machine actually has. A host engine is probed
+    # where this machine runs that host (hunsu.local.json `hosts`, else every host `engines` names), a plain role's worker runs
+    # on it, or a plugin's own `engines` names it; an alternate never makes its host required (hired only for a task that
+    # requires it). One rule with `lock` (unprobed_hosts): a host left out is not run at all
+    engines = manifest.get("engines", {})
+    selected, written = machine_hosts(target, manifest)
+    plain, alternates = role_hosts(manifest, s)
+    needed, skip = required_hosts(manifest, s), unprobed_hosts(target, manifest, s)
+    seen = {}
+
+    def have(engine):
+        if engine not in seen:
+            seen[engine] = version_of(HOST_EXE.get(engine, engine))
+        return seen[engine]
+
+    hosts_said = ", ".join(sorted(selected)) or "no host"
+    for engine, spec in engines.items():
+        if engine in skip:
+            info.append("engine %s: not probed — %s `hosts` says this machine runs %s, and no plain role's worker or plugin needs %s; "
+                        "the lock records it as null (not probed, not missing)" % (engine, LOCAL, hosts_said, engine))
+            continue
+        version = have(engine)
+        if not satisfies(version, spec):
+            others = sorted(e for e in engines if e in HOST_EXE and e != engine)
+            hint = (" — a machine that runs %s only says so in %s (`\"hosts\": [%s]`, not committed); the team's floor stays in %s"
+                    % (", ".join(others), LOCAL, ", ".join('"%s"' % e for e in others), MANIFEST)
+                    if engine in HOST_EXE and not version and not written and engine not in needed and others else "")
+            errors.append("engine %s: requires %s, found %s%s" % (engine, spec, version or "nothing", hint))
     # a plugin declares its own floor (`engines` in plugin.json, npm's convention); the team's floor must cover it,
     # and this machine must meet it — otherwise the plugin's workers die at call time with a traceback nobody asked for
     for name, want in sorted(manifest["plugins"].items()):
-        have = enabled(s, name, want)
-        for engine, spec in sorted((have or {}).get("engines", {}).items()):
-            team = manifest.get("engines", {}).get(engine)
+        plugin = enabled(s, name, want)
+        for engine, spec in sorted((plugin or {}).get("engines", {}).items()):
+            team = engines.get(engine)
             if team is None or not floor_covers(team, spec):
                 errors.append("plugin %s: needs %s %s, manifest `engines` %s — raise it" % (name, engine, spec, "requires %s" % team if team else "does not require it"))
-            found = version_of(HOST_EXE.get(engine, engine))
-            if not satisfies(found, spec):
-                errors.append("plugin %s: needs %s %s, found %s here" % (name, engine, spec, found or "nothing"))
+            version = have(engine)
+            if not satisfies(version, spec):
+                errors.append("plugin %s: needs %s %s, found %s here" % (name, engine, spec, version or "nothing"))
+    # the roles' workers, before anything hires them: a plain role's host is required here; an alternate's is not
+    keep = "hunsu does not move a role to another host, model or provider"
+    for host, names in sorted(plain.items()):
+        if written and host not in selected:
+            errors.append("roles %s: their workers run on %s, which %s `hosts` leaves out on this machine (%s) — a plain role is hired for every "
+                          "task of its kind; %s: run %s here and list it in `hosts`, or the team changes these roles in %s"
+                          % (", ".join(names), host, LOCAL, hosts_said, keep, host, MANIFEST))
+        elif not have(host):
+            errors.append("roles %s: their workers run on %s, and `%s` is not found on this machine — hiring them fails here; %s: install %s, "
+                          "or the team changes these roles in %s" % (", ".join(names), host, HOST_EXE[host], keep, host, MANIFEST))
+        if host not in engines:
+            warnings.append("engine %s: the workers of %s run on it, and `engines` does not require it — add a floor (nothing checks its version)"
+                            % (host, ", ".join(names)))
+    for host, names in sorted(alternates.items()):
+        caps = sorted({c for n in names for c in ALTERNATE.match(n).group(2).split("+")})
+        if written and host not in selected:
+            why = "which %s `hosts` leaves out on this machine (%s)" % (LOCAL, hosts_said)
+        elif not have(host):
+            why = "and `%s` is not found on this machine" % HOST_EXE[host]
+        else:
+            continue
+        warnings.append("alternates %s: their workers run on %s, %s — a task that requires %s cannot run here until the project is reconfigured "
+                        "explicitly; the alternates stay as declared (argv, model) — removing them would send such a task to the plain role instead"
+                        % (", ".join(names), host, why, " or ".join(caps)))
     needed = sorted({runtime_of(h["command"]) for h in s["hooks"] if runtime_of(h["command"])})
     import shutil
     for rt in needed:
@@ -885,6 +1046,17 @@ def check_roles(manifest, s, found):
         why = role_argv(manifest, s, provider[len("native:"):] if isinstance(provider, str) and provider.startswith("native:") else provider)[1]
         if why:
             errors.append("role %s: provider %r — %s" % (role, provider, why))
+    # an argv names its program in a plugin's copy (`{plugin:hacheong}/worker.py`): a file the copy enabled here does not have
+    # fails the hire — an error for a plain role, a warning for an alternate (hired only for a task that requires it)
+    for role, provider in sorted(manifest.get("roles", {}).items()):
+        for token in (provider if isinstance(provider, list) else []):   # an argv written here; a `plugin:role`'s is the plugin's own packaging
+            m = re.match(r"^\{plugin:([^{}/]+)\}/([^{}]+)$", str(token))
+            want = manifest["plugins"].get(m.group(1)) if m else None
+            copy = (enabled(s, m.group(1), want) or {}) if want else {}
+            if copy and os.path.isdir(copy.get("path") or "") and not os.path.exists(os.path.join(copy["path"], m.group(2))):
+                (warnings if ALTERNATE.match(role) else errors).append(
+                    "role %s: its argv runs %s, and %s %s here has no %s — hiring it fails on this machine"
+                    % (role, token, m.group(1), copy.get("version"), m.group(2)))
     plugins = manifest.get("plugins", {})
     if "chongdae" in plugins and manifest.get("roles") and "reviewer" not in manifest["roles"]:
         # chongdae said it at each of a day's ten closes and nothing here did (sagoforce, 10-26): the lock is where it is decided
@@ -1990,7 +2162,7 @@ def cmd_outdated(args):
         if goal:
             owed += 1
             for i, st in enumerate(update_steps(name, market, goal, installed=have, pinned=pinned, locked=locked, copy=copy,
-                                                scope=install_scope(target, name, market)), 1):
+                                                scope=install_scope(target, name, market), linked=name in links(target)), 1):
                 print("      %d. %s" % (i, st))
         for key, here, others in install_records_elsewhere(target, name, market):
             if here:
@@ -2445,15 +2617,18 @@ def cmd_lock(args):
         raise SystemExit("not locked — in development here: %s. The lock names what the team installs; `hunsu dev --off %s` first"
                          % (", ".join("%s (from %s)" % kv for kv in sorted(dev.items())), " ".join(sorted(dev))))
     errors, warnings, _ = check(args.target)
+    manifest = load_json(os.path.join(args.target, MANIFEST))
+    s = survey(args.target)
+    errors = lock_blocking(args.target, manifest, s, errors)   # on Codex, the generated hooks this lock's regeneration repairs
     if errors:
         for line in errors:
             print("  error %s" % line)
         raise SystemExit("not locked — %d error(s); fix them or run `hunsu check`" % len(errors))
-    manifest = load_json(os.path.join(args.target, MANIFEST))
-    s = survey(args.target)
     linked = links(args.target)
+    skip = unprobed_hosts(args.target, manifest, s)
     lock = {"artifact-type": "hunsu/lock@1", "host": HOST,
-            "engines": {e: version_of(HOST_EXE.get(e, e)) for e in manifest.get("engines", {})},
+            # what this machine had; a host engine its `hosts` leaves out and nothing requires is not run: null, not probed (as check says)
+            "engines": {e: None if e in skip else version_of(HOST_EXE.get(e, e)) for e in manifest.get("engines", {})},
             "plugins": {name: {"version": enabled(s, name, want)["version"], "source": want["source"], "marketplace": want.get("marketplace"),
                                "fingerprint": tree_fingerprint(enabled(s, name, want)["path"]) if os.path.isdir(enabled(s, name, want).get("path") or "") else None,
                                **({"linked": True} if name in linked else {})}   # the content this version named when it was locked
@@ -2757,6 +2932,226 @@ def stray_paths_reason(found):
 
 
 CODEX_HOOK_PROVENANCE = "written by hunsu lock; managed hooks: "
+# said in a stale-generated-hook error that a Codex `lock` repairs by regenerating: lock and compose on Codex do not stop for it
+REGENERATES = "on Codex (`AGENT_HOST=codex` from a shell), `hunsu lock` regenerates hunsu's groups from the installed copies and keeps the project's own"
+SCRIPT_EXTS = (".py", ".js", ".mjs", ".cjs", ".sh", ".ps1", ".rb", ".pl", ".bat", ".cmd")
+
+
+def codex_hook_provenance(doc):
+    """(record, legacy) for a .codex/hooks.json document: record is hunsu's provenance (`{"hooks": {event: [group]}}`, and the
+    project's own `description` when it had one) or None; legacy is True for a file marked as hunsu's with no provenance (before
+    1.15.1). A provenance that does not parse raises ValueError, KeyError or TypeError."""
+    description = doc.get("description", "")
+    if not isinstance(description, str) or not description.startswith("written by hunsu lock"):
+        return None, False
+    if not description.startswith(CODEX_HOOK_PROVENANCE):
+        return None, True
+    record = json.loads(description[len(CODEX_HOOK_PROVENANCE):])
+    managed = record["hooks"]
+    if not isinstance(managed, dict) or any(not isinstance(groups, list) for groups in managed.values()):
+        raise ValueError("invalid managed hooks")
+    return record, False
+
+
+SHELL_EVAL = re.compile(r"^(?:-[A-Za-z]*c|/[cC]|-Command|-command|--command|-EncodedCommand|-e|--eval)$")   # the next word is code, not a file
+OPAQUE = re.compile(r"[$`*?\[\]{};|&<>()\n]")   # a variable, a glob, a substitution, a separator: what the word names is a shell's to decide
+
+
+def hook_paths(command):
+    """The files a hook command names that must exist: its words as a shell would split them (shlex — a tokenizer, never a
+    shell), with only a leading `~`, `$HOME` or `${HOME}` expanded; an absolute word that is the first word (the program) or ends
+    in a script extension — a quoted path with spaces is one word, and one file. Nothing is run. Opaque, never judged: a word
+    with any other variable, a glob, a substitution or a separator; the word after `-c` (and the like), which is code; and the
+    whole command when its quotes do not close."""
+    import shlex
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return []
+    home, out = os.path.expanduser("~"), []
+    for i, word in enumerate(words):
+        if i and SHELL_EVAL.match(words[i - 1]):
+            continue
+        word = re.sub(r"^(?:~|\$HOME|\$\{HOME\})(?=/|$)", lambda m: home, word)
+        if word and not OPAQUE.search(word) and os.path.isabs(word) and (i == 0 or word.lower().endswith(SCRIPT_EXTS)):
+            out.append(word)
+    return out
+
+
+def codex_cache_copy(path):
+    """(name, version, the newest version the cache holds now or None, whether that version's copy is still there) when `path`
+    lies in a plugin copy in this machine's Codex plugin cache (`<cache>/<market>/<name>/<version>/…`), else None."""
+    cache = os.path.join(CODEX, "plugins", "cache").replace("\\", "/").rstrip("/") + "/"
+    parts = path.replace("\\", "/")[len(cache):].split("/") if path.replace("\\", "/").startswith(cache) else []
+    if len(parts) < 4:
+        return None
+    market, name, version = parts[:3]
+    folder = os.path.join(CODEX, "plugins", "cache", market, name)
+    versions = by_version([v for v in os.listdir(folder) if os.path.isdir(os.path.join(folder, v))]) if os.path.isdir(folder) else []
+    return name, version, (versions[-1] if versions else None), version in versions
+
+
+def codex_lock_render(target, manifest, s):
+    """What `hunsu lock` on Codex would write as hunsu's groups now — [(plugin, version, event, group)] from the copies Codex has installed
+    for the manifest's plugins, rendered as `materialize_codex_hooks` renders them — or None when this machine's Codex registry
+    cannot be read from here. On Codex the survey is Codex's; on Claude Code, Codex's registry is read for it (read-only)."""
+    if HOST == "codex":
+        codex = s
+    else:
+        try:
+            codex = survey_codex(target)
+        except (SystemExit, OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+    out = []
+    for name, want in (manifest.get("plugins") or {}).items():
+        plugin = enabled(codex, name, want)
+        for event, groups in (codex_plugin_hooks([plugin]).items() if plugin else ()):
+            out += [(name, plugin.get("version"), event, g) for g in groups]
+    return out
+
+
+def codex_hooks_shape(doc):
+    """Why a .codex/hooks.json document is not a hooks file hunsu can read, or None: an object whose `hooks` (absent or null:
+    none) is an object of event -> list of group objects, each group's `hooks` a list of hook objects whose `command`, when
+    there, is a string. One rule on both hosts."""
+    if not isinstance(doc, dict):
+        return "not a JSON object"
+    events = doc.get("hooks")
+    events = {} if events is None else events
+    if not isinstance(events, dict):
+        return "`hooks` is not an object"
+    for event, groups in events.items():
+        if not isinstance(groups, list) or not all(isinstance(g, dict) for g in groups):
+            return "`hooks.%s` is not a list of groups" % event
+        if not all(isinstance(g.get("hooks", []), list) and all(isinstance(h, dict) for h in g.get("hooks", [])) for g in groups):
+            return "a group in `hooks.%s` has `hooks` that is not a list of hooks" % event
+        if not all(isinstance(h.get("command", ""), str) for g in groups for h in g.get("hooks", [])):
+            return "a hook in `hooks.%s` has a `command` that is not a string" % event
+    return None
+
+
+def codex_hooks_unreadable(why):
+    return "codex hooks: .codex/hooks.json is not a hooks file hunsu can read (%s) — restore it; `lock` on Codex refuses until then" % why
+
+
+def group_paths(group):
+    """hook_paths of every command in a hooks.json group."""
+    hooks = group.get("hooks") if isinstance(group, dict) and isinstance(group.get("hooks"), list) else []
+    return [p for h in hooks for p in hook_paths(str(h.get("command", "")) if isinstance(h, dict) else "")]
+
+
+def codex_hook_findings(target, manifest, s):
+    """[(severity, text, repaired)] for the project's .codex/hooks.json as Codex will run it, read from either host when Codex runs
+    anything here: a hook whose program or script is gone fails on every event it is on (guin-site 11-01: generated groups still
+    named a removed 1.x copy, and Codex prompts were blocked until a Codex `lock` regenerated them; the Codex survey reads each
+    plugin's own hooks/codex.json, never these materialized commands, so nothing else saw it). `repaired` is decided from what
+    a Codex `lock` would write next (codex_lock_render): only a generated path that render no longer names, while every path the
+    render names is here — never from a message's wording."""
+    path = os.path.join(target, ".codex", "hooks.json")
+    if "codex" not in hosts_in_use(target, manifest, s):
+        return []
+    home, out, reported, seen = os.path.expanduser("~"), [], set(), {}
+
+    def render():
+        """Once: {path: (plugin, version, event)} a Codex `lock` would write now, and whether that could be read here."""
+        if not seen:
+            groups = codex_lock_render(target, manifest, s)
+            seen["readable"], seen["names"] = groups is not None, {}
+            for name, version, event, g in groups or []:
+                for p in group_paths(g):
+                    seen["names"].setdefault(p, (name, version, event))
+            seen["missing"] = [p for p in seen["names"] if not os.path.exists(p)]
+        return seen["readable"], seen["names"], seen["missing"]
+
+    if os.path.isfile(path):
+        try:
+            doc = load_json(path)
+        except ValueError:
+            doc = None
+        why = "not JSON" if doc is None else codex_hooks_shape(doc)
+        if not why:
+            try:
+                record, legacy = codex_hook_provenance(doc)
+            except (ValueError, KeyError, TypeError):
+                why = "its hunsu provenance, the `description` hunsu lock wrote, does not parse"
+        if why:
+            return [("error", codex_hooks_unreadable(why), False)]
+        owned = (record or {}).get("hooks") or {}
+        for event, groups in (doc.get("hooks") or {}).items():
+            mine = list(owned.get(event, []))
+            for group in groups:
+                generated = group in mine
+                if generated:
+                    mine.remove(group)   # one owned occurrence, as `lock` counts them
+                where = "%s%s" % (event, " [%s]" % group.get("matcher") if group.get("matcher") else "")
+                for script in group_paths(group):
+                    if os.path.exists(script):
+                        continue
+                    shown, copy = script.replace(home, "~"), codex_cache_copy(script)
+                    if not generated:
+                        out.append(("warning", "codex hook %s: runs %s, which is not on this machine — the project's own group (%s), so `lock` keeps it: "
+                                               "fix or remove it in .codex/hooks.json%s"
+                                    % (where, shown, "the file predates hunsu's ownership record" if legacy else "not in hunsu's provenance",
+                                       "; it names %s %s's copy in the Codex plugin cache — likely a group generated before hunsu recorded which "
+                                       "groups it wrote (1.15.1): remove it by hand" % copy[:2] if copy else ""), False))
+                        continue
+                    readable, names, still_missing = render()
+                    repaired = False
+                    if not readable:
+                        how = "whether a Codex `lock` would repair it cannot be told here (this machine's Codex registry does not read) — `hunsu check` on Codex"
+                    elif script in names:
+                        reported.add(script)
+                        name, version, _ = names[script]
+                        if copy and copy[1] == version:
+                            how = "%s %s, installed for Codex, has no such file — reinstall it (`codex plugin remove` + `add`), then `hunsu lock` on Codex" % (name, version)
+                        else:
+                            how = ("a Codex `lock` would write it again: %s %s's hooks/codex.json names it — `lock` cannot repair it; install it on this "
+                                   "machine, or the plugin's hook changes" % (name, version))
+                    elif still_missing:
+                        how = ("a Codex `lock` would drop it, but the groups it would write name %s, which is not on this machine either — `lock` cannot "
+                               "repair that" % ", ".join(p.replace(home, "~") for p in still_missing))
+                    else:
+                        repaired = True
+                        if not copy:
+                            gone = ""
+                        elif copy[3]:
+                            gone = "it was generated from %s %s, whose copy in the Codex plugin cache lacks it; " % copy[:2]
+                        elif copy[2]:
+                            gone = "it was generated from %s %s, a copy no longer in the Codex plugin cache (which holds %s now); " % copy[:3]
+                        else:
+                            gone = "it was generated from %s %s, a copy gone, and the Codex plugin cache holds none of %s now; " % (copy[0], copy[1], copy[0])
+                        how = "%sa Codex `lock` would not write it again: %s" % (gone, REGENERATES)
+                    out.append(("error", "codex hook %s: runs %s, which is not on this machine — a group hunsu lock generated, so Codex fails this hook on "
+                                         "every %s event; %s" % (where, shown, event, how), repaired))
+    # what a Codex `lock` would write next must run: on Codex (where `lock` writes, and the survey is Codex's) always — the first
+    # lock too, with no file yet; on Claude Code when the render was read for a generated group above
+    if HOST == "codex" or seen:
+        readable, names, still_missing = render()
+        for p in still_missing:
+            if p in reported:
+                continue
+            name, version, event = names[p]
+            copy = codex_cache_copy(p)
+            out.append(("error", "codex hook %s: a Codex `lock` would write a group that runs %s, which is not on this machine — %s %s's hooks/codex.json "
+                                 "names it%s; `lock` on Codex refuses until it is here"
+                        % (event, p.replace(home, "~"), name, version,
+                           " and its installed copy lacks the file: reinstall it (`codex plugin remove` + `add`)" if copy and copy[1] == version else ""), False))
+    return out
+
+
+def check_codex_hooks(target, manifest, s, found):
+    errors, warnings, info = found
+    for severity, text, _ in codex_hook_findings(target, manifest, s):
+        (errors if severity == "error" else warnings).append(text)
+
+
+def lock_blocking(target, manifest, s, errors):
+    """The errors that stop `lock`: all of them, except — on Codex, where this lock regenerates hunsu's hook groups — the exact
+    findings codex_hook_findings marks repaired by that regeneration."""
+    if HOST != "codex":
+        return errors
+    repaired = {text for _, text, fixed in codex_hook_findings(target, manifest, s) if fixed}
+    return [e for e in errors if e not in repaired]
 
 
 def codex_plugin_hooks(plugins):
@@ -2782,18 +3177,20 @@ def codex_project_hooks(target, plugins):
     Provenance lives in Codex's supported description field so hooks and ownership change in one atomic write. Older
     files have only a marker: subtract exact matches to known plugin groups, retaining anything we cannot identify.
     """
-    doc = load_json(os.path.join(target, ".codex", "hooks.json"))
-    description = doc.get("description", "")
-    if not isinstance(description, str) or not description.startswith("written by hunsu lock"):
+    try:
+        doc = load_json(os.path.join(target, ".codex", "hooks.json"))
+    except ValueError:
+        raise SystemExit(codex_hooks_unreadable("not JSON"))
+    if codex_hooks_shape(doc):
+        raise SystemExit(codex_hooks_unreadable(codex_hooks_shape(doc)))
+    try:
+        record, legacy = codex_hook_provenance(doc)
+    except (ValueError, KeyError, TypeError):
+        raise SystemExit(codex_hooks_unreadable("its hunsu provenance, the `description` hunsu lock wrote, does not parse"))
+    if record is None and not legacy:
         return doc
-    if description.startswith(CODEX_HOOK_PROVENANCE):
-        try:
-            record = json.loads(description[len(CODEX_HOOK_PROVENANCE):])
-            managed = record["hooks"]
-            if not isinstance(managed, dict) or any(not isinstance(groups, list) for groups in managed.values()):
-                raise ValueError("invalid managed hooks")
-        except (ValueError, KeyError, TypeError):
-            raise SystemExit("invalid hunsu hook provenance in .codex/hooks.json — restore its description before locking")
+    if record is not None:
+        managed = record["hooks"]
         if "description" in record:
             doc["description"] = record["description"]
         else:
@@ -3080,6 +3477,7 @@ def cmd_compose(args):
                     *("%-12s found here: %s%s" % (rt, v or "not found", "  (plugins need: %s)" % ", ".join(floors[rt]) if rt in floors else "")
                       for rt, v in found.items()))
     errors, warnings, _ = check(target)
+    errors = lock_blocking(target, manifest, s, errors)
     if errors:
         return stop("resolve these errors (resolutions[<situation>]; install missing plugins; raise engines; re-run judge if stale), then re-run compose", *errors)
     undecided = undecided_capabilities(manifest)

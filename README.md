@@ -104,7 +104,7 @@ allows. No lock, no enforcement.
 | `hunsu.lock.json` | yes | `lock` — the resolved snapshot: versions, skills, hooks, engine versions found, warnings |
 | `hunsu-judgments.json` | yes | the judge round's verdicts per situation, fingerprinted by the members' text — the file the judge gate reads (`compose` stops without it; the lock's `judge` line only records the outcome); `hunsu-conflicts.md` is its rendering (`judge render`, not committed) |
 | `.claude/settings.local.json` | no (`init` and `dev` add it to `.gitignore`; `check` fails if it is committed) | `dev` — the working sources this machine runs instead of the manifest's copies |
-| `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine; by hand, `local-hooks-ok` for user-level hooks that are only yours |
+| `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine; by hand, `local-hooks-ok` for user-level hooks that are only yours, and `hosts` when this machine runs one host |
 
 ## Commands
 
@@ -144,12 +144,58 @@ its last `claude plugin marketplace update`; the session's first line counts the
 plugins, machine-bound paths, roles declared with chongdae locked and no `reviewer` (every run then ends with its
 record unread — chongdae records it as each run's non-claim; here it is said once, where it is decided). Exit 1 on errors. `--remote` runs `outdated` after it.
 
+**Hosts and the roles' workers.** By default this machine runs every host `engines` names (`claude-code`, `codex`): the
+shared mixed configuration, where a session on one host may hire workers on the other. A machine that runs one host says
+so in `hunsu.local.json` — `"hosts": ["codex"]` (never committed) — and the other host is then not probed at all: neither
+`check` nor `lock` runs its `--version`, `check` says so in one `info` line, and the lock's `engines` keeps its key as
+`null` (not probed, not missing). A host a plain role's worker runs on, or that a plugin's own `engines` names, is probed
+whatever the profile says. A profile that does not read — not a list, an empty list, or an entry
+that is not `claude-code` or `codex` (a misspelling, a nested list, an object) — is an `error` and `lock` refuses; until it
+reads, every host `engines` names is checked, so a broken profile never skips a probe. The overlay never hides a host the
+project needs. A role's worker host is read from the argv a runner
+would spawn: an argv as written, `plugin:role` resolved first to what the plugin declares (`{host}` is this host; a fixed
+`--host` stays); `session` and `native:` have none. A **plain role** is hired for every task of its kind, so its host is
+required: left out by `hosts`, or its executable not found here, is an `error` naming the roles, and that host's floor is
+checked whatever `hosts` says; a host the plain roles run on that `engines` does not name asks for a floor (`warn`). A
+`<role>@<cap>` **alternate** is hired only for a task that requires those capabilities: its host left out or not found is a
+`warn`, never an error, and does not make that host's engine required — a task that requires those capabilities cannot run
+on this machine until the project is reconfigured explicitly. hunsu moves no role to another host, model or provider, and
+removes no alternate (without one, chongdae would send such a task to the plain role). An argv in hunsu.json whose
+`{plugin:NAME}/<file>` the enabled copy lacks is an `error` for a plain role, a `warn` for an alternate. Without `hosts`, a host engine not
+found here says how to write it when no plain role runs there.
+
+**Codex hooks.** Where Codex runs anything here (a host of this machine, a plain role's worker host, an alternate's host
+`hosts` does not leave out, or the host `check` runs on), `check` reads the project's `.codex/hooks.json` from either host
+and names each hook whose program or script is gone. The command's words are taken apart as a shell would split them, never
+run: an absolute first word or script path must exist (a quoted path with spaces is one path; only a leading `~`, `$HOME`
+or `${HOME}` is expanded), while a word with any other variable, a glob, a substitution or a separator, the code after
+`-c`, and a command whose quotes do not close are left alone. In a group `lock` generated (its provenance says so) it is an
+`error`, and what a Codex `lock` would do about it is decided from the groups it would write next, rendered from the
+copies Codex has installed: a path that render no longer names, while every path it names is here, is repaired by
+`hunsu lock` on Codex (`AGENT_HOST=codex` from a shell), which regenerates hunsu's groups, drops obsolete ones and keeps the
+project's own — `lock` and `compose` on Codex do not stop for exactly those findings, and a Claude Code `lock` refuses with
+that command. A path the installed plugin still generates (an absolute interpreter or an external script this machine
+lacks, or a file its copy lacks: reinstall) blocks every lock until it is here, whatever newer copies the cache holds; so
+does a repair whose render names a missing path itself, and on Codex any path that render names and this machine lacks,
+with or without a hooks file yet — a first Codex `lock` never writes a hook that fails. A file of the wrong shape (or an
+unreadable provenance) is an error on Claude Code and an exit-1 message on Codex, never a traceback. In any other group it is a `warn`: the project's own group,
+which `lock` keeps — one naming a copy in the Codex plugin cache is likely a group generated before hunsu recorded which
+groups it wrote (1.15.1), to remove by hand. (guin-site, 11-01: generated groups still named a removed 1.x copy and Codex
+prompts were blocked until a Codex `lock` regenerated them; nothing had said so.)
+
 A version skew between this machine and the manifest (`plugin X: manifest A, host B`), a plugin behind a release, and the
 stale-session line say the way out as numbered steps, each only when it is owed, in this order: `claude plugin marketplace
 update M`, `claude plugin update X@M --scope project` (in the project), restart the session (a `/clear` does not reload
 plugins), `hunsu add X`, `hunsu check` and a `--stale` judge round for what it calls stale, `hunsu lock` — committed with
 `hunsu.json` inside a run, like any change to the environment. On Codex the first two are `codex plugin marketplace upgrade
-M` and `codex plugin remove` + `add`.
+M`, which refreshes this machine's Git snapshot of the marketplace and the plugins installed from it, and a verification
+that the installed copy is the intended release — its version, and the revision its `.codex-marketplace-install.json`
+receipt names, and its files compared with the release's (`check` compares content only with what a lock recorded for the
+same version) — before the rest; an upgrade takes what the marketplace publishes now and by itself proves no version.
+`codex plugin remove` + `add` is not part of an ordinary update — the upgrade has refreshed the copy already: it is for a
+copy `check` finds corrupted (reinstall) and, through `install --refresh`, for a linked development source, which is the
+step `outdated` names for a linked plugin. After any of them the generated Codex hooks name the old copy until the `hunsu
+lock` step, run on Codex, regenerates them.
 
 `check` reads project data without writing project state, but rendering role prompts and modes may need temporary
 scratch files; `--remote` also needs scratch space for marketplace clones, and the mutation lock that every command
@@ -226,7 +272,8 @@ and `.fingerprint` (`check`, chongdae's builder), `skills` and `denied` (the pre
 session-start line), `roles` (chongdae), `reporters` and `record-paths` (dwitbuk, hacheong), `settings` (dwitbuk's stop
 hook, with `hunsu.json` overriding). The rest — `judge`, `warnings`, `hooks`, `engines`, `skills-fingerprint`,
 `roles-declared`, `host`, `artifact-type`, `plugins.*.source`/`marketplace`/`linked` — is for the person reading the
-lock in a diff: what was found and where it came from. Nothing decides on them; do not cite them as a mechanism.
+lock in a diff: what was found and where it came from (an `engines` value is `null` when nothing was found, or when this
+machine's `hosts` left that host out and nothing required it, so it was not probed — `check` says which). Nothing decides on them; do not cite them as a mechanism.
 
 `.fingerprint` is the installed copy's content: every file's path and bytes (CRLF read as LF), leaving out `__pycache__/`,
 `.git/`, `*.pyc`, `.DS_Store`, the host's `.in_use` marker, and the receipt Codex's marketplace installer writes at a copy's
@@ -410,6 +457,9 @@ with a mode every group is judged (cost: 1 + groups calls).
 - `dev-settings` — what a trial changes, declared by the project the way a package declares dev dependencies (e.g.
   `{"chongdae": {"commit-records": false}}`: a working source's records are written, not committed). hunsu names no
   product; `dev` applies these as this machine's overlay and `dev --off` takes them back.
+- `hunsu.local.json` `hosts` — the hosts this machine runs for the project (`["claude-code"]`, `["codex"]`; never
+  committed). Absent, every host `engines` names. A host left out is not version-checked unless a plain role's worker runs
+  on it (see [`check`](#check)). hunsu.json has no `hosts`: the team's hosts are its `engines`.
 - `hunsu.local.json` `settings` — this machine's overlay over `settings` (never committed, like `.env.local` over
   `.env`): a product reads its own from hunsu.json and lets this machine's override it.
 - `reporters` — name → argv of the commands that report findings for the reviewer (`dwitbuk/findings@1`), e.g.
@@ -424,11 +474,13 @@ Nested `codex exec` workers have failed in tested `read-only` and `workspace-wri
 reports this limitation; it does not probe whether a particular host configuration can launch a nested process.
 Use a worker runner with the required permissions or the host's native subagents (see chongdae's `native:`
 providers). A chongdae write guard coordinates project writes; it does not replace a host security sandbox.
-`check` run from inside a detected sandbox says so (`session: sandboxed …`) when the lock's roles are commands.
+`check` run from inside a detected sandbox says so (`session: sandboxed …`) when a role's worker runs on Codex (a
+Claude worker, a plain command, `session` and `native:` do not), without probing the session and without recommending any
+flag that turns a sandbox off.
 A `read-only` sandbox may also give no writable temporary directory, which `check` needs to render roles and modes; it then
 stops with `no writable temporary directory` (see [`check`](#check)) instead of judging without them.
-Codex snapshots a plugin at `plugin add`;
-`install --refresh` re-snapshots.
+Codex snapshots a plugin when it is added, and a named `codex plugin marketplace upgrade` refreshes a Git marketplace's
+snapshot and the plugins installed from it; `install --refresh` re-snapshots a linked development source (remove + add).
 
 ## Limits
 
@@ -461,7 +513,8 @@ Codex snapshots a plugin at `plugin add`;
   the previously generated groups are replaced. Their ownership is recorded in the file's supported `description`
   field, published atomically with the hooks. Keep that generated description when editing hooks. Older generated
   files have no ownership snapshot: migration removes exact matches to currently known plugin groups and preserves
-  unrecognized groups, which may include an old plugin hook that needs manual removal. The survey reads Codex's own registry (`config.toml`: marketplaces,
+  unrecognized groups, which may include an old plugin hook that needs manual removal; `check` names one whose script is
+  gone (see [`check`](#check)). The survey reads Codex's own registry (`config.toml`: marketplaces,
   plugins, the user's hooks) and its plugin cache.
 
 - `judge_worker.py` starts its host session through `hostcall.py` — one host call for every worker of this family (hunsu's judge, mangsang's judge, dwitbuk's eyes,

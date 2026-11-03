@@ -89,6 +89,37 @@ def manifest(target, **changes):
 class Skip(Exception):
     """Raised by a test that cannot run on this host; the runner reports it as SKIP, never as PASS."""
 
+
+STUB_VERSIONS = {"claude-code": ("claude", "2.1.400 (Claude Code)"), "codex": ("codex", "codex-cli 0.170.0")}
+
+
+@contextlib.contextmanager
+def host_path(*hosts):
+    """PATH holds only stub host executables (`claude`, `codex`: each prints a version and nothing else) for the hosts named,
+    and python3 and git — so which host this machine has is the test's, never what is installed where the suite runs. Every
+    run of a stub is appended to `<bin>/calls.log` (`claude --version`), so a test can say which host was probed."""
+    if os.name == "nt":
+        raise Skip("stub host executables are POSIX shell scripts")
+    bin_dir = tempfile.mkdtemp(prefix="hunsu-path-")
+    for host in hosts:
+        exe, says = STUB_VERSIONS[host]
+        write(os.path.join(bin_dir, exe), "#!/bin/sh\necho \"%s $*\" >> '%s'\necho '%s'\n" % (exe, os.path.join(bin_dir, "calls.log"), says))
+        os.chmod(os.path.join(bin_dir, exe), 0o755)
+    os.symlink(sys.executable, os.path.join(bin_dir, "python3"))
+    if shutil.which("git"):
+        os.symlink(shutil.which("git"), os.path.join(bin_dir, "git"))
+    saved = os.environ.get("PATH")
+    os.environ["PATH"] = bin_dir
+    try:
+        yield bin_dir
+    finally:
+        os.environ["PATH"] = saved if saved is not None else ""
+        shutil.rmtree(bin_dir, ignore_errors=True)
+
+
+def local(target, doc):
+    write(os.path.join(target, hunsu.LOCAL), doc)
+
 def test_survey_lists_plugins_skills_hooks_and_modes():
     with Host() as h:
         h.add_plugin("m1", "alpha", "1.0.0", ["build"], hooks={"SessionStart": [{"hooks": [{"type": "command", "command": "node x.js"}]}]})
@@ -304,26 +335,395 @@ def test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host():
         assert run("lock", "--target", h.target)[0] == 0 and not hunsu.check(h.target)[0]
 
 
-def test_a_sandboxed_codex_session_is_told_its_workers_cannot_start():
-    """Inside a sandboxed Codex session (CODEX_SANDBOX set) a lock whose roles are commands cannot be driven: nested `codex exec`
-    does not start. check names it — a fact about this session, not the manifest — and only when a role is a command."""
-    with Host() as h:
-        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+def test_a_sandboxed_codex_session_is_told_only_about_its_codex_workers_and_no_bypass():
+    """Inside a sandboxed Codex session (CODEX_SANDBOX set) a nested `codex exec` has failed to start. Only a worker that runs on
+    Codex is one: a Claude worker, a plain command, `session` and `native:` bring no line. The line says what was observed,
+    that nothing was probed, and recommends no flag that turns a sandbox off."""
+    worker = lambda member, host: ["python3", "{plugin:alpha}/worker.py", "--member", member, "--request", "{request}", "--response", "{response}", "--host", host]
+    with Host() as h, host_path("claude-code", "codex"):
+        root = h.add_plugin("m1", "alpha", "1.0.0", ["build"], roles={"try": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "{host}"]})
+        write(os.path.join(root, "worker.py"), "")
         h.flush()
         run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
-        manifest(h.target, engines={"claude-code": ">=0.0"}, roles={"planner": "session"})
+        manifest(h.target, engines={"claude-code": ">=0.0", "codex": ">=0.0"}, roles={"planner": "session"})
         saved = os.environ.pop("CODEX_SANDBOX", None)
+        sandboxed = lambda: [w for w in hunsu.check(h.target)[1] if w.startswith("session: sandboxed")]
         try:
             os.environ["CODEX_SANDBOX"] = "seatbelt"
-            assert not [w for w in hunsu.check(h.target)[1] if w.startswith("session: sandboxed")], "no command roles: nothing to warn about"
-            manifest(h.target, roles={"planner": "session", "implementer": ["python3", "w.py", "{request}", "{response}"]})
-            warns = [w for w in hunsu.check(h.target)[1] if w.startswith("session: sandboxed")]
-            assert len(warns) == 1 and "(implementer)" in warns[0] and "--dangerously-bypass-approvals-and-sandbox" in warns[0], warns
+            assert not sandboxed(), "no worker roles: nothing to warn about"
+            for quiet in ({"implementer": ["python3", "w.py", "{request}", "{response}"]},          # a command, no worker host
+                          {"reviewer": ["python3", "{plugin:alpha}/review.py", "--target", "."]},   # an arbitrary command
+                          {"nitpick": worker("teujip", "claude"), "quibble": worker("sibi", "claude-code")},   # Claude-only workers
+                          {"newbie": "alpha:try"},                                                   # {host} is this (Claude) host
+                          {"verifier": "native:alpha:try"}):                                         # the host's own subagent
+                manifest(h.target, roles={"planner": "session", **quiet})
+                assert not sandboxed(), (quiet, sandboxed())
+            manifest(h.target, roles={"planner": "session", "nitpick": worker("teujip", "claude"), "implementer": worker("dakdol", "codex"),
+                                      "implementer@loopback": worker("dakdol", "claude")})
+            warns = sandboxed()
+            assert len(warns) == 1 and "seatbelt) — implementer run their workers on Codex" in warns[0] and "nitpick" not in warns[0], warns
+            assert "hunsu does not probe this session" in warns[0] and "--dangerously-bypass" not in warns[0] and "bypass" not in warns[0], warns
             del os.environ["CODEX_SANDBOX"]
-            assert not [w for w in hunsu.check(h.target)[1] if w.startswith("session: sandboxed")]
+            assert not sandboxed()
         finally:
             if saved is not None:
                 os.environ["CODEX_SANDBOX"] = saved
+
+
+def test_a_machine_that_runs_one_host_says_so_and_the_other_hosts_floor_is_not_checked():
+    """`engines` names both hosts; this machine has one. Without a word from it, the missing host is the 2.0.1 error plus the
+    way to say so (hunsu.local.json `hosts`); with `hosts` naming the one it runs, the other host's floor is not run, said in
+    one info line, and the lock goes through. A `hosts` that is not a list of known names is said."""
+    with Host() as h, host_path("claude-code"):
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, engines={"claude-code": ">=2.1", "codex": ">=0.165", "python": ">=3.0"}, judge="skip", roles={"planner": "session"})
+        errors, _, _ = hunsu.check(h.target)
+        assert errors == ["engine codex: requires >=0.165, found nothing — a machine that runs claude-code only says so in hunsu.local.json "
+                          "(`\"hosts\": [\"claude-code\"]`, not committed); the team's floor stays in hunsu.json"], errors
+        code, out = run("lock", "--target", h.target)
+        assert code != 0 and "engine codex" in out, out
+        local(h.target, {"hosts": ["claude-code"]})
+        errors, warnings, info = hunsu.check(h.target)
+        assert not errors and not warnings, (errors, warnings)
+        assert ("engine codex: not probed — hunsu.local.json `hosts` says this machine runs claude-code, and no plain role's worker or plugin needs codex; "
+                "the lock records it as null (not probed, not missing)") in info, info
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["engines"] == {"claude-code": "2.1.400", "codex": None, "python": hunsu.version_of("python")}   # codex not probed
+        # the overlay names this machine's host; the floor of the host it runs is still checked
+        manifest(h.target, engines={"claude-code": ">=9.0", "codex": ">=0.165", "python": ">=3.0"})
+        assert any(e.startswith("engine claude-code: requires >=9.0, found 2.1.400") for e in hunsu.check(h.target)[0])
+        manifest(h.target, engines={"claude-code": ">=2.1", "codex": ">=0.165", "python": ">=3.0"})
+        # a profile that does not read fails closed: an error, and no probe is suppressed — the missing codex is still said
+        for odd, why in (([{}], 'not a host hunsu knows: {}'), ([["codex"]], 'not a host hunsu knows: ["codex"]'), (None, "not a list"),
+                         ("claude-code", "not a list"), (["codez"], 'not a host hunsu knows: "codez"'),
+                         (["claude-code", "codez"], 'not a host hunsu knows: "codez"'), ([], "an empty list selects no host"),
+                         ({"claude-code": True}, "not a list"), (["claude-code", 3], "not a host hunsu knows: 3")):
+            local(h.target, {"hosts": odd})
+            errors, warnings, info = hunsu.check(h.target)
+            assert ("hunsu.local.json `hosts`: %s — %s; a profile is a non-empty list of the hosts this machine runs (claude-code, codex), "
+                    "e.g. [\"codex\"]. Until it reads, every host `engines` names is checked, as if it were absent" % (json.dumps(odd), why)) in errors, (odd, errors)
+            assert any(e.startswith("engine codex: requires >=0.165, found nothing") for e in errors), (odd, errors)
+            assert not [i for i in info if "not probed" in i], (odd, info)
+            code, out = run("lock", "--target", h.target)
+            assert code != 0 and "`hosts`" in out, (odd, out)
+        for valid in (["claude-code"], ["claude-code", "claude-code"]):
+            local(h.target, {"hosts": valid})
+            assert hunsu.check(h.target)[:2] == ([], []), (valid, hunsu.check(h.target))
+            assert run("lock", "--target", h.target)[0] == 0
+        local(h.target, {"hosts": ["claude-code", "codex"]})   # both, said: both checked, codex missing is the plain error
+        assert hunsu.check(h.target)[0] == ["engine codex: requires >=0.165, found nothing"], hunsu.check(h.target)[0]
+
+
+def guin_site_roles():
+    """guin-site's roles as hunsu.json declares them (2026-11): plain roles on Codex with a model and effort, two commands, and a
+    `@loopback+network` alternate on Claude for each worker."""
+    def worker(script, member, host, model=True):
+        argv = ["python3", script] + (["--member", member] if member else []) + ["--request", "{request}", "--response", "{response}", "--host", host]
+        return argv + (["--model", "gpt-5.6-luna", "--effort", "xhigh"] if model else [])
+    members = {"implementer": "dakdol", "quibble": "sibi", "nitpick": "teujip", "newbie": "chojja"}
+    roles = {role: worker("{plugin:hacheong}/worker.py", m, "codex") for role, m in members.items()}
+    roles["verifier"] = worker("{plugin:dwitbuk}/eyes_worker.py", None, "codex")
+    roles["coherence"] = ["python3", "{plugin:mangsang}/mangsang.py", "impact", "--target", "."]
+    roles["reviewer"] = ["python3", "{plugin:dwitbuk}/dwitbuk.py", "review", "--target", "."]
+    for role, m in members.items():
+        roles[role + "@loopback+network"] = worker("{plugin:hacheong}/worker.py", m, "claude", model=False)
+    roles["verifier@loopback+network"] = worker("{plugin:dwitbuk}/eyes_worker.py", None, "claude", model=False)
+    return roles
+
+
+def guin_like_project(h):
+    for name, files in (("hacheong", ["worker.py"]), ("dwitbuk", ["eyes_worker.py", "dwitbuk.py"]), ("mangsang", ["mangsang.py"])):
+        root = h.add_plugin(name, name, "2.0.1", [])
+        for f in files:
+            write(os.path.join(root, f), "")
+    h.flush()
+    run("init", "--target", h.target)
+    for name in ("hacheong", "dwitbuk", "mangsang"):
+        run("add", name, "--target", h.target)
+    manifest(h.target, engines={"claude-code": ">=2.1", "codex": ">=0.165", "python": ">=3.0"}, judge="skip", roles=guin_site_roles(),
+             capabilities={"loopback": "alternates", "network": "alternates"})
+
+
+def test_guin_sites_mixed_roles_on_a_codex_only_machine():
+    """The actual guin-site profile: plain roles on Codex, `@loopback+network` alternates on Claude, both host engines declared.
+    On a machine with Codex only and `"hosts": ["codex"]`, the Claude engine is not checked although alternates run there: an
+    alternate is hired only for a task that requires its capabilities, so it is a warning that says such a task cannot run
+    here until the project is reconfigured — never an error, never removed, its argv and model as declared in the lock."""
+    alternates = ("alternates implementer@loopback+network, newbie@loopback+network, nitpick@loopback+network, quibble@loopback+network, "
+                  "verifier@loopback+network: their workers run on claude-code")
+    cannot = "a task that requires loopback or network cannot run here until the project is reconfigured explicitly"
+    with Host() as h, host_path("codex"):
+        guin_like_project(h)
+        errors, warnings, _ = hunsu.check(h.target)
+        # no word from this machine: the shared mixed configuration is checked, and the error says how to say otherwise
+        assert errors == ["engine claude-code: requires >=2.1, found nothing — a machine that runs codex only says so in hunsu.local.json "
+                          "(`\"hosts\": [\"codex\"]`, not committed); the team's floor stays in hunsu.json"], errors
+        assert [w for w in warnings if w.startswith("alternates")] == [alternates + ", and `claude` is not found on this machine — " + cannot +
+                                                                       "; the alternates stay as declared (argv, model) — removing them would send such a task to the plain role instead"], warnings
+        local(h.target, {"hosts": ["codex"]})
+        errors, warnings, info = hunsu.check(h.target)
+        assert not errors, errors
+        assert ("engine claude-code: not probed — hunsu.local.json `hosts` says this machine runs codex, and no plain role's worker or plugin needs claude-code; "
+                "the lock records it as null (not probed, not missing)") in info, info
+        alt = [w for w in warnings if w.startswith("alternates")]
+        assert len(alt) == 1 and alt[0].startswith(alternates + ", which hunsu.local.json `hosts` leaves out on this machine (codex) — " + cannot), alt
+        assert not [w for w in warnings if not w.startswith("alternates")], warnings
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        lock = hunsu.load_json(os.path.join(h.target, hunsu.LOCK))
+        assert lock["roles"] == guin_site_roles() == lock["roles-declared"], lock["roles"]   # nothing switched, removed or rewritten
+        assert lock["roles"]["implementer"][-4:] == ["--model", "gpt-5.6-luna", "--effort", "xhigh"]
+    with Host() as h, host_path("claude-code", "codex"):
+        guin_like_project(h)
+        assert hunsu.check(h.target)[:2] == ([], []), hunsu.check(h.target)   # both hosts here, no overlay: the shared default is clean
+        local(h.target, {"hosts": ["codex"]})
+        errors, warnings, info = hunsu.check(h.target)
+        assert not errors and [w[:len(alternates)] for w in warnings] == [alternates] and "which hunsu.local.json `hosts` leaves out" in warnings[0], warnings
+
+
+def probes(bin_dir, reset=True):
+    """The stub host executables run since the last call (host_path logs each run), as `claude --version` lines."""
+    log = os.path.join(bin_dir, "calls.log")
+    ran = io.open(log, encoding="utf-8").read().split("\n")[:-1] if os.path.exists(log) else []
+    if reset and os.path.exists(log):
+        os.remove(log)
+    return ran
+
+
+def test_an_excluded_optional_host_is_never_probed_by_check_or_lock():
+    """Both hosts were probed on a machine that runs one. With a usable `hosts` profile, a host engine it leaves out that only
+    alternates use is not run at all — not by `check`, not by `lock`, whose `engines` keeps the key as null (not probed, not
+    missing). A plain role's host and a host a plugin's own `engines` names are probed and enforced whatever the profile says;
+    without a profile, the shared mixed configuration probes both."""
+    with Host() as h, host_path("claude-code", "codex") as bin_dir:   # both present: only the profile can keep a probe from running
+        guin_like_project(h)
+        local(h.target, {"hosts": ["codex"]})
+        probes(bin_dir)
+        assert hunsu.check(h.target)[0] == []
+        ran = probes(bin_dir)
+        assert ran == ["codex --version"], ran   # once (a check asks a host once), and never claude
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        ran = probes(bin_dir)
+        assert ran and set(ran) == {"codex --version"}, ran
+        engines = hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["engines"]
+        assert engines == {"claude-code": None, "codex": "0.170.0", "python": hunsu.version_of("python")}, engines   # the shape kept
+        # no profile: the shared mixed configuration probes both hosts, and the lock records both
+        os.remove(os.path.join(h.target, hunsu.LOCAL))
+        probes(bin_dir)
+        assert run("lock", "--target", h.target)[0] == 0
+        assert {"claude --version", "codex --version"} <= set(probes(bin_dir))
+        assert hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["engines"]["claude-code"] == "2.1.400"
+        # a plain role's host left out by the profile is still probed — and its roles still stop the lock
+        local(h.target, {"hosts": ["claude-code"]})
+        probes(bin_dir)
+        errors, _, info = hunsu.check(h.target)
+        assert "codex --version" in probes(bin_dir) and any(e.startswith("roles implementer, newbie, nitpick, quibble, verifier: their workers run on codex") for e in errors), errors
+        assert not [i for i in info if i.startswith("engine codex")], info
+        code, out = run("lock", "--target", h.target)
+        assert code != 0 and "codex --version" in probes(bin_dir), out
+    # a host a plugin's own `engines` names is required too: probed and enforced though the profile leaves it out
+    with Host() as h, host_path("claude-code") as bin_dir:
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"], engines={"codex": ">=0.1"})
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, engines={"claude-code": ">=2.1", "codex": ">=0.165", "python": ">=3.0"}, judge="skip", roles={"planner": "session"})
+        local(h.target, {"hosts": ["claude-code"]})
+        probes(bin_dir)
+        errors, _, info = hunsu.check(h.target)
+        assert "engine codex: requires >=0.165, found nothing" in errors and "plugin alpha: needs codex >=0.1, found nothing here" in errors, errors
+        assert not [i for i in info if "not probed" in i], info
+        code, out = run("lock", "--target", h.target)
+        assert code != 0 and "plugin alpha: needs codex" in out, out
+    with Host() as h, host_path("claude-code", "codex") as bin_dir:   # present: probed, enforced, and recorded by a lock that succeeds
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"], engines={"codex": ">=0.1"})
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, engines={"claude-code": ">=2.1", "codex": ">=0.165", "python": ">=3.0"}, judge="skip", roles={"planner": "session"})
+        local(h.target, {"hosts": ["claude-code"]})
+        probes(bin_dir)
+        code, out = run("lock", "--target", h.target)
+        assert code == 0 and "codex --version" in probes(bin_dir), out
+        assert hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["engines"]["codex"] == "0.170.0"
+
+
+def test_a_plain_roles_host_is_required_whatever_hosts_says():
+    """A plain role is hired for every task of its kind: its worker host is required. Left out by `hosts` or not found here,
+    that is an error naming the roles, and the host's floor is checked anyway — the overlay never hides it. A host the
+    roles' workers run on that `engines` does not name asks for a floor."""
+    codex_worker = ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "codex", "--model", "m"]
+    keep = "hunsu does not move a role to another host, model or provider"
+    with Host() as h:
+        root = h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        write(os.path.join(root, "worker.py"), "")
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, engines={"claude-code": ">=2.1", "codex": ">=0.165", "python": ">=3.0"}, judge="skip",
+                 roles={"implementer": codex_worker, "planner": "session"})
+        with host_path("claude-code"):
+            errors, _, _ = hunsu.check(h.target)
+            assert errors == ["engine codex: requires >=0.165, found nothing",   # no `hosts` clause: a plain role runs there
+                              "roles implementer: their workers run on codex, and `codex` is not found on this machine — hiring them fails here; "
+                              + keep + ": install codex, or the team changes these roles in hunsu.json"], errors
+            local(h.target, {"hosts": ["claude-code"]})
+            errors, _, info = hunsu.check(h.target)
+            assert errors == ["engine codex: requires >=0.165, found nothing",
+                              "roles implementer: their workers run on codex, which hunsu.local.json `hosts` leaves out on this machine (claude-code) — "
+                              "a plain role is hired for every task of its kind; " + keep + ": run codex here and list it in `hosts`, or the team "
+                              "changes these roles in hunsu.json"], errors
+            assert not [i for i in info if i.startswith("engine codex")], info
+            code, out = run("lock", "--target", h.target)
+            assert code != 0 and "roles implementer" in out, out
+        with host_path("claude-code", "codex"):
+            errors, _, _ = hunsu.check(h.target)
+            assert len(errors) == 1 and errors[0].startswith("roles implementer: their workers run on codex, which hunsu.local.json `hosts` leaves out"), errors
+            local(h.target, {"hosts": ["claude-code", "codex"]})
+            assert hunsu.check(h.target)[0] == []
+            manifest(h.target, engines={"claude-code": ">=2.1", "python": ">=3.0"})
+            _, warnings, _ = hunsu.check(h.target)
+            assert "engine codex: the workers of implementer run on it, and `engines` does not require it — add a floor (nothing checks its version)" in warnings, warnings
+            assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["roles"]["implementer"] == codex_worker
+
+
+def test_a_plugin_role_is_resolved_before_its_host_is_judged():
+    """`plugin:role` is the argv the plugin declares: `{host}` is this host's, a fixed `--host codex` stays Codex — judged on
+    Codex from a Claude session, not assumed to run where the session does. `native:` is the host's own subagent: no worker
+    host. A file an argv runs that the enabled copy lacks is an error for a plain role and a warning for an alternate."""
+    with Host() as h, host_path("claude-code"):
+        root = h.add_plugin("m1", "alpha", "1.0.0", ["build"], roles={
+            "build": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "codex"],
+            "try": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "{host}"]})
+        write(os.path.join(root, "worker.py"), "")
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        gone = ["python3", "{plugin:alpha}/gone.py", "--request", "{request}", "--response", "{response}", "--host", "claude"]
+        manifest(h.target, engines={"claude-code": ">=2.1", "python": ">=3.0"}, judge="skip",
+                 roles={"implementer": "alpha:build", "newbie": "alpha:try", "verifier": "native:alpha:build", "quibble": gone, "quibble@loopback": gone})
+        errors, warnings, _ = hunsu.check(h.target)
+        assert [e for e in errors if e.startswith("roles ")] == [
+            "roles implementer: their workers run on codex, and `codex` is not found on this machine — hiring them fails here; hunsu does not move "
+            "a role to another host, model or provider: install codex, or the team changes these roles in hunsu.json"], errors   # not newbie, not verifier
+        assert "engine codex: the workers of implementer run on it, and `engines` does not require it — add a floor (nothing checks its version)" in warnings, warnings
+        assert "role quibble: its argv runs {plugin:alpha}/gone.py, and alpha 1.0.0 here has no gone.py — hiring it fails on this machine" in errors, errors
+        assert "role quibble@loopback: its argv runs {plugin:alpha}/gone.py, and alpha 1.0.0 here has no gone.py — hiring it fails on this machine" in warnings, warnings
+        assert not [e for e in errors if "worker.py" in e], errors
+
+
+def codex_hook_project(h, codex, version, script=True):
+    """One copy of plugin alpha that both hosts install (the same content, so one fingerprint): Codex's cache holds it at
+    `version` with a UserPromptSubmit hook, Claude's install record points at the same copy."""
+    root = os.path.join(codex, "plugins", "cache", "m1", "alpha", version)
+    for manifest_dir in (".claude-plugin", ".codex-plugin"):
+        write(os.path.join(root, manifest_dir, "plugin.json"), {"name": "alpha", "version": version})
+    write(os.path.join(root, "hooks", "codex.json"), {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 \"${PLUGIN_ROOT}/hooks/prompt.py\""}]}]}})
+    if script:
+        write(os.path.join(root, "hooks", "prompt.py"), "")
+    write(os.path.join(codex, "config.toml"), '[marketplaces.m1]\nsource_type = "git"\nsource = "https://github.com/org/m1"\n[plugins."alpha@m1"]\nenabled = true\n')
+    h.enabled = {"alpha@m1": True}
+    h.installed = {"alpha@m1": [{"installPath": root, "version": version}]}
+    h.markets = {"m1": {"source": {"source": "github", "repo": "org/m1"}}}
+    h.flush()
+    return root
+
+
+def test_a_generated_codex_hook_whose_copy_is_gone_is_said_from_either_host_and_a_codex_lock_regenerates_it():
+    """guin-site 11-01: after a plugin update removed the copy hunsu's generated hooks named, Codex prompts were blocked until a
+    Codex `lock` regenerated them, and `check` had said nothing. Now `check` — on Claude too, since Codex runs here — names the
+    hook, the copy and the way out; a Claude `lock` refuses with it; a Codex `lock` regenerates and keeps the project's own groups,
+    their order and description. A project group whose script is gone is the project's: said, kept."""
+    from unittest.mock import patch
+    if sys.version_info < (3, 11):
+        raise Skip("the Codex survey reads config.toml with tomllib (3.11+)")
+    with Host() as h, host_path("claude-code", "codex"), patch.object(hunsu, "CODEX", os.path.join(h.home, ".codex")), \
+            patch.dict(os.environ, {"HOME": h.home}):
+        codex = hunsu.CODEX
+        old = codex_hook_project(h, codex, "1.0.0")
+        tools = os.path.join(h.target, "tools")
+        write(os.path.join(tools, "guard.py"), "")
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, engines={"claude-code": ">=2.1", "codex": ">=0.165", "python": ">=3.0"}, judge="skip")
+        with patch.object(hunsu, "HOST", "codex"):
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        path = os.path.join(h.target, ".codex", "hooks.json")
+        doc = hunsu.load_json(path)
+        guard = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"%s/guard.py\"" % tools}]}
+        lost = {"hooks": [{"type": "command", "command": "python3 \"$HOME/%s\"" % os.path.relpath(os.path.join(tools, "lost.py"), h.home)}]}
+        doc["hooks"]["UserPromptSubmit"] = [guard] + doc["hooks"]["UserPromptSubmit"] + [lost]
+        record = json.loads(doc["description"][len(hunsu.CODEX_HOOK_PROVENANCE):])
+        record["description"] = "Our project hooks"
+        doc["description"] = hunsu.CODEX_HOOK_PROVENANCE + json.dumps(record)
+        hunsu.save_json(path, doc)
+        assert hunsu.check(h.target)[0] == [], "every script is here: nothing to say"
+        # the update: Codex removes the 1.0.0 copy and installs 2.0.0; the project takes it (`hunsu add`)
+        shutil.rmtree(old)
+        new = codex_hook_project(h, codex, "2.0.0")
+        run("add", "alpha", "--target", h.target)
+        home = os.path.expanduser("~")
+        stale = os.path.join(old, "hooks", "prompt.py").replace(home, "~")
+        errors, warnings, _ = hunsu.check(h.target)   # on Claude Code
+        assert errors == ["codex hook UserPromptSubmit: runs %s, which is not on this machine — a group hunsu lock generated, so Codex fails this "
+                          "hook on every UserPromptSubmit event; it was generated from alpha 1.0.0, a copy no longer in the Codex plugin cache (which "
+                          "holds 2.0.0 now); a Codex `lock` would not write it again: %s" % (stale, hunsu.REGENERATES)], errors
+        assert [w for w in warnings if w.startswith("codex hook")] == [
+            "codex hook UserPromptSubmit: runs %s, which is not on this machine — the project's own group (not in hunsu's provenance), so `lock` "
+            "keeps it: fix or remove it in .codex/hooks.json" % os.path.join(tools, "lost.py").replace(home, "~")], warnings
+        code, out = run("lock", "--target", h.target)   # Claude Code cannot regenerate Codex's file: it refuses and says the Codex command
+        assert code != 0 and "AGENT_HOST=codex" in out, out
+        with patch.object(hunsu, "HOST", "codex"):
+            code, out = run("lock", "--target", h.target)
+            assert code == 0 and "codex: 1 hook group(s)" in out, out
+            after = hunsu.load_json(path)
+            generated = {"hooks": [{"type": "command", "command": "python3 \"%s/hooks/prompt.py\"" % new.replace("\\", "/")}]}
+            assert after["hooks"] == {"UserPromptSubmit": [guard, lost, generated]}, after["hooks"]
+            kept = json.loads(after["description"][len(hunsu.CODEX_HOOK_PROVENANCE):])
+            assert kept == {"hooks": {"UserPromptSubmit": [generated]}, "description": "Our project hooks"}, kept
+            errors, warnings, _ = hunsu.check(h.target)
+            assert errors == [] and len([w for w in warnings if w.startswith("codex hook")]) == 1, (errors, warnings)
+        errors, warnings, _ = hunsu.check(h.target)
+        assert errors == [] and len([w for w in warnings if w.startswith("codex hook")]) == 1, (errors, warnings)
+        # the installed copy itself lacks the script: a regeneration would not help, so it is said as a reinstall and stops lock
+        os.remove(os.path.join(new, "hooks", "prompt.py"))
+        hooks = [e for e in hunsu.check(h.target)[0] if e.startswith("codex hook")]   # the copy's content also differs from the lock now
+        assert len(hooks) == 1 and "alpha 2.0.0, installed for Codex, has no such file — reinstall it" in hooks[0] and hunsu.REGENERATES not in hooks[0], hooks
+        with patch.object(hunsu, "HOST", "codex"):
+            code, out = run("lock", "--target", h.target)
+            assert code != 0 and "reinstall it" in out, out
+        write(os.path.join(new, "hooks", "prompt.py"), "")
+        # a file from before hunsu recorded ownership: an old generated group is not known as hunsu's — said, kept, removed by hand
+        hunsu.save_json(path, {"description": "written by hunsu lock from the locked plugins' hooks/codex.json; machine paths — not committed",
+                               "hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 \"%s/hooks/prompt.py\"" % old}]}]}})
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not errors and [w for w in warnings if w.startswith("codex hook")] == [
+            "codex hook UserPromptSubmit: runs %s, which is not on this machine — the project's own group (the file predates hunsu's ownership "
+            "record), so `lock` keeps it: fix or remove it in .codex/hooks.json; it names alpha 1.0.0's copy in the Codex plugin cache — likely "
+            "a group generated before hunsu recorded which groups it wrote (1.15.1): remove it by hand" % stale], warnings
+        # a provenance that does not parse is said, as `lock` on Codex refuses it; a file of another shape is said, never a traceback
+        for broken, why in (({"description": hunsu.CODEX_HOOK_PROVENANCE + "{not json", "hooks": {}}, "its hunsu provenance, the `description` hunsu lock wrote, does not parse"),
+                            (["not", "an", "object"], "not a JSON object"), ({"hooks": ["a list"]}, "`hooks` is not an object"),
+                            ({"hooks": {"Stop": "str"}}, "`hooks.Stop` is not a list of groups"), ({"hooks": {"Stop": ["a string"]}}, "`hooks.Stop` is not a list of groups"),
+                            ({"hooks": {"Stop": [{"hooks": "not a list"}]}}, "a group in `hooks.Stop` has `hooks` that is not a list of hooks"),
+                            ({"hooks": {"Stop": [{"hooks": ["x"]}]}}, "a group in `hooks.Stop` has `hooks` that is not a list of hooks"),
+                            ({"hooks": {"Stop": [{"hooks": [{"command": 3}]}]}}, "a hook in `hooks.Stop` has a `command` that is not a string"),
+                            ({"hooks": {"Stop": [{"hooks": [{"command": None}]}]}}, "a hook in `hooks.Stop` has a `command` that is not a string")):
+            hunsu.save_json(path, broken)
+            assert hunsu.codex_hooks_unreadable(why) in hunsu.check(h.target)[0], (broken, hunsu.check(h.target)[0])
+            with patch.object(hunsu, "HOST", "codex"):   # on Codex the survey reads it first: a message and exit 1, never a traceback
+                code, out = run("check", "--target", h.target)
+                assert code == 1 and hunsu.codex_hooks_unreadable(why) in out, (broken, out)   # one message on both hosts
+                code, out = run("lock", "--target", h.target)
+                assert code == 1 and hunsu.codex_hooks_unreadable(why) in out, (broken, out)
+        for empty in ({"hooks": None}, {"description": "ours"}, {"hooks": {}}):   # no hooks: nothing to judge, as before, on both hosts
+            hunsu.save_json(path, empty)
+            assert not [e for e in hunsu.check(h.target)[0] if e.startswith("codex hook")], empty
+            with patch.object(hunsu, "HOST", "codex"):
+                assert "hooks.json" not in run("check", "--target", h.target)[1], empty
+        # a machine that runs Claude Code only, where no role's worker runs on Codex, does not read Codex's file
+        local(h.target, {"hosts": ["claude-code"]})
+        assert not [e for e in hunsu.check(h.target)[0] if e.startswith("codex hook")]
 
 
 def test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here():
@@ -369,6 +769,34 @@ def test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here():
         out = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "session_start.py")], input=json.dumps({"cwd": h.target}),
                              capture_output=True, text=True, encoding="utf-8", env=env).stdout
         assert "2 plugin(s) behind a release available here" in json.loads(out)["hookSpecificOutput"]["additionalContext"], out
+
+
+def test_the_ordinary_codex_update_is_a_named_upgrade_and_a_verification_never_a_routine_reinstall():
+    """On Codex the way to a release is `codex plugin marketplace upgrade M` (it refreshes the marketplace's Git snapshot and the
+    plugins installed from it: the 2.0.1 adoption took four upgrades and no `plugin add`), then verifying that the installed copy
+    is the intended release — not a `plugin remove` + `add`, which can leave generated hooks naming a gone copy. Claude Code's
+    steps are as before; reinstalling stays where a copy is corrupted, outside these steps."""
+    from unittest.mock import patch
+    with patch.object(hunsu, "HOST", "codex"):
+        steps = hunsu.update_steps("dwitbuk", "dwitbuk", "2.0.2", installed="2.0.1", pinned="2.0.1", locked="2.0.1")
+        text = hunsu.steps_text(steps)
+        assert steps[0].startswith("`codex plugin marketplace upgrade dwitbuk` — refreshes this machine's Git snapshot"), steps
+        assert steps[1].startswith("verify what Codex now has for dwitbuk: its copy in the Codex plugin cache (`plugins/cache/dwitbuk/dwitbuk/2.0.2/`) exists"), steps
+        assert ".codex-marketplace-install.json" in steps[1] and "by itself proves no version" in steps[1], steps
+        assert "compares content only with what a lock recorded for the same version" in steps[1], steps   # check does not vouch for a new release
+        assert "remove" not in text and "plugin add" not in text, text
+        assert [s.split(" ")[0] for s in steps[2:]] == ["restart", "`hunsu", "`hunsu", "`hunsu"], steps   # restart, add, check, lock — as before
+        assert steps[3].startswith("`hunsu add dwitbuk`") and steps[5].startswith("`hunsu lock`"), steps
+        # already at the release here: no upgrade, no verification step — only what the project still owes
+        steps = hunsu.update_steps("dwitbuk", "dwitbuk", "2.0.2", installed="2.0.2", pinned="2.0.1", locked="2.0.1")
+        assert not [s for s in steps if "codex plugin" in s or s.startswith("verify")], steps
+        # a plugin this machine links to a development source is re-snapshotted, the separate path that keeps remove + add
+        steps = hunsu.update_steps("dwitbuk", "dwitbuk", "2.0.2", installed="2.0.1", pinned="2.0.1", locked="2.0.1", linked=True)
+        assert steps[0].startswith("`hunsu install --refresh dwitbuk`") and not [s for s in steps if "marketplace upgrade" in s or s.startswith("verify")], steps
+    with patch.object(hunsu, "HOST", "claude-code"):
+        steps = hunsu.update_steps("dwitbuk", "dwitbuk", "2.0.2", installed="2.0.1", pinned="2.0.1", locked="2.0.1", copy="2.0.1")
+        assert steps[0].startswith("`claude plugin marketplace update dwitbuk`") and steps[1].startswith("`claude plugin update dwitbuk@dwitbuk --scope project`"), steps
+        assert not [s for s in steps if "codex" in s], steps
 
 
 def test_check_error_branches_each_fire():
@@ -1039,6 +1467,7 @@ def test_codex_survey_and_lock_materialize_the_projects_hooks():
         write(os.path.join(plug, ".codex-plugin", "plugin.json"), {"name": "alpha", "version": "1.2.0"})
         write(os.path.join(plug, "skills", "build", "SKILL.md"), "---\nname: build\ndescription: builds\n---\nbody\n")
         write(os.path.join(plug, "hooks", "codex.json"), {"hooks": {"SessionStart": [{"matcher": "startup", "hooks": [{"type": "command", "command": "python \"${PLUGIN_ROOT}/hooks/s.py\""}]}]}})
+        write(os.path.join(plug, "hooks", "s.py"), "")   # a lock on Codex writes no hook whose script is missing
         write(os.path.join(codex, "config.toml"), 'model = "x"\n[marketplaces.m1]\nsource_type = "local"\nsource = \'\\\\?\\%s\'\n[plugins."alpha@m1"]\nenabled = true\n[plugins."off@m1"]\nenabled = false\n[[hooks.SessionStart]]\nmatcher = "startup"\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "python3 mine.py"\n' % root)   # the way Codex writes a Windows path
         os.environ["HUNSU_CODEX_DIR"], os.environ["AGENT_HOST"] = codex, "codex"
         h2 = importlib.reload(hunsu)
@@ -1274,7 +1703,7 @@ def test_role_add_writes_a_capability_alternate_on_another_host_and_role_list_re
     member lacks it (guin-site: Codex's sandbox cannot bind a port, Claude's can). Saying yes is one command: ROLE's provider,
     as argv, with --host replaced (or added to a worker), --model/--effort dropped unless given — a model named for one host
     is not valid on another. A role with no worker to move (`session`, `native:`, a command that is not a worker) is refused."""
-    with Host() as h:
+    with Host() as h, host_path("claude-code", "codex"):
         h.add_plugin("m1", "alpha", "1.0.0", ["plan"], roles={"build": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}", "--host", "{host}", "--model", "a-model"]})
         h.flush()
         run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
@@ -1335,7 +1764,7 @@ def test_what_a_hired_sandbox_cannot_do_is_decided_once_at_setup_never_mid_run()
     worker's can. Whether hired hands need them is the project's decision (hunsu.json `capabilities`: `alternates` or
     `session`), asked once — `check` warns in one line (lock is not blocked), `compose` asks it as a decision, and either
     answer is one command: `role add <role>@<cap>` (records `alternates`) or `capability <cap> --session`."""
-    with Host() as h:
+    with Host() as h, host_path("claude-code", "codex"):
         h.add_plugin("m1", "alpha", "1.0.0", ["plan"])
         h.flush()
         run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
@@ -1380,7 +1809,7 @@ def test_the_setup_answer_is_one_command_for_every_role_a_hosts_sandbox_leaves_s
     """`capability CAP.. --alternates --host H` adds `<role>@<caps>` on H for every worker role on a host lacking those
     capabilities — as `role add` would: argv copied, host swapped, model/effort dropped unless given — skips roles an
     alternate already covers and roles whose host can, and records `alternates`. The warning's first answer is that command."""
-    with Host() as h:
+    with Host() as h, host_path("claude-code", "codex"):
         h.add_plugin("m1", "alpha", "1.0.0", ["plan"])
         h.flush()
         run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
@@ -1868,6 +2297,125 @@ def test_failed_json_replace_keeps_previous_document_and_cleans_temporary_file()
                 raise AssertionError("replace failure was hidden")
         assert io.open(path, "rb").read() == before
         assert os.listdir(target) == [hunsu.LOCK]
+
+
+def test_hook_paths_judges_quoted_paths_with_spaces_and_leaves_shell_fragments_opaque():
+    """A hook command's words as a shell splits them: a quoted path with spaces is one file; the program and script paths are
+    judged, after only a leading ~ / $HOME / ${HOME}; code after -c, other variables, globs, separators and unclosed quotes
+    are never read as a file."""
+    from unittest.mock import patch
+    with patch.dict(os.environ, {"HOME": "/h"}):
+        cases = (('python3 "/tmp/My Tools/hook.py"', ["/tmp/My Tools/hook.py"]),
+                 ('"/opt/My App/bin/tool" --flag "/x y/z"', ["/opt/My App/bin/tool"]),          # the program; a non-script argument is not
+                 ('python3 "$HOME/My Tools/x.py"', ["/h/My Tools/x.py"]),
+                 ("python3 ~/x.py", ["/h/x.py"]),
+                 ('python3 "${HOME}/x.py" /a/b.sh', ["/h/x.py", "/a/b.sh"]),
+                 ('sh -c "/abs/run thing.py"', []), ("bash -lc 'python3 /abs/x.py'", []), ('python3 -c "/abs/x.py"', []),
+                 ("python3 /abs/$PROJECT/x.py", []), ("python3 $HOMEDIR/x.py", []), ("python3 /abs/*.py", []),
+                 ("python3 /abs/a.py; rm -rf /", []), ("python3 '/abs/unterminated.py", []), ("python3 rel/x.py", []),
+                 ("python3 /abs/$(whoami).py", []), ("/usr/bin/env python3 /abs/x.py", ["/usr/bin/env", "/abs/x.py"]))
+        for command, want in cases:
+            assert hunsu.hook_paths(command) == want, (command, hunsu.hook_paths(command), want)
+
+
+def test_a_codex_lock_repairs_only_what_its_next_render_drops():
+    """Whether a Codex `lock` repairs a generated hook whose program or script is gone is decided from the groups it would write
+    next: a path the installed plugin still generates (an absolute interpreter, an external script) blocks every lock until it
+    is here; a group the render drops (a plugin no longer in the manifest, a removed copy) is repaired only while every path the
+    render names is here. The project's own groups, their order and description stay; a quoted path with spaces is judged."""
+    from unittest.mock import patch
+    if sys.version_info < (3, 11):
+        raise Skip("the Codex survey reads config.toml with tomllib (3.11+)")
+    root = tempfile.mkdtemp(prefix="hunsu-render-")
+    codex, target = os.path.join(root, ".codex"), os.path.join(root, "project")
+    tool, interpreter = os.path.join(root, "external tools", "tool.py"), os.path.join(root, "missing bin", "python3")
+
+    def copy(name, version, commands):
+        base = os.path.join(codex, "plugins", "cache", name, name, version)
+        for d in (".claude-plugin", ".codex-plugin"):
+            write(os.path.join(base, d, "plugin.json"), {"name": name, "version": version})
+        write(os.path.join(base, "hooks", "codex.json"), {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": c}]} for c in commands]}})
+        for f in ("a.py", "b.py"):
+            write(os.path.join(base, "hooks", f), "")
+        return base
+
+    def declare(**versions):
+        write(os.path.join(codex, "config.toml"), "".join('[marketplaces.%s]\nsource_type = "git"\nsource = "https://github.com/org/%s"\n[plugins."%s@%s"]\nenabled = true\n'
+                                                          % (n, n, n, n) for n in ("alpha", "beta")))
+        write(os.path.join(target, hunsu.MANIFEST), {"plugins": {n: {"version": v, "source": "github:org/" + n, "marketplace": n} for n, v in versions.items()},
+                                                     "engines": {"codex": ">=0.0", "python": ">=3.0"}, "judge": "skip"})
+    hooks_errors = lambda: [e for e in hunsu.check(target)[0] if e.startswith("codex hook")]
+    try:
+        with host_path("codex"), patch.object(hunsu, "HOST", "codex"), patch.object(hunsu, "CODEX", codex), patch.dict(os.environ, {"HOME": root}):
+            old_alpha = copy("alpha", "1.0.0", ['python3 "${PLUGIN_ROOT}/hooks/a.py"'])
+            copy("beta", "1.0.0", ['"%s" "${PLUGIN_ROOT}/hooks/b.py"' % interpreter, 'python3 "%s"' % tool])
+            declare(alpha="1.0.0", beta="1.0.0")
+            path = os.path.join(target, ".codex", "hooks.json")
+            write(os.path.join(target, "my hooks", "keep.py"), "")
+            custom = {"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "%s/my hooks/keep.py"' % target}]}
+            gone = {"hooks": [{"type": "command", "command": 'python3 "%s/my hooks/gone.py"' % target}]}
+            write(path, {"description": "Our project hooks", "hooks": {"Stop": [custom, gone]}})
+            # the first lock, before any group is generated: beta's hooks/codex.json names an interpreter and a script this machine
+            # lacks, so a Codex lock would write hooks that fail on every prompt — it refuses, and writes nothing
+            errors = hooks_errors()
+            assert len(errors) == 2 and all("a Codex `lock` would write a group that runs" in e and "beta 1.0.0's hooks/codex.json names it; `lock` on "
+                                            "Codex refuses until it is here" in e for e in errors), errors
+            code, out = run("lock", "--target", target)
+            assert code != 0 and not os.path.exists(os.path.join(target, hunsu.LOCK)), out
+            assert hunsu.load_json(path) == {"description": "Our project hooks", "hooks": {"Stop": [custom, gone]}}
+            write(interpreter, ""); write(tool, "")   # here when the lock runs; gone after it (an interpreter removed, a tool moved)
+            code, out = run("lock", "--target", target)
+            assert code == 0, out
+            os.remove(interpreter); os.remove(tool)
+            # now generated: a lock would write them again — the error is on the generated group, said once per path
+            errors = hooks_errors()
+            assert len(errors) == 2 and all("a Codex `lock` would write it again: beta 1.0.0's hooks/codex.json names it — `lock` cannot repair it" in e
+                                            for e in errors), errors
+            assert "runs ~/missing bin/python3," in errors[0] and "runs ~/external tools/tool.py," in errors[1], errors
+            assert any(w.startswith('codex hook Stop: runs ~/project/my hooks/gone.py, which is not on this machine — the project\'s own group')
+                       for w in hunsu.check(target)[1]), hunsu.check(target)[1]
+            before = io.open(path, encoding="utf-8").read()
+            for _ in range(2):   # persists across lock: refused each time, the file untouched
+                code, out = run("lock", "--target", target)
+                assert code != 0 and "would write it again" in out, out
+                assert io.open(path, encoding="utf-8").read() == before
+            # beta leaves the manifest: its generated groups are obsolete, the render drops them, every rendered path is here
+            declare(alpha="1.0.0")
+            errors = hooks_errors()
+            assert len(errors) == 2 and all("a Codex `lock` would not write it again: " + hunsu.REGENERATES in e for e in errors), errors
+            beta = os.path.join(codex, "plugins", "cache", "beta", "beta")
+            os.remove(os.path.join(beta, "1.0.0", "hooks", "b.py"))   # its copy is still in the cache, without the script
+            errors = hooks_errors()
+            assert len(errors) == 3 and all(hunsu.REGENERATES in e for e in errors), errors
+            assert "it was generated from beta 1.0.0, whose copy in the Codex plugin cache lacks it; a Codex `lock` would not write it again" in errors[1], errors
+            shutil.rmtree(beta)   # uninstalled from Codex too: nothing to reinstall, and nothing a lock would write
+            errors = hooks_errors()
+            assert len(errors) == 3 and "it was generated from beta 1.0.0, a copy gone, and the Codex plugin cache holds none of beta now; a Codex `lock` would not write it again" in errors[1], errors
+            code, out = run("lock", "--target", target)
+            assert code == 0, out
+            doc = hunsu.load_json(path)
+            generated = {"hooks": [{"type": "command", "command": 'python3 "%s/hooks/a.py"' % old_alpha}]}
+            assert doc["hooks"] == {"Stop": [custom, gone], "UserPromptSubmit": [generated]}, doc["hooks"]
+            record = json.loads(doc["description"][len(hunsu.CODEX_HOOK_PROVENANCE):])
+            assert record == {"hooks": {"UserPromptSubmit": [generated]}, "description": "Our project hooks"}, record
+            assert hooks_errors() == []
+            # alpha's copy is replaced by one whose hooks name the missing external script: the old group is not repaired by a lock
+            shutil.rmtree(old_alpha)
+            copy("alpha", "2.0.0", ['python3 "${PLUGIN_ROOT}/hooks/a.py"', 'python3 "%s"' % tool])
+            declare(alpha="2.0.0")
+            errors = hooks_errors()   # the old group is not repairable while the new render fails, and the new render's missing script is said itself
+            assert len(errors) == 2 and "a Codex `lock` would drop it, but the groups it would write name ~/external tools/tool.py, which is not on this machine either" in errors[0], errors
+            assert "a Codex `lock` would write a group that runs ~/external tools/tool.py, which is not on this machine — alpha 2.0.0's hooks/codex.json names it" in errors[1], errors
+            code, out = run("lock", "--target", target)
+            assert code != 0 and "would drop it" in out, out
+            write(tool, "")   # once it is here, the regeneration repairs the old group, and a lock is clean
+            errors = hooks_errors()
+            assert len(errors) == 1 and "a copy no longer in the Codex plugin cache (which holds 2.0.0 now); a Codex `lock` would not write it again" in errors[0], errors
+            code, out = run("lock", "--target", target)
+            assert code == 0, out
+            assert hooks_errors() == [] and hunsu.load_json(path)["hooks"]["Stop"] == [custom, gone]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_codex_lock_preserves_project_hooks_and_tracks_only_generated_groups():
