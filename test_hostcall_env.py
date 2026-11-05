@@ -13,8 +13,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+PLUGIN = Path(__file__).resolve().parent / "plugin"   # the installed payload; the root is the development checkout
+sys.path.insert(0, str(PLUGIN))
 import hostcall  # noqa: E402
+assert Path(hostcall.__file__).resolve().parent == PLUGIN, "hostcall imported from %s, not the payload %s" % (hostcall.__file__, PLUGIN)
 
 MARKER = "synthetic-codex-session-id-7f3e"
 

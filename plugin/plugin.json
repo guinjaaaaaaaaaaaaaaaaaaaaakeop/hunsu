@@ -1,6 +1,7 @@
 {
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hunsu",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "engines": {
     "python": ">=3.11"
   },
@@ -11,7 +12,12 @@
     "hunsu-conflicts.md",
     "hunsu.local.json"
   ],
-  "description": "Locks a project's agent environment — plugins, skills, hooks, engines — the way a package manager locks dependencies. Everyone on the project develops in the same environment; nothing outside the manifest runs.",
+  "description": "Locks a project's agent environment the way a package manager locks dependencies.",
+  "extensions": {
+    "com.openai": {
+      "hooks": "./hooks/codex.json"
+    }
+  },
   "reads": {
     "decision": [
       "python3",

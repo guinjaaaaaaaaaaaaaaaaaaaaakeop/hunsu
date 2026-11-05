@@ -5,15 +5,12 @@ Which plugins, skills, hooks and runtimes a project uses is declared in `hunsu.j
 and pinned in `hunsu.lock.json`, and checked on every session start. Everyone on the project
 develops in the same environment; what is not in the manifest is not part of the project.
 
-Commands that change a project serialize their reads and writes across local sessions. JSON files are replaced only
-after the complete document has been written, so an interrupted write leaves the previous document readable. This
-protects each file; host installs and changes spanning multiple files are not an all-or-nothing transaction.
+This repository holds two things. The plugin a host installs is the [`plugin/`](plugin/) directory, and only that; its
+usage manual — commands, manifest, hooks, conflicts between skills, limits — is [plugin/README.md](plugin/README.md),
+which ships with it. Everything else here is the checkout hunsu is developed in: its tests, its contracts and records,
+its maintenance instructions, and its own agent environment.
 
-Start with [installation](#install) and [host entry points](#shared-instructions-and-host-entry-points).
-See [commands](#commands) for the CLI, [manifest](#manifest) for configuration,
-[limits](#limits) for integration caveats, and [versioning](#versioning) for releases and updates.
-
-## Install
+## Install (using hunsu)
 
 Python 3.11 or newer is required on both hosts. Ensure `python3` on the host's PATH selects that interpreter.
 
@@ -22,549 +19,107 @@ claude plugin marketplace add guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu
 claude plugin install hunsu@hunsu
 ```
 
-## Codex
-
-Add this repository as a Codex marketplace, then install hunsu and start a new session:
-
 ```
 codex plugin marketplace add guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu
 codex plugin add hunsu@hunsu
 ```
 
-For this adapter, `lock` materializes the locked plugins' `hooks/codex.json` into the project's
-`.codex/hooks.json`. Review and trust those project hooks in Codex. The declared SessionStart hook runs
-`hooks/session_start.py` with `python3` to report lock status; installation alone does not materialize it.
-The host integration limits below distinguish declared hooks from verified behavior.
+Both catalogs at this repository's root select the payload: `.claude-plugin/marketplace.json` names `"source":
+"./plugin"`, `.agents/plugins/marketplace.json` names `{"source": "local", "path": "./plugin"}`. A host may clone or
+snapshot this whole repository to read its catalog (Claude Code keeps a clone of a git marketplace, Codex a snapshot),
+but the plugin it installs and activates is `./plugin`: the engine, the `compose` skill, the Claude Code commands, the
+hooks, the manifests, the usage README and the LICENSE. The tests, records, wrappers and instructions at this root are
+not part of the installed plugin. Start a new session after installing; then see [plugin/README.md](plugin/README.md).
 
-Codex discovers the existing `compose` skill as `hunsu:compose`. Invoke it with `$hunsu:compose`, or select it from
-`/skills`; you can also ask Codex to compose, check, or lock the project environment in plain language. The engine
-commands remain `survey`, `init`, `add`, `check`, `lock`, and `compose`.
+## Develop (working on hunsu)
 
-The `/hunsu:*` command files below are this repository's Claude Code adapters. On Codex, use the shared
-skill or the Python engine.
+Clone the whole repository. [AGENTS.md](AGENTS.md) is the maintenance guidance for Claude Code and Codex alike
+([CLAUDE.md](CLAUDE.md) imports it); installing the plugin never loads it into a user's project.
 
-## Shared instructions and host entry points
+This checkout is itself a hunsu project: `hunsu.json` declares the plugins, roles and resolutions its sessions work with,
+and `hunsu.lock.json` pins the released versions. Install hunsu as above, then the rest the lock pins
+(`python3 <installed hunsu root>/hunsu.py install --target .`, then `check`), start a session, and work with the engines
+the lock names — the SessionStart line prints their roots. The working source under `plugin/` is the candidate, never this checkout's tool: run it from the
+tests or against a disposable target (a temporary project), and adopt a change here only after it is released and
+installed.
 
-[AGENTS.md](AGENTS.md) is the common guidance for maintaining this source checkout;
-[CLAUDE.md](CLAUDE.md) imports it for Claude Code compatibility. Plugin installation does not automatically
-load these repository instructions into the consuming project.
+### Layout
 
-For installed use, both hosts share [skills/compose/SKILL.md](skills/compose/SKILL.md) and `hunsu.py`.
-The `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` manifests expose host-specific packaging;
-`commands/` contains Claude entry points for individual engine actions, not a second compose workflow.
-Either host can call `python3 <plugin-root>/hunsu.py <command> --target <project>` directly;
-replace the angle-bracket placeholders with actual values and quote paths containing spaces.
-For Codex, set `AGENT_HOST=codex` when calling the engine from a shell so it selects the Codex registry.
-The installation instructions above and the limits below describe the host differences.
-
-## What happens
-
-Open any project. hunsu's SessionStart hook puts one line into the session:
-
-- no `hunsu.json` → "this project's environment is not locked" — the `compose` skill walks you through declaring it
-- `hunsu.json` present → `check` runs; drift between this machine and the manifest is reported before any work starts
-- `hunsu.lock.json` present → also where the lock's plugins are on this machine, one root each — the place to call an
-  engine from by hand
-- a worker session (`AGENT_WORKER=1`: a judge, a builder, the eyes) → nothing; the environment is the hiring session's
-
-It fires at startup, on resume, after `/clear` and after a compaction (the summary keeps none of it).
-
-And at every prompt (UserPromptSubmit), when this session runs plugins other than the ones the lock pins: a host loads
-a session's plugins once, at start — an update mid-session says "restart to apply", and `/clear` does not reload them —
-while `check` compares the lock with what is *installed*, not with what this session loaded. hunsu's own hook knows the
-version it runs from (its plugin root); when that differs from the lock's hunsu, or from what is installed for this
-project, one line goes into the prompt's context, and into the SessionStart line too:
-
-    hunsu: this session runs hunsu 1.9.0 while hunsu.lock.json pins 1.10.0 — the plugins updated since this session started are not loaded: restart the session (a /clear does not reload plugins)
-
-Nothing when they agree, nothing in a worker session or under hunsu's own probe (`HUNSU_SURVEY`), nothing while hunsu is
-in development here (`hunsu dev`). No check runs per prompt: the lock, the host's install record, a plugin.json. It is
-said from hunsu's version alone — the one plugin whose running copy hunsu can see — and a session behind on hunsu was
-started before the update, so the rest it runs are as old.
-
-And on every skill call (PreToolUse on `Skill`): a skill that is not in `hunsu.lock.json`, or that `resolutions`
-denies or assigns to another plugin, is **refused** with the reason. An undeclared skill is an undeclared dependency —
-it works on your machine and breaks on everyone else's. No lock, no enforcement.
-
-And on every shell command (PreToolUse on `Bash`): a command that runs a locked plugin's engine from another copy — another
-version in the plugin cache, another marketplace's copy, or a glob in the version's place (`$C/mangsang/*/*/mangsang.py`,
-`ls -d …/dwitbuk/* | tail -1`) — is **refused**, naming the root the lock pins. The plugin cache keeps every version this
-machine installed and a glob picks by name order (1.9.1 after 1.12.0), so a session calling an engine by hand ran old
-copies for days while its hooks ran the locked ones. Only what a command runs is read — the script an interpreter is
-given, an engine file run as the command, a script run after `cd` into a copy, `$D/…` after `D=` took a copy — so
-listing, reading, comparing old copies, or passing one to the project's own script, passes. When what is installed is
-not the version the lock pins, no copy is named or refused (`check` reports it). A guard that cannot read its input
-allows. No lock, no enforcement.
-
-## Files in your project
-
-| file | committed | written by |
+| path | what | installed |
 |---|---|---|
-| `hunsu.json` | yes | you (via `init`, `add`, and by hand for `engines`, `resolutions`, `local-hooks-ok`) |
-| `hunsu.lock.json` | yes | `lock` — the resolved snapshot: versions, skills, hooks, engine versions found, warnings |
-| `hunsu-judgments.json` | yes | the judge round's verdicts per situation, fingerprinted by the members' text — the file the judge gate reads (`compose` stops without it; the lock's `judge` line only records the outcome); `hunsu-conflicts.md` is its rendering (`judge render`, not committed) |
-| `.claude/settings.local.json` | no (`init` and `dev` add it to `.gitignore`; `check` fails if it is committed) | `dev` — the working sources this machine runs instead of the manifest's copies |
-| `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine; by hand, `local-hooks-ok` for user-level hooks that are only yours, and `hosts` when this machine runs one host |
+| `plugin/hunsu.py` | the engine and its CLI | yes |
+| `plugin/judge_worker.py`, `plugin/hostcall.py` | the judge worker and the host call it runs through (vendored: the same `hostcall.py` in mangsang, dwitbuk and hacheong) | yes |
+| `plugin/skills/compose/SKILL.md` | the shared workflow for both hosts | yes |
+| `plugin/commands/*.md` | Claude Code slash commands, one engine action each | yes |
+| `plugin/hooks/` | `hooks.json` (Claude Code), `codex.json` (Codex, materialized by `lock`), the four hook scripts | yes |
+| `plugin/plugin.json`, `plugin/.claude-plugin/plugin.json`, `plugin/.codex-plugin/plugin.json` | the manifests | yes |
+| `plugin/README.md`, `plugin/LICENSE` | the usage manual and the license | yes |
+| `.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json` | the catalogs, selecting `./plugin` | no |
+| `hunsu.py`, `judge_worker.py`, `hostcall.py` | source-checkout compatibility wrappers: run or import the payload's file of the same name | no |
+| `AGENTS.md`, `CLAUDE.md`, `README.md`, `LICENSE` | this checkout's guidance and documents | no |
+| `hunsu.json`, `hunsu.lock.json`, `hunsu-judgments.json` | this checkout's own agent environment | no |
+| `test_hunsu.py`, `test_hostcall_env.py` | the tests | no |
+| `plan/`, `mangsang/`, `reviews/`, `.chongdae/` | contracts, the concept net, review and run records | no |
 
-## Commands
+The payload has no implementation dependency on this checkout: it imports nothing outside `plugin/` and needs none of
+the root's files to run — it reads a user's project records and the host's settings as data, as any installed plugin
+does. Nothing in it is a symlink. A runtime file goes into `plugin/`; a test, record or instruction file stays at the
+root. The three root wrappers are one thin text that keeps this checkout's earlier entry points working: each puts
+`plugin/` first on `sys.path` and runs the payload's file of its name as a command, or, imported, makes that file the
+module itself — so `import hunsu` at the root is the module the payload's hooks import, and a monkeypatch on it reaches
+the runtime. They hold no implementation; a change to hunsu's behavior is a change under `plugin/`. hunsu itself resolves a link or a `directory`
+marketplace at a repository root to its `plugin/` and never to the checkout around it (see `link` in the
+[manual](plugin/README.md#link--unlink)); plugins in the older root layout keep resolving.
 
-Ten are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin>`, `/hunsu:check`, `/hunsu:outdated`,
-`/hunsu:policy`, `/hunsu:role`, `/hunsu:capability`, `/hunsu:lock`, `/hunsu:compose`; `remove`, `judge`, `install`, `link`/`unlink` are the engine's (`python3 <plugin root>/hunsu.py …`).
-The `compose` skill is the same flow driven by the agent.
+### Entry points from the source tree
 
-### `survey`
+From the repository root, against a disposable target (the root wrappers take the same commands: `python3 hunsu.py …`,
+`python3 judge_worker.py …`):
 
-everything that runs for this project on this host: plugins (version, source), skills, hooks, SessionStart modes
-
-### `init`
-
-empty manifest; `.gitignore` entry for the local file
-
-### `add <plugin>`
-
-record version and source from the survey. Local marketplace → `unpublished` + link. `--take-content "why"` when a
-release was rewritten under its own version: the content is taken as that version's, the reason recorded in the
-manifest, and `check` accepts exactly that content
-
-### `check`
-
-manifest vs this machine. `error`: missing/wrong-version plugin, engine below floor, runtime a hook needs is not on
-PATH, a skill name provided by two plugins with no resolution *when the project locks without a judge* (`"judge":
-"skip"`) — otherwise a shared name is the judge's question: calling is never ambiguous (`plugin:skill`), and a name is a
-weak proxy for a shared situation (`design:review` and `code:review` share a name and nothing else); a fresh judgment
-that found no conflict between them needs no resolution, and one that did asks for its situation's. `warn`: unpublished source, duplicate hook
-registration, user-level hook not in the manifest (one line per script however many events it is on, with the file it
-runs on this machine), a user skill (`~/.claude/skills/<name>`) not in `local-skills-ok`, a plugin enabled here but not in
-the manifest whose hooks run for this project (`unmanaged plugin`; its skills are refused, its hooks are not), worker
-roles (an argv with `{request}`) on a host whose sandbox lacks a capability nobody decided — neither in `capabilities` nor
-covered by a `<role>@<cap>` alternate — as one line naming the roles and both answers as commands (read from `hunsu.json`
-alone, so it shows even while plugins are missing; a warning, so `lock` is not blocked; the SessionStart line counts it), `hunsu.local.json` not ignored by git (an `error` when it is committed). `info`: a pinned plugin behind a release available here (`plugin X is behind: pinned 1.12.2; the
-marketplace M lists 1.13.0 (local copy)`, or a linked checkout's version — no network: a marketplace copy is as fresh as
-its last `claude plugin marketplace update`; the session's first line counts them), links, extra
-plugins, machine-bound paths, roles declared with chongdae locked and no `reviewer` (every run then ends with its
-record unread — chongdae records it as each run's non-claim; here it is said once, where it is decided). Exit 1 on errors. `--remote` runs `outdated` after it.
-
-**Hosts and the roles' workers.** By default this machine runs every host `engines` names (`claude-code`, `codex`): the
-shared mixed configuration, where a session on one host may hire workers on the other. A machine that runs one host says
-so in `hunsu.local.json` — `"hosts": ["codex"]` (never committed) — and the other host is then not probed at all: neither
-`check` nor `lock` runs its `--version`, `check` says so in one `info` line, and the lock's `engines` keeps its key as
-`null` (not probed, not missing). A host a plain role's worker runs on, or that a plugin's own `engines` names, is probed
-whatever the profile says. A profile that does not read — not a list, an empty list, or an entry
-that is not `claude-code` or `codex` (a misspelling, a nested list, an object) — is an `error` and `lock` refuses; until it
-reads, every host `engines` names is checked, so a broken profile never skips a probe. The overlay never hides a host the
-project needs. A role's worker host is read from the argv a runner
-would spawn: an argv as written, `plugin:role` resolved first to what the plugin declares (`{host}` is this host; a fixed
-`--host` stays); `session` and `native:` have none. A **plain role** is hired for every task of its kind, so its host is
-required: left out by `hosts`, or its executable not found here, is an `error` naming the roles, and that host's floor is
-checked whatever `hosts` says; a host the plain roles run on that `engines` does not name asks for a floor (`warn`). A
-`<role>@<cap>` **alternate** is hired only for a task that requires those capabilities: its host left out or not found is a
-`warn`, never an error, and does not make that host's engine required — a task that requires those capabilities cannot run
-on this machine until the project is reconfigured explicitly. hunsu moves no role to another host, model or provider, and
-removes no alternate (without one, chongdae would send such a task to the plain role). An argv in hunsu.json whose
-`{plugin:NAME}/<file>` the enabled copy lacks is an `error` for a plain role, a `warn` for an alternate. Without `hosts`, a host engine not
-found here says how to write it when no plain role runs there.
-
-**Codex hooks.** Where Codex runs anything here (a host of this machine, a plain role's worker host, an alternate's host
-`hosts` does not leave out, or the host `check` runs on), `check` reads the project's `.codex/hooks.json` from either host
-and names each hook whose program or script is gone. The command's words are taken apart as a shell would split them, never
-run: an absolute first word or script path must exist (a quoted path with spaces is one path; only a leading `~`, `$HOME`
-or `${HOME}` is expanded), while a word with any other variable, a glob, a substitution or a separator, the code after
-`-c`, and a command whose quotes do not close are left alone. In a group `lock` generated (its provenance says so) it is an
-`error`, and what a Codex `lock` would do about it is decided from the groups it would write next, rendered from the
-copies Codex has installed: a path that render no longer names, while every path it names is here, is repaired by
-`hunsu lock` on Codex (`AGENT_HOST=codex` from a shell), which regenerates hunsu's groups, drops obsolete ones and keeps the
-project's own — `lock` and `compose` on Codex do not stop for exactly those findings, and a Claude Code `lock` refuses with
-that command. A path the installed plugin still generates (an absolute interpreter or an external script this machine
-lacks, or a file its copy lacks: reinstall) blocks every lock until it is here, whatever newer copies the cache holds; so
-does a repair whose render names a missing path itself, and on Codex any path that render names and this machine lacks,
-with or without a hooks file yet — a first Codex `lock` never writes a hook that fails. A file of the wrong shape (or an
-unreadable provenance) is an error on Claude Code and an exit-1 message on Codex, never a traceback. In any other group it is a `warn`: the project's own group,
-which `lock` keeps — one naming a copy in the Codex plugin cache is likely a group generated before hunsu recorded which
-groups it wrote (1.15.1), to remove by hand. (guin-site, 11-01: generated groups still named a removed 1.x copy and Codex
-prompts were blocked until a Codex `lock` regenerated them; nothing had said so.)
-
-A version skew between this machine and the manifest (`plugin X: manifest A, host B`), a plugin behind a release, and the
-stale-session line say the way out as numbered steps, each only when it is owed, in this order: `claude plugin marketplace
-update M`, `claude plugin update X@M --scope project` (in the project), restart the session (a `/clear` does not reload
-plugins), `hunsu add X`, `hunsu check` and a `--stale` judge round for what it calls stale, `hunsu lock` — committed with
-`hunsu.json` inside a run, like any change to the environment. On Codex the first two are `codex plugin marketplace upgrade
-M`, which refreshes this machine's Git snapshot of the marketplace and the plugins installed from it, and a verification
-that the installed copy is the intended release — its version, and the revision its `.codex-marketplace-install.json`
-receipt names, and its files compared with the release's (`check` compares content only with what a lock recorded for the
-same version) — before the rest; an upgrade takes what the marketplace publishes now and by itself proves no version.
-`codex plugin remove` + `add` is not part of an ordinary update — the upgrade has refreshed the copy already: it is for a
-copy `check` finds corrupted (reinstall) and, through `install --refresh`, for a linked development source, which is the
-step `outdated` names for a linked plugin. After any of them the generated Codex hooks name the old copy until the `hunsu
-lock` step, run on Codex, regenerates them.
-
-`check` reads project data without writing project state, but rendering role prompts and modes may need temporary
-scratch files; `--remote` also needs scratch space for marketplace clones, and the mutation lock that every command
-changing the project (`init`, `add`, `remove`, `install`, `link`/`unlink`, `dev`, `capability`, `role add`, `compose`,
-`lock`, `judge`) takes first lives in a temporary directory. Where that space is unavailable (a completely read-only sandbox can
-give none), the command stops nonzero with `no writable temporary directory` and what needed it: no summary line, no
-findings document, nothing judged or written; the SessionStart line says `check` could not complete. Set `TMPDIR` to a
-writable directory or use a sandbox that allows writing there (Codex `workspace-write`).
-
-### `outdated`
-
-read-only, and the one command that asks the network: per locked plugin (the lock's, else `hunsu.json`'s) its locked
-version, what is installed for this project, this machine's copy of the marketplace, and what the marketplace publishes
-now — with the steps above when something is owed. A git marketplace is read by a shallow, blob-less clone of its
-`origin` into a temp directory, deleted after: the copy the host installs from, the plugin cache and the install records
-are not touched (`claude plugin marketplace update` stays the step that moves them); a directory marketplace is what is
-there. A marketplace that cannot be reached is said on its plugins' lines (`published ?`), and the rest are still asked;
-git never prompts for credentials. Install records of the same plugin under another marketplace in
-`installed_plugins.json` are named: one that applies to this project (a second copy that can load here) with the
-uninstall that keeps the lock's, one for other projects only as not this project's. Writes nothing. Exit 0
-
-### `policy`
-
-read-only: this project's resolutions by situation, for a session mid-way or a person — so nobody opens `hunsu.json`
-and `hunsu-conflicts.md` by hand to learn what was decided and on whose word. Per situation: the line the SessionStart
-hook prints (from `hunsu.lock.json` — what was locked is what sessions get; an `accept` or `note` the line cuts follows
-whole), and who settled it (from `hunsu.json`, where declarations are read: `reviewed` by a name, `delegated:` the
-judge's reason, unreviewed, or written by hand). Where the two files differ it says which it read: a resolution not yet
-locked, one gone from `hunsu.json`, a rule changed since the lock, or one settled again since. Under an unreviewed
-resolution, the conflict it answers: each finding for a person with the members' sentences and what the judge proposed —
-a person judges that, not the rule alone (asked to show the rulings, a session put the five rules as yes/no questions
-with the recommended answer "yes", and recorded the yeses: sagoforce, 10-26) — and how to record what they said. A
-delegated resolution is not owed a person. Last, the judged
-situations (`hunsu-judgments.json`) with a finding for a person and no resolution; whether those judgments are current
-is `check`'s to say. Exit 0
-
-### `role add` / `role list`
-
-a role's capability alternates. chongdae hires `<role>@<cap>[+<cap>]` from the lock's `roles` for a task that requires
-those capabilities (`nitpick@loopback`: the same member on a worker adapter modeled as allowing a local port),
-and when a member lacks one it asks the person whether to add it. Yes is one command:
-
-    hunsu role add nitpick@loopback --from nitpick --host claude [--model M] [--effort E] [--force]
-
-copies ROLE's provider from `hunsu.json` `roles` (an argv as written; `plugin:role` materialized the way `lock` does,
-`{host}` filled with HOST) into a new key, with `--host` replaced — or added, for a worker on the request/response protocol
-(`{request}` in its argv) that has none. `--model` and `--effort` are dropped unless given, and the output says so: a model
-named for one host is not valid on another. `--from` defaults to NAME's role. Refused, writing nothing: ROLE absent,
-NAME@CAP already there (unless `--force`), a `session` or `native:` role (no worker whose host could change), a command
-that is neither a worker nor has a `--host` (hunsu cannot tell how it would run elsewhere — write that one by hand).
-Writes `hunsu.json` only and prints the new entry and the next step, `hunsu lock`. `role list` (read-only): each role, a
-short line for its provider (member, host, model, effort), its alternates under it, and the keys where `hunsu.json` and
-the lock differ. Exit 0; `add` exits 1 on a refusal. `role add` is also the project's answer for those capabilities: it
-records `"capabilities": {"<cap>": "alternates"}` (see `capability`), and says so when HOST's sandbox lacks CAP too
-
-### `capability <cap>.. --session | --alternates [--host H [--model M] [--effort E]]`
-
-the project's answer, asked once at setup so a run never stops to ask: do hired hands need `loopback` (a local port: a
-dev server like `wrangler dev`) or the `network`? The current `SANDBOX_LACKS` table in `hunsu.py`
-models Codex workers as lacking both and Claude workers as lacking neither. This is a fixed routing assumption,
-not a live capability probe or a guarantee for every host configuration. `--session`: work a hired member's
-sandbox cannot do is the session's; `--alternates`: it is hired on a `<role>@<cap>` role. The setup answer is one
-command — `hunsu capability loopback network --alternates --host claude` adds `<role>@<caps>` on that host for every
-worker role on a host lacking them, by `role add`'s rules (argv copied, host swapped, `--model`/`--effort` dropped unless
-given), skipping roles an alternate already covers; without `--host` it records the decision only (`role add` records it
-too, for one role). Writes `hunsu.json` `capabilities`, and also `roles` when `--host` creates alternates.
-Chongdae reads the capability decision from the manifest; new role providers must be resolved with `hunsu lock`
-before use. Undecided or `session` → the session does such work; `alternates` with a `<role>@<cap>` role → hired there.
-
-### `lock`
-
-write `hunsu.lock.json`; refuses on errors, records warnings. Two kinds of field in it. Code reads: `plugins.*.version`
-and `.fingerprint` (`check`, chongdae's builder), `skills` and `denied` (the pre-skill hook), `resolutions` (the
-session-start line), `roles` (chongdae), `reporters` and `record-paths` (dwitbuk, hacheong), `settings` (dwitbuk's stop
-hook, with `hunsu.json` overriding). The rest — `judge`, `warnings`, `hooks`, `engines`, `skills-fingerprint`,
-`roles-declared`, `host`, `artifact-type`, `plugins.*.source`/`marketplace`/`linked` — is for the person reading the
-lock in a diff: what was found and where it came from (an `engines` value is `null` when nothing was found, or when this
-machine's `hosts` left that host out and nothing required it, so it was not probed — `check` says which). Nothing decides on them; do not cite them as a mechanism.
-
-`.fingerprint` is the installed copy's content: every file's path and bytes (CRLF read as LF), leaving out `__pycache__/`,
-`.git/`, `*.pyc`, `.DS_Store`, the host's `.in_use` marker, and the receipt Codex's marketplace installer writes at a copy's
-root, `.codex-marketplace-install.json` (where it installed from, at which revision) — so one release installed by Claude
-Code and by Codex is one content. Only that root file is left out: the same name deeper in the tree, any other `.codex-*`
-file and other dotfiles are content. A lock written before this rule from a copy that carried the receipt (a lock written
-on Codex) hashed it in: `check` now says `content differs` for that plugin although the payload did not change, and
-nothing migrates it — verify the installed copy against its release, then `hunsu lock` again (`add --take-content` is for
-a release rewritten under its version, not for this). A lock written from a copy without the receipt keeps its fingerprints.
-
-### `compose`
-
-the whole flow: init → add → engines → check → capabilities → judge → lock, stopping at each human decision with exit 2
-and a `decision:` line. The capability question (do hired hands need a local port or the network?) is asked here, once,
-with both answers as commands — never mid-run. Re-run after answering. `/hunsu:compose` runs it
-
-### `remove <plugin>`
-
-drop a plugin and its link; resolutions that still name it are listed — the judged set changed, so judge again
-
-### `judge request` / `judge consume`
-
-conflict judgment — see below
-
-### `install`
-
-the second machine: for each plugin in the manifest that is missing here, `claude plugin marketplace add` + `claude
-plugin install <plugin>@<marketplace> --scope project`, then tells you to `check`. An `unpublished` plugin installs
-from its `hunsu link <plugin> <marketplace dir>` on this machine, or not at all. A plugin present at another version
-is reported as drift, not reinstalled. `--refresh <plugin>…` (or `all`) re-snapshots a *linked* plugin — Claude Code:
-uninstall + install at project scope; Codex: `plugin remove` + `plugin add` — so an edited or bumped source reaches
-the copy the host loads. (Claude Code loads a `directory` marketplace's plugins in place, so there the refresh only
-updates the host's record.)
-
-### `link` / `unlink`
-
-this machine only
-
-### `dev <plugin>` / `dev --off <plugin>`
-
-this machine only: run a plugin's working source in this project — to try an unreleased change where the committed
-settings install the released one. Enables `<plugin>@<local marketplace>` at local scope in
-`.claude/settings.local.json` (the host's machine-local settings, never committed) and switches the manifest's copy
-off there; recorded in `hunsu.local.json`. `check` reports it as in development, not as drift; `lock` refuses until
-`--off`, so a lock never names unreleased content. A trial is not committed in the project: what was changed to try it
-is reverted (or it runs in a throwaway copy), and the project's commit that uses the change follows the release —
-`--off`, install, `lock`. While any plugin is in development here, the manifest's `dev-settings` are this machine's
-settings overlay (below); the last `--off` takes back what it applied
-
-## Conflicts between skills
-
-Two skills conflict when following both in the same situation gives contradictory behavior or duplicated authority:
-**overlap** (both claim the work in one situation — a `review` and a `pr-check` that both answer "review this"; two skills that only share a name, a design review and a code review, do not), **contradiction** (one instructs what
-the other forbids —
-a standing mode's "never stall, pick a default" against a skill's human-confirmation gate), **premise** (one assumes
-what the other forbids).
-The agent does not stop at a conflict; it improvises a compromise that differs per session. That is intent nobody
-defined, and the manifest is where intent lives.
-
-hunsu does not judge meaning. It packs the question for a judge the host runs (a fresh, read-only session with a fixed
-answer schema) and validates the answer:
-
-1. `judge request --out DIR` — stage 1: names + descriptions of the locked skills, the roles' worker prompts and the
-standing modes → the judge groups them by the **situation** they claim (`cluster-response.json`).
-2. `judge request --out DIR --groups DIR/cluster-response.json` — stage 2: one packet per group with each member's
-full text → findings with **quotes from each member**, a reason, and a proposed resolution.
-3. `judge_worker.py --request F --response F [--host claude|codex]` runs one packet.
-4. `judge consume --dir DIR` — rejects findings without quotes, with a quote that is not in the member's text (whitespace aside; members travel whole, never cut), with a quote of a mode that names one state (a run id `run-YYYYMMDD-HHMMSS-xxxx`, a timestamp, a count such as "1 task(s) open" or "errors 1" — the reason asks for the mode's sentence that holds in every state), or with unknown members, writes `hunsu-judgments.json`
-(each situation with a fingerprint of its members' text — a version bump that changes no text stales nothing) and
-`hunsu-conflicts.md` (what was found, the evidence, the proposals — for a human to read).
-5. Each finding carries a `class` — how much it asks of a person. `authority`: the members diverge on who decides, a
-person's confirmation, or an action hard to undo (commit, delete, publish, install, spend). `sequenced`: one member's text
-already says how it yields ("writes go through a run"). `not-co-active`: the two never apply in the same moment.
-`duplicate`: either gives the same result. Every class but `authority` stands on `class_quote`, a sentence hunsu finds
-in that member's text; no class, an unknown one, or a sentence not there is `authority` (fail closed). Measured on
-2026-09-28: three planted conflicts (a "never commit" mode against a skill that commits its review; two differently
-named review skills; "ask before any decision" against a worker told to ask no one) all came back `authority`; of the
-six findings a person had resolved on a walk-through project, all with accept/order, four came back settled.
-You write `resolutions[<situation>]` for the `authority` ones. `check` fails for a situation with an `authority`
-finding and no resolution; the same finding (members and quotes) in another situation is covered by one resolution.
-A rejected finding (no quote, a quote not in the text — JSON escapes and whitespace aside) is a `check` warning: a real
-conflict may be among them. `lock` carries
-the resolutions, and the SessionStart hook **materializes** them: one line per situation in the session's first
-context ("reviewing a change: use dwitbuk:review; never other:review", `[unreviewed]` when a proposal was applied
-unread). `deny` is also enforced by the sentinel at call time; `use`, `order`, `accept` act through these lines.
-Measured: the same request reached for a different skill with the line than without, 2/2 each way.
-6. Later, a member's text changes (its SKILL.md, a worker's prompt, a mode's script or command): only the situations
-it is a member of go stale. A judgment is about text, so a version bump that changes no member's text stales nothing —
-a patch release costs no judge round. Each situation records every member's identity on its own (`member-fingerprints`)
-and what the judge read of each mode (`modes-read`, the text it says in an empty project — below): a mode's identity is
-its script, but a script edited in a way that leaves its text as it was (chongdae 1.20.0 changed how its line counts open
-tasks) changed nothing the judge read, so it stales nothing — the hook is run to see, only for a mode whose script moved.
-What the judge read depends on the script alone: a run opened or closed, a review written, a check gone red stale nothing. A re-judge that finds the same findings (kind, members, quotes, class) keeps them word for word, their
-reason and proposal and the situation's `judged-by` with them; only what it was judged about is recorded anew — a
-judge words its reasons anew on every call, and a record rewritten with each rewording is a diff nobody can read. (Judgments made before this carry only a version fingerprint and stay valid by
-version until re-judged.) `judge request --out DIR --stale` writes packets for those alone; `consume` merges them over
-the old ones. Judgments made before 1.14 read each mode in the project itself, so a quote can be one session's line
-(guin-site 10239ce: "hunsu: environment differs from hunsu.json (errors 1 · …)", and a delegated reason that "names
-run-20261002-050435-e75b as the open run"). `check` warns of a finding whose mode quote names a run id, a time or a count,
-and of a delegated reason that does (`policy` marks it); nothing is rewritten — `--stale` re-judges those situations, and
-also one whose mode quote is a sentence the mode does not say in an empty project, saying which and why. A still-fits whose
-quote or reason names one state records no delegation (`reviewed: false`); a class sentence that does is refused (`authority`). A plugin that brings a skill no situation has seen needs a new cluster round (stage 1). If a re-judged
-situation's findings differ from what its resolution was written against, the judge's `resolution_verdict` decides. A
-still-fits whose quote is verbatim in the members' text and names no state replaces `reviewed` with a delegation record
-(`{"delegated": "judge <host> <model>: <why>"}`) for a resolution already reviewed — by a person, by hand, or by an earlier
-delegation — and leaves a proposal nobody has read at `reviewed: false`: the judge's word does not turn an unread proposal
-into approved history. Any other verdict marks the resolution `reviewed: false`. Either way it stays, and dwitbuk lists a
-`reviewed: false` one until a human re-reads.
-
-What the judge reads is what a session reads, never a script's name. A skill is its SKILL.md. The project's committed
-instruction files — `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md` — are modes (`file:<path>`, members of every
-situation, identified by their content); a situation judged with other modes than a session now gets (one added, one
-removed) is stale. A mode (a plugin's
-SessionStart hook) is the text it injects: hunsu runs the hook the way the host does — a `SessionStart` payload on
-stdin, `${CLAUDE_PLUGIN_ROOT}` resolved, `HUNSU_SURVEY=1` in the environment — and packs `additionalContext`, but in an
-empty project: a fresh temporary directory, no records, no git above it, as the payload's `cwd` and the hook's working
-directory. A hook that reports the project's state says what it says of a project with none, so the text is the same on every
-machine and at every moment, and the packet tells the judge it is the standing text. A hook does better to answer its
-standing text under `HUNSU_SURVEY=1` — what it can say in any state, as a template without live ids, times or counts
-(jokbo, dwitbuk and chongdae do; hunsu's own says what its line does, without a check's counts or the resolutions — those
-are the judge's own answers). Running the script beats a declared description: a declaration drifts from what the hook says,
-the empty project reads what it actually says. In the project itself, chongdae's line moved from "run … in progress" to
-"no run in progress" between two rounds and six of nine situations were re-judged for it, their quotes and reasons
-carrying the run's id as a standing fact (guin-site 10-15). A role (a plugin's `roles` argv,
-the worker a runner starts) is the prompt that worker is sent: hunsu asks the argv itself with `--prompt-only` on a
-sample request, and packs the answer as member `plugin:role`. A worker inherits the project's modes, so a mode that
-says "ask the user" beside a role that says "ask no one" is a contradiction the judge can now quote from both sides.
-
-A first judgment is rough by design; refine when a real conflict shows up. Modes are members of every situation, so
-with a mode every group is judged (cost: 1 + groups calls).
-
-## Manifest
-
-```json
-{
-  "engines": {"claude-code": ">=2.1", "python": ">=3.11", "node": ">=20"},
-  "plugins": {"hacheong": {"version": "1.1.0", "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hacheong"}},
-  "resolutions": {"review": "dwitbuk"},
-  "local-hooks-ok": ["my-observer.py"]
-}
+```
+python3 plugin/hunsu.py --help
+python3 plugin/hunsu.py check --target /tmp/scratch-project
+AGENT_HOST=codex python3 plugin/hunsu.py survey --target /tmp/scratch-project
+echo '{"cwd": "/tmp/scratch-project"}' | python3 plugin/hooks/session_start.py
+python3 plugin/judge_worker.py --request REQUEST.json --response RESPONSE.json --host claude
 ```
 
-- `engines` — floors the team requires. `lock` records what this machine actually had. A plugin may declare its own
-  floor (`"engines": {"python": ">=3.11"}` in its plugin.json, npm's convention); `check` then requires the team's
-  floor to cover it and this machine to meet it, so a plugin whose workers need a newer runtime fails as one line
-  here, not as a traceback in a worker later. The six active products (hunsu, chongdae, mangsang, jokbo, hacheong,
-  dwitbuk) declare `python >=3.11` in the root, Claude and Codex manifests of their source; an installed copy of an
-  earlier release may still declare `>=3.9`, and that is the floor `check` reads for it. This is the supported minimum,
-  not a claim that every runtime path has been tested on each newer Python version. The Codex survey reads `~/.codex/config.toml` with
-  `tomllib` (3.11+); on an older interpreter it refuses with that reason instead of a traceback.
-- `roles` — the project's declaration of who does what: `{"implementer": "hacheong:build", "verifier": "dwitbuk:eyes",
-  "planner": "session"}`. A provider is `session`, an argv (`["python3", "{plugin:NAME}/worker.py", "--request",
-  "{request}", "--response", "{response}"]`), or `plugin:role` — the last only when that plugin's plugin.json declares
-  the role's argv (`"roles": {"build": [...]}`, `{host}` filled with this host's name at lock). Or
-  `native:plugin:role`: the same declared role, run by the host's own subagent at the session's hand (see chongdae's
-  providers) — locked as `{"native": argv}`. A skill id is not a provider: a skill is text the session agent reads, a
-  runner spawns argv. hunsu does not assign roles; `check` verifies each declaration is real, `lock` writes `roles` as
-  argv (what a runner spawns) and `roles-declared` as written. A key `<role>@<cap>[+<cap>]` is a capability alternate of
-  `<role>` (chongdae hires it for a task that requires those capabilities); `role add` writes one from an existing role.
-- `capabilities` — the project's answer for what a hired sandbox cannot do: `{"loopback": "alternates", "network":
-  "session"}` (`capability`, `role add`). chongdae reads it from here.
-- `resolutions` — keyed by situation. Shorthand for a same-name overlap: `"retro": "dakdol"` or `"deny"`. Full form,
-  for a judged situation:
-  `{"use": "plugin:skill", "deny": ["plugin:skill"], "order": ["plugin:skill", "plugin:mode"], "accept": "why it is fine", "reviewed": false}`.
-  `deny` and `use`-on-a-name reach the lock's `denied` list, which the PreToolUse hook enforces. `order` and `accept` are facts for the agent, not enforced. A member may also be a role's prompt (`hacheong:build`, judged as `plugin:role`): naming one is a fact for the agent too — the hook guards skill calls, not the workers a runner starts.
-  `"reviewed": false` marks a proposal applied without a human reading it — allowed, never hidden.
-- `judge: "skip"` — lock without a conflict judgment. Recorded in the lock as `judge: skipped`.
-- `local-skills-ok` — names of the person's own skills (`~/.claude/skills`) that may be used here; the sentinel refuses
-  any other. In `hunsu.local.json` when it is only theirs, here when the team uses it.
-- `local-hooks-ok` — script names of user-level hooks that may run here without being part of the project (observers),
-  or `plugin:NAME` for a plugin enabled on this machine but not in the manifest.
-  A hook that is only yours — a terminal app's agent hooks, a personal logger — goes in `hunsu.local.json` under the
-  same key instead: acknowledged on this machine, never committed. The session reads what such a hook runs first; one
-  that adds nothing to the session (prints nothing or `{}`, never blocks) it lists there itself and says so in a line —
-  the person is asked only about what can change the session (sagoforce 10-26: an Orca hook printing `{}` stopped the
-  session twice for a person who said to ignore it if it could be ignored).
-- `settings` — the team's switches for its products (e.g. `{"chongdae": {"outside-runs": ["content/"]}}`). A product
-  reads its own from this file, so a switch works as soon as it is written — also while a product's working source is
-  tried with `dev`, when `lock` refuses. hunsu does not read them; `lock` copies them into the lock as the record of
-  what was declared then.
-- `dev-settings` — what a trial changes, declared by the project the way a package declares dev dependencies (e.g.
-  `{"chongdae": {"commit-records": false}}`: a working source's records are written, not committed). hunsu names no
-  product; `dev` applies these as this machine's overlay and `dev --off` takes them back.
-- `hunsu.local.json` `hosts` — the hosts this machine runs for the project (`["claude-code"]`, `["codex"]`; never
-  committed). Absent, every host `engines` names. A host left out is not version-checked unless a plain role's worker runs
-  on it (see [`check`](#check)). hunsu.json has no `hosts`: the team's hosts are its `engines`.
-- `hunsu.local.json` `settings` — this machine's overlay over `settings` (never committed, like `.env.local` over
-  `.env`): a product reads its own from hunsu.json and lets this machine's override it.
-- `reporters` — name → argv of the commands that report findings for the reviewer (`dwitbuk/findings@1`), e.g.
-  `["python3", "{plugin:chongdae}/chongdae.py", "report", "--since", "{since}"]`. Locked; dwitbuk reads them from the
-  lock. hunsu's own is `check --findings` (drift, unread resolutions), marked `"standing": true`: it reads the
-  environment as it is now, so a drift it stops reporting is gone, not owed.
+Replace the placeholders with real paths; `HUNSU_CLAUDE_DIR` and `HUNSU_CODEX_DIR` point the engine at a fake host
+instead of `~/.claude` and `~/.codex`, as the tests do.
 
-## Codex and the sandbox
+### Tests
 
-Nested `codex exec` workers have failed in tested `read-only` and `workspace-write` sessions with
-"failed to initialize in-process app-server client: Operation not permitted". The adapter's sandbox detection
-reports this limitation; it does not probe whether a particular host configuration can launch a nested process.
-Use a worker runner with the required permissions or the host's native subagents (see chongdae's `native:`
-providers). A chongdae write guard coordinates project writes; it does not replace a host security sandbox.
-`check` run from inside a detected sandbox says so (`session: sandboxed …`) when a role's worker runs on Codex (a
-Claude worker, a plain command, `session` and `native:` do not), without probing the session and without recommending any
-flag that turns a sandbox off.
-A `read-only` sandbox may also give no writable temporary directory, which `check` needs to render roles and modes; it then
-stops with `no writable temporary directory` (see [`check`](#check)) instead of judging without them.
-Codex snapshots a plugin when it is added, and a named `codex plugin marketplace upgrade` refreshes a Git marketplace's
-snapshot and the plugins installed from it; `install --refresh` re-snapshots a linked development source (remove + add).
+```
+python3 test_hunsu.py
+python3 -m unittest test_hostcall_env.py
+```
 
-## Limits
+Both put `plugin/` on `sys.path` explicitly and fail if `hunsu` or `hostcall` came from anywhere else. `test_hunsu.py`
+builds fake hosts under temporary directories — every `check` error branch, `compose`'s gates, the sentinel's allow/deny,
+both SessionStart states and the stale-session line fire once; `outdated` runs against local bare repositories standing
+for the publishers, with no network. It also checks the payload itself: `plugin/` holds exactly the runtime files, the
+five version values agree and both catalogs select `./plugin`; and a copy of `plugin/` alone, in a temporary directory
+outside the repository, runs `--help`, `init`, `add`, `check`, `lock`, its hooks and the judge worker without reading a
+file of this checkout. Fresh interpreters, without the suite's `sys.path` set-up, check the root wrappers: the same output
+and exit code as the payload's files, the payload's modules on import, one module object with the hooks' import, and
+monkeypatches on a root import reaching the runtime. No test reads your live `~/.claude`, `~/.codex` or plugin cache. In the umbrella checkout,
+`tools/same-file.py` says when the vendored `hostcall.py` copies drift.
 
-- Hunsu reports user-level hooks; it does not disable them for a project. Project-level hooks are managed here.
-- The sentinel judges plugin skills (`plugin:name`) and the person's own skills, which it knows by their file
-  (`~/.claude/skills/<name>/SKILL.md`). Any other name without a prefix is a host built-in (`code-review`, `simplify`,
-  `loop`) or the project's own skill and passes — built-ins are never guessed at. The person's own CLAUDE.md is said by
-  `check`, not judged: its text is theirs and would be quoted into a committed record.
-- Without a judge round (`"judge": "skip"`), skill overlap is detected by name only: two differently named skills that do the same thing are not caught, and two same-named skills for different situations need an `accept`. With a round, the judge decides both.
-- The host CLI installs whatever version a marketplace currently has; `install` cannot pin (verified: `claude plugin
-  install` takes no version). `check` reports the drift; a human either takes the new version into the manifest
-  (`hunsu add <plugin>` again, then the stale situations are re-judged) or the marketplace owner pins.
-- `install` has been exercised on a fresh host (`CLAUDE_CONFIG_DIR`).
-- On Codex the PreToolUse hook is declared with the same `Skill` matcher; whether Codex reports skill invocations
-  under that tool name is unverified.
-- On Codex the shell-command hook is declared with matcher `*` and reads `tool_input.command` (a string, or argv joined);
-  that Codex passes its shell commands that way is unverified.
-- On Codex the UserPromptSubmit hook (`hooks/codex.json`, materialized by `lock`) is declared the same way; that Codex runs
-  it and takes its `additionalContext` is unverified. There `${PLUGIN_ROOT}` is resolved at lock time, so the hook runs from
-  the copy this machine locked; a lock pulled from someone else that pins another hunsu is said the same way.
-- `compose` stops at every human decision (exit 2). It does not decide; it refuses to advance. Its gates: plugins →
-  engines → check errors → conflict judgment (or `judge: skip`) → user-level hooks and skills, unmanaged plugins → lock.
-- Both judge worker paths have run: Claude Code (14 calls on a 5-plugin project, 27 findings, 0 rejected) and Codex (8
-  + 2 calls on the same products, 7 situations, 1 finding).
-- Hosts: Claude Code (`~/.claude`, or `CLAUDE_CONFIG_DIR`; `HUNSU_CLAUDE_DIR` for tests) and Codex
-  (`~/.codex/config.toml` and its plugin cache; selected by `AGENT_HOST=codex`, `HUNSU_CODEX_DIR` for tests). On
-  Codex, which no longer runs a plugin's own hooks, `lock` materializes the locked plugins' `hooks/codex.json` into
-  the project's `.codex/hooks.json` (machine paths; gitignored; run `codex` with hook trust or
-  `exec --dangerously-bypass-hook-trust`). Existing project hooks, later additions, and edits survive each lock; only
-  the previously generated groups are replaced. Their ownership is recorded in the file's supported `description`
-  field, published atomically with the hooks. Keep that generated description when editing hooks. Older generated
-  files have no ownership snapshot: migration removes exact matches to currently known plugin groups and preserves
-  unrecognized groups, which may include an old plugin hook that needs manual removal; `check` names one whose script is
-  gone (see [`check`](#check)). The survey reads Codex's own registry (`config.toml`: marketplaces,
-  plugins, the user's hooks) and its plugin cache.
+## Versioning and release
 
-- `judge_worker.py` starts its host session through `hostcall.py` — one host call for every worker of this family (hunsu's judge, mangsang's judge, dwitbuk's eyes,
-  hacheong's members), vendored: the same file in each plugin, since a plugin imports no other plugin. The umbrella checkout's `tools/same-file.py` says when the copies drift.
+Semver; a version names one content, and the content is `plugin/` (see the manual's
+[versioning](plugin/README.md#versioning) for patch, minor and major). Every change under `plugin/` — code, skill or
+command text, hooks, the usage README — bumps the version before it is used anywhere, equal in five places:
+`plugin/plugin.json`, `plugin/.claude-plugin/plugin.json`, `plugin/.codex-plugin/plugin.json`, and
+`.claude-plugin/marketplace.json` (`metadata.version` and the hunsu entry's `version`). `.agents/plugins/marketplace.json`
+has no version field; verify its name and `source.path`, and do not invent one. The version names the payload's content,
+so the root's development records, tests, documents and wrappers change no version. A catalog change that affects what a
+host installs or how it is delivered — the entry's source or name, anything a host reads to install — goes through the
+same version and release review as a change under `plugin/`.
 
-- **Where each product keeps its records.** A plugin's plugin.json may declare `records`: the paths it writes in a project
-  (directories end with `/`, files do not — chongdae `[".chongdae/"]`, mangsang `["mangsang/", ".mangsang/"]`, dwitbuk
-  `["reviews/", ".dwitbuk/"]`, hunsu its own five files). `lock` carries them as `record-paths: {plugin: [paths]}`, so a
-  product that must leave the others' records alone — a runner's touched files, a reviewer's diff, a builder's tree check —
-  reads one list from the lock instead of naming its siblings.
-
-- **How each product's records are read.** A plugin.json may declare `reads`: question kind -> argv (`file` with `{path}`,
-  `since` with `{since}`, `decision`; `{plugin:NAME}` and `{target}` as in roles). `lock` carries the declaring plugins'
-  as `reads: {plugin: {kind: argv}}`, so a reader (jokbo) runs a product's own read command without knowing the product.
-
-## Versioning
-
-Semver, and a version names one content: every change to the source — code, skill or command text, hooks, this README
-— bumps
-the version in all three manifests (`plugin.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`) and the
-marketplace entries before it is used anywhere. Hosts copy a plugin at install and do not look again while the version
-stands,
-so an unbumped edit is a copy nobody can tell from the old one. **patch**: behavior or wording, every interface
-unchanged.
-**minor**: a new command, skill, field, hook or artifact key; what exists keeps working. **major**: an artifact type,
-lock or record that other products read changes shape, or a supported Python or host version is dropped (an `engines`
-floor raised): a machine that ran the old release may not run the new one. hunsu 2.0.0 is such a release: it raises
-the `python` floor to `>=3.11` in all three manifests, dropping 3.9 and 3.10 (the 1.x root and Claude manifests declared
-`>=3.9`). hunsu's `check` fails a linked plugin whose source differs from the
-installed
-copy under one version; for a locally linked plugin, `hunsu install --refresh <plugin>` re-snapshots after the bump.
-
-### Release and adoption
-
-Documentation and shared instruction edits also need a patch bump when interfaces stay unchanged.
-Keep the version equal in `plugin.json`, `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
-and `.claude-plugin/marketplace.json` (both `metadata.version` and this product's `plugins[].version`).
-`.agents/plugins/marketplace.json` currently has no version field; verify its product name and source path,
-but do not invent a version field there.
-
-Before publication, run the relevant checks in **Self-check** for behavior changes; for documentation-only
-changes, verify links, command examples, imports and manifest consistency, plus `git diff --check`.
-Publish the checked commit using this repository's existing release convention. Publication does not update
-consumer installations: update the plugin through the host's supported workflow, reconcile the consuming
-project's declared environment and lock if managed, and start a new host session to apply the installation.
-Report publication, project adoption and live-host verification separately. Refreshing a locally linked
-plugin is not an update procedure for every remote installation.
-
-## Self-check
-
-`python3 test_hunsu.py` — a fake host under a temp dir; every `check` error branch, `compose`'s gates, the sentinel's
-allow/deny, both SessionStart states, and the stale-session line (mismatch, match, worker) fire once. `outdated` is tested
-against local bare repositories standing for the publishers — no network.
+Before publication, run the tests for behavior changes; for documentation-only changes, verify links, command examples,
+imports and manifest consistency, plus `git diff --check`. Publish the checked commit using this repository's existing
+release convention. Publication does not update consumer installations: update the plugin through the host's supported
+workflow, reconcile the consuming project's declared environment and lock if managed, and start a new host session to
+apply the installation. Report publication, project adoption and live-host verification separately. Refreshing a
+locally linked plugin is not an update procedure for every remote installation.

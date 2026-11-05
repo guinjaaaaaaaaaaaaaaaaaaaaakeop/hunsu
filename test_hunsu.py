@@ -6,14 +6,17 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+HERE = os.path.dirname(os.path.abspath(__file__))   # the development checkout: tests, records, the catalogs
+PLUGIN = os.path.join(HERE, "plugin")                # the installed payload: what a host copies — the engine and hooks under test
+sys.path.insert(0, PLUGIN)
 import hunsu  # noqa: E402
+assert os.path.dirname(os.path.abspath(hunsu.__file__)) == PLUGIN, "hunsu imported from %s, not the payload %s" % (hunsu.__file__, PLUGIN)
 
 
 def write(path, data):
@@ -766,7 +769,7 @@ def test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here():
         # the session's first line counts them
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
         env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)   # a normal session's hook, whatever the parent is (a worker's sandbox sets AGENT_WORKER)
-        out = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "session_start.py")], input=json.dumps({"cwd": h.target}),
+        out = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", "session_start.py")], input=json.dumps({"cwd": h.target}),
                              capture_output=True, text=True, encoding="utf-8", env=env).stdout
         assert "2 plugin(s) behind a release available here" in json.loads(out)["hookSpecificOutput"]["additionalContext"], out
 
@@ -1018,7 +1021,7 @@ def test_what_the_host_brings_that_the_project_did_not_decide_is_seen_and_gated(
         assert "user skill mine" in out and "unmanaged plugin zeta" in out and "Read the file each user hook" in out and "adds nothing to the session" in out, out
         # the sentinel: the person's skill is refused until acknowledged; a built-in and the project's own are not touched
         hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"skills": ["alpha:build"], "denied": []})
-        hook = os.path.join(HERE, "hooks", "pre_skill.py")
+        hook = os.path.join(PLUGIN, "hooks", "pre_skill.py")
         def call(skill):
             env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
             done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": h.target, "tool_name": "Skill", "tool_input": {"skill": skill}}),
@@ -1177,7 +1180,7 @@ def test_sentinel_allows_locked_denies_unlocked_and_resolved_away():
         run("add", "gamma", "--target", h.target)
         manifest(h.target, resolutions={"retro": "gamma"})
         assert run("lock", "--target", h.target)[0] == 0
-        hook = os.path.join(HERE, "hooks", "pre_skill.py")
+        hook = os.path.join(PLUGIN, "hooks", "pre_skill.py")
 
         def call(skill):
             payload = json.dumps({"cwd": h.target, "tool_name": "Skill", "tool_input": {"skill": skill}})
@@ -1366,7 +1369,7 @@ def test_policy_lines_materialize_every_resolution_shape_and_the_session_hook_ca
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
         env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)   # a normal session's hook, whatever the parent is (a worker's sandbox sets AGENT_WORKER)
         def hook(name, payload):
-            done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", env=env)
+            done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", name)], input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", env=env)
             return done.returncode, done.stdout + done.stderr
         code, out = hook("session_start.py", {"cwd": h.target})
         assert "hunsu policy" in out and "- building: alpha:build first, then plugin:beta" in out and '" policy` prints them again' in out, out
@@ -1501,7 +1504,7 @@ def test_session_start_hook_reports_both_states():
     with Host() as h:
         h.add_plugin("m1", "alpha", "1.0.0", ["build"])
         h.flush()
-        hook = os.path.join(HERE, "hooks", "session_start.py")
+        hook = os.path.join(PLUGIN, "hooks", "session_start.py")
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
         env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)   # a normal session's hook, whatever the parent is (a worker's sandbox sets AGENT_WORKER)
         done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": h.target}), capture_output=True, text=True, encoding="utf-8", env=env)
@@ -1527,7 +1530,7 @@ def test_a_session_running_other_plugins_than_the_lock_pins_is_told_at_every_pro
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
         env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)
         def hook(name, root, cwd=None, **extra):
-            done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", name)], input=json.dumps({"cwd": cwd or h.target}), capture_output=True,
+            done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", name)], input=json.dumps({"cwd": cwd or h.target}), capture_output=True,
                                   text=True, encoding="utf-8", env=dict(env, CLAUDE_PLUGIN_ROOT=root, **extra))
             assert done.returncode == 0, done.stderr
             return json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] if done.stdout.strip() else ""
@@ -1572,7 +1575,7 @@ def test_an_engine_is_run_from_the_copy_the_lock_pins_not_from_a_glob_over_the_c
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
         env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)
         def bash(command, **extra):
-            done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "pre_bash.py")], capture_output=True, text=True, encoding="utf-8",
+            done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", "pre_bash.py")], capture_output=True, text=True, encoding="utf-8",
                                   input=json.dumps({"cwd": h.target, "tool_name": "Bash", "tool_input": {"command": command}}), env=dict(env, **extra))
             return done.returncode, done.stderr
         c = h.cache.replace(os.sep, "/")
@@ -1607,7 +1610,7 @@ def test_an_engine_is_run_from_the_copy_the_lock_pins_not_from_a_glob_over_the_c
                      "D=%s/m1/beta/1.12.0; python3 $D/beta.py" % c):
             assert bash(fine) == (0, ""), fine
         for broken in ("[]", '{"tool_input": "x"}', json.dumps({"cwd": h.target, "tool_input": {"command": 5}})):   # a guard that cannot read allows
-            done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "pre_bash.py")], capture_output=True, text=True, input=broken, env=env)
+            done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", "pre_bash.py")], capture_output=True, text=True, input=broken, env=env)
             assert (done.returncode, done.stderr) == (0, ""), (broken, done.stderr)
         assert bash("python3 %s/m1/beta/1.9.1/beta.py" % c, HUNSU_SURVEY="1") == (0, "")
         os.remove(os.path.join(h.target, hunsu.LOCK))
@@ -2112,7 +2115,7 @@ def test_the_judge_reads_a_mode_in_an_empty_project_so_a_run_opened_or_closed_st
         # hunsu's own hook answers its standing text under the probe — no check's counts, no resolutions
         payload = json.dumps({"cwd": h.target})
         env = dict(os.environ, HUNSU_SURVEY="1"); env.pop("AGENT_WORKER", None)
-        out = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "session_start.py")], input=payload, capture_output=True, text=True, env=env).stdout
+        out = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", "session_start.py")], input=payload, capture_output=True, text=True, env=env).stdout
         text = json.loads(out)["hookSpecificOutput"]["additionalContext"]
         assert text.startswith("hunsu: at session start, `check` compares") and not hunsu.state_bound(text) and "errors" not in text, text
 
@@ -2229,11 +2232,11 @@ hunsu.load_json = paused
 open(os.path.join(target, name + '.started'), 'w').close()
 hunsu.set_link(target, name, '/checkout/' + name)
 """
-        first = subprocess.Popen([sys.executable, "-c", script, HERE, target, "alpha"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        first = subprocess.Popen([sys.executable, "-c", script, PLUGIN, target, "alpha"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         second = None
         try:
             await_file(os.path.join(target, "alpha.read"), first)
-            second = subprocess.Popen([sys.executable, "-c", script, HERE, target, "beta"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            second = subprocess.Popen([sys.executable, "-c", script, PLUGIN, target, "beta"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             await_file(os.path.join(target, "beta.started"), second)
             import time
             time.sleep(0.15)
@@ -2267,13 +2270,13 @@ def partial(data, fh, **kwargs):
 hunsu.json.dump = partial
 hunsu.set_link(target, 'new', '/checkout/new')
 """
-        child = subprocess.Popen([sys.executable, "-c", script, HERE, target], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        child = subprocess.Popen([sys.executable, "-c", script, PLUGIN, target], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             await_file(os.path.join(target, "partial"), child)
             assert hunsu.load_json(path) == before
             child.kill(); child.communicate(timeout=10)
             assert hunsu.load_json(path) == before
-            done = subprocess.run([sys.executable, os.path.join(HERE, "hunsu.py"), "link", "new", "/checkout/new", "--target", target],
+            done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hunsu.py"), "link", "new", "/checkout/new", "--target", target],
                                   capture_output=True, text=True, timeout=10)
             assert done.returncode == 0, done.stderr
             assert hunsu.load_json(path)["links"] == {"old": "/checkout/old", "new": "/checkout/new"}
@@ -2905,7 +2908,7 @@ def test_Q_scratch_diagnostic_check_in_a_subprocess_prints_no_traceback_for_eith
     with Host() as h:
         roots = scratch_project(h)
         for how in ("enoent", "eperm"):
-            done = subprocess.run([sys.executable, os.path.join(HERE, "hunsu.py"), "check", "--target", h.target],
+            done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hunsu.py"), "check", "--target", h.target],
                                   capture_output=True, text=True, encoding="utf-8", env=scratch_env(h, how), timeout=120)
             assert_scratch_diagnostic(h, "check", done.returncode, done.stdout, done.stderr, r"role|prompt", roots.values())
 
@@ -2933,7 +2936,7 @@ def test_Q_no_false_pass_check_findings_prints_no_findings_document_and_exits_no
         roots = scratch_project(h)
         before = project_bytes(h.target)
         for how in ("enoent", "eperm"):
-            done = subprocess.run([sys.executable, os.path.join(HERE, "hunsu.py"), "check", "--findings", "--target", h.target],
+            done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hunsu.py"), "check", "--findings", "--target", h.target],
                                   capture_output=True, text=True, encoding="utf-8", env=scratch_env(h, how), timeout=120)
             assert done.returncode != 0, (how, done.stdout, done.stderr)
             assert '"findings"' not in done.stdout and '"source"' not in done.stdout, "a failed reporter printed a findings document: " + done.stdout
@@ -3059,7 +3062,7 @@ def test_Q_entrypoints_the_session_start_hook_says_check_could_not_complete():
     with Host() as h:
         roots = scratch_project(h)
         before = project_bytes(h.target)
-        hook = os.path.join(HERE, "hooks", "session_start.py")
+        hook = os.path.join(PLUGIN, "hooks", "session_start.py")
         for how in ("enoent", "eperm"):
             done = subprocess.run([sys.executable, hook], input=json.dumps({"cwd": h.target}), capture_output=True, text=True,
                                   encoding="utf-8", env=scratch_env(h, how), timeout=120)
@@ -3229,7 +3232,7 @@ def test_Q_unread_visible_check_policy_and_the_session_line_still_say_unreviewed
         assert code == 0, out
         env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude)
         env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)
-        done = subprocess.run([sys.executable, os.path.join(HERE, "hooks", "session_start.py")], input=json.dumps({"cwd": h.target}),
+        done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", "session_start.py")], input=json.dumps({"cwd": h.target}),
                               capture_output=True, text=True, encoding="utf-8", env=env)
         text = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
         line = [l for l in text.splitlines() if "reviewing a change" in l]
@@ -3286,6 +3289,617 @@ def test_Q_reviewed_continuation_situations_whose_findings_did_not_change_are_no
             assert raw() == before, (kept, before, raw())   # not migrated, re-signed or rewritten
             assert "reviewed" in resolutions_of(h)["reviewing a change"]
 
+
+# ---------------------------------------------------------------- 2.2.0: the payload is plugin/, the root is the development checkout
+
+@contextlib.contextmanager
+def on_host(host):
+    saved = hunsu.HOST
+    hunsu.HOST = host
+    try:
+        yield
+    finally:
+        hunsu.HOST = saved
+
+
+def catalogs(base, name, source, version=None):
+    """Both catalogs at `base` naming `name` at `source`: Claude Code's as a string, Codex's as `{"source": "local", "path": …}`."""
+    write(os.path.join(base, ".claude-plugin", "marketplace.json"), {"name": name, "plugins": [{"name": name, "source": source, **({"version": version} if version else {})}]})
+    write(os.path.join(base, ".agents", "plugins", "marketplace.json"), {"name": name, "plugins": [{"name": name, "source": {"source": "local", "path": source}}]})
+
+
+def payload_at(root, name, version, skills=("build",)):
+    for d in (".claude-plugin", ".codex-plugin"):
+        write(os.path.join(root, d, "plugin.json"), {"name": name, "version": version})
+    write(os.path.join(root, "plugin.json"), {"name": name, "version": version})
+    write(os.path.join(root, name + ".py"), "print('the engine')\n")
+    for sk in skills:
+        write(os.path.join(root, "skills", sk, "SKILL.md"), "---\nname: %s\ndescription: does %s\n---\n" % (sk, sk))
+
+
+def repository(base, name, version, layout="subdirectory", skills=("build",)):
+    """A plugin's source repository. The 2.2.0 layout: the catalogs at the root select `./plugin`, the payload is under it, and
+    the development checkout around it holds what a host must never install — hunsu.json, its lock and judgments, tests, run and
+    review records, instruction files, the checkout's own skill. `layout="root"`: the layout before, where the root is the
+    plugin, records and all. Returns the payload's directory."""
+    payload = os.path.join(base, "plugin") if layout == "subdirectory" else base
+    catalogs(base, name, "./plugin" if layout == "subdirectory" else "./", version)
+    payload_at(payload, name, version, skills)
+    write(os.path.join(base, "hunsu.json"), {"plugins": {}})
+    write(os.path.join(base, "hunsu.lock.json"), {"plugins": {}})
+    write(os.path.join(base, "AGENTS.md"), "# Working on %s\n" % name)
+    write(os.path.join(base, "test_%s.py" % name), "assert True\n")
+    write(os.path.join(base, ".chongdae", "run-x", "state.json"), {"tasks": []})
+    write(os.path.join(base, "reviews", "review-x.json"), {"findings": []})
+    if layout == "subdirectory":
+        write(os.path.join(base, "skills", "dev-only", "SKILL.md"), "---\nname: dev-only\ndescription: the checkout's own\n---\n")
+    return payload
+
+
+def test_Q_resolution_a_repository_root_resolves_its_payload_never_the_checkout_around_it():
+    with tempfile.TemporaryDirectory(prefix="hunsu-layout-") as base:
+        sub, old = os.path.join(base, "sub"), os.path.join(base, "old")
+        repository(sub, "alpha", "1.0.0")
+        repository(old, "alpha", "1.0.0", layout="root")
+        only_codex, only_claude = os.path.join(base, "only-codex"), os.path.join(base, "only-claude")
+        repository(only_codex, "alpha", "1.0.0"); os.remove(os.path.join(only_codex, ".claude-plugin", "marketplace.json"))
+        repository(only_claude, "alpha", "1.0.0"); os.remove(os.path.join(only_claude, ".agents", "plugins", "marketplace.json"))
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                assert hunsu.linked_source(sub, "alpha") == os.path.join(sub, "plugin"), host
+                assert hunsu.linked_source(old, "alpha") == old, "the root layout keeps resolving (%s)" % host
+                assert hunsu.linked_source(only_codex, "alpha") == os.path.join(only_codex, "plugin"), "Codex's source.path is read (%s)" % host
+                assert hunsu.linked_source(only_claude, "alpha") == os.path.join(only_claude, "plugin"), host
+        # each host's own catalog decides first
+        split = os.path.join(base, "split")
+        repository(split, "alpha", "1.0.0")
+        payload_at(os.path.join(split, "codex-payload"), "alpha", "1.0.0")
+        write(os.path.join(split, ".agents", "plugins", "marketplace.json"), {"plugins": [{"name": "alpha", "source": {"source": "local", "path": "./codex-payload"}}]})
+        with on_host("claude-code"):
+            assert hunsu.linked_source(split, "alpha") == os.path.join(split, "plugin")
+        with on_host("codex"):
+            assert hunsu.linked_source(split, "alpha") == os.path.join(split, "codex-payload")
+        # the catalog names the payload and it is missing: nothing — not a leftover manifest at the root, not <link>/<name>
+        gone = os.path.join(base, "gone")
+        repository(gone, "alpha", "1.0.0")
+        shutil.rmtree(os.path.join(gone, "plugin"))
+        write(os.path.join(gone, "plugin.json"), {"name": "alpha", "version": "1.0.0"})
+        payload_at(os.path.join(gone, "alpha"), "alpha", "0.9.0")
+        # a source that is no directory of this marketplace: not taken, and nothing in its place
+        remote = os.path.join(base, "remote")
+        repository(remote, "alpha", "1.0.0")
+        write(os.path.join(remote, ".claude-plugin", "marketplace.json"), {"plugins": [{"name": "alpha", "source": {"source": "github", "repo": "org/alpha"}}]})
+        write(os.path.join(remote, ".agents", "plugins", "marketplace.json"), {"plugins": [{"name": "alpha", "source": {"source": "git-subdir", "url": "https://example.invalid/a.git", "path": "plugin"}}]})
+        payload_at(remote, "alpha", "1.0.0")
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                assert hunsu.linked_source(gone, "alpha") is None, host
+                assert hunsu.linked_source(remote, "alpha") is None, host
+        # a declared source leaving the marketplace directory is not taken: `..`, absolute, a symlink out
+        outside = os.path.join(base, "outside")
+        payload_at(outside, "alpha", "6.6.6")
+        for i, rel in enumerate(("../outside", outside, "./plugin/../../outside", "plugin/../../outside")):
+            esc = os.path.join(base, "escape-%d" % i)
+            repository(esc, "alpha", "1.0.0")
+            catalogs(esc, "alpha", rel)
+            for host in ("claude-code", "codex"):
+                with on_host(host):
+                    assert hunsu.linked_source(esc, "alpha") is None, (rel, host)
+        if os.name != "nt":
+            link_out = os.path.join(base, "symlinked")
+            repository(link_out, "alpha", "1.0.0")
+            shutil.rmtree(os.path.join(link_out, "plugin"))
+            os.symlink(outside, os.path.join(link_out, "plugin"))
+            for host in ("claude-code", "codex"):
+                with on_host(host):
+                    assert hunsu.linked_source(link_out, "alpha") is None, host
+        # a manifest of another plugin is not this one — declared, beside, or the directory itself
+        beta = os.path.join(base, "beta-old")
+        repository(beta, "beta", "1.0.0", layout="root")
+        assert hunsu.linked_source(beta, "alpha") is None and hunsu.linked_source(beta, "beta") == beta
+        wrong = os.path.join(base, "wrong")
+        repository(wrong, "alpha", "1.0.0")
+        payload_at(os.path.join(wrong, "plugin"), "beta", "1.0.0")
+        assert hunsu.linked_source(wrong, "alpha") is None
+        # an umbrella directory holding repositories: either layout resolves, through the member's own catalog
+        umbrella = os.path.join(base, "umbrella")
+        repository(os.path.join(umbrella, "alpha"), "alpha", "1.0.0")
+        repository(os.path.join(umbrella, "beta"), "beta", "1.0.0", layout="root")
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                assert hunsu.linked_source(umbrella, "alpha") == os.path.join(umbrella, "alpha", "plugin"), host
+                assert hunsu.linked_source(umbrella, "beta") == os.path.join(umbrella, "beta"), host
+        write(os.path.join(umbrella, ".claude-plugin", "marketplace.json"), {"plugins": [{"name": "alpha", "source": "./alpha"}]})
+        assert hunsu.linked_source(umbrella, "alpha") == os.path.join(umbrella, "alpha", "plugin"), "a catalog naming the repository root reaches its payload"
+        if os.name != "nt":
+            os.symlink(umbrella, os.path.join(umbrella, "gamma"))         # a loop
+            os.symlink(base, os.path.join(umbrella, "delta"))             # out of the umbrella
+            assert hunsu.linked_source(umbrella, "gamma") is None and hunsu.linked_source(umbrella, "delta") is None
+        assert hunsu.linked_source(os.path.join(base, "nowhere"), "alpha") is None
+
+
+def test_Q_fingerprint_a_linked_repository_root_is_compared_through_its_payload_alone():
+    with Host() as h:
+        installed = h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.flush()
+        repo = os.path.join(h.home, "checkout", "alpha")
+        payload = repository(repo, "alpha", "1.0.0")
+        shutil.rmtree(installed); shutil.copytree(payload, installed)   # what a host installs from `./plugin`: the payload alone
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        assert run("link", "alpha", repo, "--target", h.target)[0] == 0
+        manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip")
+        errors, warnings, info = hunsu.check(h.target)
+        assert not errors and not [w for w in warnings if "alpha" in w] and any("plugin alpha: linked to" in i for i in info), (errors, warnings, info)
+        assert hunsu.tree_fingerprint(payload) == hunsu.tree_fingerprint(installed) != hunsu.tree_fingerprint(repo)
+        # the checkout around the payload moves on, and none of it is the plugin's content
+        write(os.path.join(repo, "hunsu.json"), {"plugins": {"alpha": {"version": "1.0.0"}}})
+        write(os.path.join(repo, "hunsu-judgments.json"), {"situations": []})
+        write(os.path.join(repo, "test_more.py"), "assert 1\n")
+        write(os.path.join(repo, ".chongdae", "run-y", "state.json"), {"tasks": ["new"]})
+        write(os.path.join(repo, "reviews", "review-y.json"), {"findings": ["one"]})
+        write(os.path.join(repo, "plan", "next.md"), "# next\n")
+        write(os.path.join(repo, "AGENTS.md"), "# Working on alpha, revised\n")
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not errors and not [w for w in warnings if "alpha" in w], (errors, warnings)
+        # a payload edit under the same version is the error it always was
+        write(os.path.join(payload, "skills", "build", "SKILL.md"), "---\nname: build\ndescription: does build, better\n---\n")
+        errors = hunsu.check(h.target)[0]
+        assert len(errors) == 1 and "the linked source (%s)" % payload in errors[0] and "same version 1.0.0" in errors[0], errors
+        # bumped: the version warning, no content error
+        payload_at(payload, "alpha", "1.0.1")
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not errors and any("linked source is at 1.0.1, the installed copy at 1.0.0" in w for w in warnings), (errors, warnings)
+        # the payload gone: nothing resolves, it is said, and the root (with a leftover manifest) is not taken in its place
+        shutil.rmtree(payload)
+        write(os.path.join(repo, ".claude-plugin", "plugin.json"), {"name": "alpha", "version": "1.0.0"})
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not errors and any("linked to %s, where no source of alpha resolves" % repo in w for w in warnings), (errors, warnings)
+    # the root layout as before: the root is the payload, so the checkout's records are content — the cost 2.2.0 moved away from
+    with Host() as h:
+        installed = h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.flush()
+        repo = os.path.join(h.home, "checkout", "alpha")
+        repository(repo, "alpha", "1.0.0", layout="root")
+        shutil.rmtree(installed); shutil.copytree(repo, installed)
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("link", "alpha", repo, "--target", h.target)
+        manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip")
+        assert not hunsu.check(h.target)[0]
+        write(os.path.join(repo, "test_more.py"), "assert 1\n")
+        errors = hunsu.check(h.target)[0]
+        assert len(errors) == 1 and "the linked source (%s)" % repo in errors[0], errors
+
+
+def test_Q_resolution_a_directory_marketplace_at_a_repository_root_loads_its_payload_in_place():
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        repo = os.path.join(h.home, "checkout", "alpha")
+        payload = repository(repo, "alpha", "1.0.0", skills=("build", "extra"))
+        h.markets["m1"] = {"source": {"source": "directory", "path": repo}, "installLocation": repo}
+        h.flush()
+        s = hunsu.survey(h.target)
+        a = s["plugins"]["alpha@m1"]
+        assert a["loaded-from"] == "marketplace directory" and a["path"] == payload.replace(os.sep, "/"), a
+        assert sorted(sk["name"] for sk in s["skills"]) == ["build", "extra"], "the checkout's own skill is not the plugin's: %s" % s["skills"]
+        payload_at(payload, "alpha", "1.1.0", skills=("build", "extra"))   # the catalog's listing still says 1.0.0
+        assert hunsu.marketplace_version(h.markets["m1"], "alpha") == "1.1.0"
+
+
+def test_Q_dev_refresh_and_dev_take_the_repository_payload():
+    if os.name == "nt":
+        raise Skip("the fake host CLI is a POSIX shell script")
+    with Host() as h:
+        installed = h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.flush()
+        repo = os.path.join(h.home, "checkout", "alpha")
+        payload = repository(repo, "alpha", "1.0.0")
+        shutil.rmtree(installed); shutil.copytree(payload, installed)
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("link", "alpha", repo, "--target", h.target)
+        manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip")
+        write(os.path.join(payload, "skills", "build", "SKILL.md"), "---\nname: build\ndescription: does build, better\n---\n")
+        assert any("differs from the installed copy" in e for e in hunsu.check(h.target)[0])
+        # the host's reinstall takes what the catalog selects, ./plugin, into the install path (faked: the host is not run here)
+        bindir, log = os.path.join(h.home, "bin"), os.path.join(h.home, "claude.log")
+        write(os.path.join(bindir, "claude"), "#!/bin/sh\necho \"$*\" >> '%s'\nif [ \"$2\" = install ]; then rm -rf '%s' && cp -R '%s' '%s'; fi\n"
+              % (log, installed, payload, installed))
+        os.chmod(os.path.join(bindir, "claude"), 0o755)
+        path = os.environ["PATH"]; os.environ["PATH"] = bindir + os.pathsep + path
+        try:
+            code, out = run("install", "--refresh", "alpha", "--target", h.target)
+        finally:
+            os.environ["PATH"] = path
+        assert code == 0, out
+        assert io.open(log, encoding="utf-8").read().split("\n")[:2] == ["plugin uninstall alpha@m1 --scope project", "plugin install alpha@m1 --scope project"]
+        assert not hunsu.check(h.target)[0] and hunsu.tree_fingerprint(installed) == hunsu.tree_fingerprint(payload)
+    with Host() as h:
+        h.add_plugin("pub", "alpha", "1.0.0", ["build"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        repo = os.path.join(h.home, "checkout", "alpha")
+        repository(repo, "alpha", "1.1.0")
+        umbrella, old_umbrella, escaping = (os.path.join(h.home, d) for d in ("umbrella", "old-umbrella", "escaping"))
+        repository(os.path.join(umbrella, "alpha"), "alpha", "1.1.0")
+        repository(os.path.join(old_umbrella, "alpha"), "alpha", "1.1.0", layout="root")
+        catalogs(escaping, "alpha", "../checkout/alpha/plugin")   # its only claim leaves its directory
+        bindir = os.path.join(h.home, "bin")
+        write(os.path.join(bindir, "claude"), "#!/bin/sh\nif [ \"$2\" = install ]; then mkdir -p .claude; fi\nexit 0\n")   # a local-scope install writes .claude/ (run in the project)
+        os.chmod(os.path.join(bindir, "claude"), 0o755)
+        directory = lambda d: {"source": {"source": "directory", "path": d}, "installLocation": d}
+        pub = h.markets["pub"]
+        path = os.environ["PATH"]; os.environ["PATH"] = bindir + os.pathsep + path
+        try:
+            for market, where in (("devrepo", repo), ("devumbrella", umbrella), ("devold", old_umbrella)):
+                h.markets = {"pub": pub, "escaping": directory(escaping), market: directory(where)}
+                h.flush()
+                code, out = run("dev", "alpha", "--target", h.target)
+                assert code == 0 and "alpha@%s at local scope" % market in out, (market, out)
+                ep = hunsu.load_json(os.path.join(h.target, hunsu.LOCAL_SETTINGS))["enabledPlugins"]
+                assert ep == {"alpha@%s" % market: True, "alpha@pub": False}, (market, ep)
+                assert run("dev", "alpha", "--off", "--target", h.target)[0] == 0
+            h.markets = {"pub": pub, "escaping": directory(escaping)}
+            h.flush()
+            code, out = run("dev", "alpha", "--target", h.target)
+            assert code != 0 and "no local (directory) marketplace with alpha" in out, out
+        finally:
+            os.environ["PATH"] = path
+
+
+def test_Q_published_outdated_reads_the_published_repository_layout():
+    if not shutil.which("git"):
+        raise Skip("no git on PATH")
+    with tempfile.TemporaryDirectory(prefix="hunsu-published-") as home:
+        def published(name, setup):
+            work = os.path.join(home, "work", name)
+            setup(work)
+            _git(work, "init", "-q"); _git(work, "add", "-A"); _git(work, "commit", "-qm", name)
+            bare = os.path.join(home, "remote", name + ".git")
+            _git(home, "clone", "-q", "--bare", work, bare)
+            return bare
+
+        def drifted(work):   # the listing, written by hand, says 1.0.0; the payload's manifest 1.3.0 — the payload's wins
+            repository(work, "alpha", "1.3.0")
+            catalogs(work, "alpha", "./plugin", version="1.0.0")
+
+        def codex_only(work):
+            repository(work, "alpha", "1.3.0")
+            os.remove(os.path.join(work, ".claude-plugin", "marketplace.json"))
+
+        def escaping(work):
+            repository(work, "alpha", "1.3.0")
+            write(os.path.join(work, ".claude-plugin", "marketplace.json"), {"plugins": [{"name": "alpha", "source": "../alpha/plugin", "version": "1.0.0"}]})
+            write(os.path.join(work, ".agents", "plugins", "marketplace.json"), {"plugins": [{"name": "alpha", "source": {"source": "local", "path": "/plugin"}}]})
+
+        def root(work):
+            repository(work, "alpha", "1.2.0", layout="root")
+
+        sub, codex, esc, old = (published(n, f) for n, f in (("sub", drifted), ("codex", codex_only), ("esc", escaping), ("old", root)))
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                assert hunsu.published_versions(sub, ["alpha", "nobody"]) == ({"alpha": "1.3.0", "nobody": None}, None), host
+                assert hunsu.published_versions(codex, ["alpha"]) == ({"alpha": "1.3.0"}, None), host
+                assert hunsu.published_versions(old, ["alpha"]) == ({"alpha": "1.2.0"}, None), host
+        with on_host("claude-code"):
+            assert hunsu.published_versions(esc, ["alpha"]) == ({"alpha": "1.0.0"}, None), "an escaping source is not read: the listing answers"
+        with on_host("codex"):
+            assert hunsu.published_versions(esc, ["alpha"]) == ({"alpha": None}, None), "Codex's listing has no version, and its source is not read"
+
+
+URI_SOURCES = ("https://example.invalid/probe", "http://example.invalid/probe", "file:///probe", "file:probe",
+               "git+ssh://git@example.invalid/probe.git", "ssh://git@example.invalid/probe", "git:probe", "x-custom.v1+y:probe")
+
+
+def test_Q_resolution_a_source_written_as_a_uri_is_never_a_local_directory():
+    """A catalog source with URI scheme syntax names an address, not a directory of the marketplace. Normalized as a path,
+    `https://example.invalid/probe` is the local directory `https:/example.invalid/probe` — a decoy there (or committed at that
+    path in a published repository) must never be read as the plugin. Each decoy is real and holds the plugin's manifest."""
+    with tempfile.TemporaryDirectory(prefix="hunsu-uri-") as base:
+        for i, uri in enumerate(URI_SOURCES):
+            mk = os.path.join(base, "m%d" % i)
+            catalogs(mk, "probe", uri)   # Claude Code's string source and Codex's {"source": "local", "path": …}
+            decoy = os.path.normpath(os.path.join(mk, uri))
+            assert decoy.startswith(mk + os.sep), decoy
+            payload_at(decoy, "probe", "6.6.6")
+            for host in ("claude-code", "codex"):
+                with on_host(host):
+                    assert hunsu.linked_source(mk, "probe") is None, (uri, host)
+            assert hunsu.catalog_path({"source": uri}) is None and hunsu.catalog_path({"source": {"source": "local", "path": uri}}) is None, uri
+        # relative paths, a colon after the first segment included, and the root layout are directories as before
+        for i, (rel, where) in enumerate((("./plugin", "plugin"), ("plugin", "plugin"), ("./weird:name", "weird:name"), ("./", ""))):
+            mk = os.path.join(base, "fine%d" % i)
+            catalogs(mk, "probe", rel)
+            payload_at(os.path.join(mk, where) if where else mk, "probe", "1.0.0")
+            for host in ("claude-code", "codex"):
+                with on_host(host):
+                    assert hunsu.linked_source(mk, "probe") == os.path.normpath(os.path.join(mk, where)), (rel, host)
+    if not shutil.which("git"):
+        raise Skip("no git on PATH for the published half")
+    # the published lookup shares the rule: the decoy committed at the URI's path is not read; the listing's version answers
+    with tempfile.TemporaryDirectory(prefix="hunsu-uri-published-") as home:
+        for i, uri in enumerate(URI_SOURCES[:3]):
+            work = os.path.join(home, "work%d" % i)
+            write(os.path.join(work, ".claude-plugin", "marketplace.json"), {"plugins": [{"name": "probe", "source": uri, "version": "1.0.0"}]})
+            write(os.path.join(work, ".agents", "plugins", "marketplace.json"), {"plugins": [{"name": "probe", "source": {"source": "local", "path": uri}}]})
+            payload_at(os.path.normpath(os.path.join(work, uri)), "probe", "6.6.6")
+            _git(work, "init", "-q"); _git(work, "add", "-A"); _git(work, "commit", "-qm", "decoy")
+            bare = os.path.join(home, "remote%d.git" % i)
+            _git(home, "clone", "-q", "--bare", work, bare)
+            with on_host("claude-code"):
+                assert hunsu.published_versions(bare, ["probe"]) == ({"probe": "1.0.0"}, None), uri
+            with on_host("codex"):
+                assert hunsu.published_versions(bare, ["probe"]) == ({"probe": None}, None), uri
+
+PAYLOAD_ENTRIES = {"plugin.json", ".claude-plugin", ".codex-plugin", "hunsu.py", "judge_worker.py", "hostcall.py", "skills", "commands", "hooks",
+                   "README.md", "LICENSE"}
+DEVELOPMENT_NAMES = {"AGENTS.md", "CLAUDE.md", "hunsu.json", "hunsu.lock.json", "hunsu.local.json", "hunsu-judgments.json", "hunsu-conflicts.md",
+                     "marketplace.json", ".git", ".claude", ".codex", ".agents", ".chongdae", ".dwitbuk", ".mangsang", ".jokbo", "mangsang", "reviews",
+                     "plan", "tests"}
+RUNTIME_AT_ROOT = ("skills", "commands", "hooks", "plugin.json", os.path.join(".claude-plugin", "plugin.json"), ".codex-plugin")
+WRAPPERS = ("hunsu.py", "judge_worker.py", "hostcall.py")   # the source checkout's entry points, kept at the root: one thin text, never installed
+
+
+def payload_files(root):
+    """Every file under `root`, relative and `/`-separated, without what an interpreter writes (`__pycache__/`, `*.pyc`)."""
+    out = []
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        out += [os.path.relpath(os.path.join(dirpath, f), root).replace(os.sep, "/") for f in files if not f.endswith(".pyc")]
+    return sorted(out)
+
+
+def test_payload_the_repository_installs_plugin_alone():
+    """2.2.0: what a host installs is plugin/ — the runtime and nothing else — and the root keeps no second copy of it, only the
+    source checkout's thin entry-point wrappers."""
+    top = {e for e in os.listdir(PLUGIN) if e != "__pycache__"}
+    assert top == PAYLOAD_ENTRIES, sorted(top ^ PAYLOAD_ENTRIES)
+    for dirpath, dirs, files in os.walk(PLUGIN):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for e in dirs + files:
+            rel = os.path.relpath(os.path.join(dirpath, e), PLUGIN)
+            assert not os.path.islink(os.path.join(dirpath, e)), "a symlink in the payload: " + rel
+            assert e not in DEVELOPMENT_NAMES and not e.startswith("test_"), "a development file in the payload: " + rel
+    for rel in RUNTIME_AT_ROOT:
+        assert not os.path.exists(os.path.join(HERE, rel)), "a runtime file at the root, beside the payload: " + rel
+    # the root's Python is the tests and the three compatibility wrappers — one text, no implementation of its own
+    root_py = {f for f in os.listdir(HERE) if f.endswith(".py")}
+    assert root_py == set(WRAPPERS) | {"test_hunsu.py", "test_hostcall_env.py"}, sorted(root_py)
+    texts = {name: io.open(os.path.join(HERE, name), encoding="utf-8").read() for name in WRAPPERS}
+    assert len(set(texts.values())) == 1, "the root wrappers are one text"
+    wrapper = texts["hunsu.py"]
+    assert "def " not in wrapper and "class " not in wrapper and len(wrapper.splitlines()) < 40, "a wrapper holds no implementation"
+    assert "runpy.run_path(_PAYLOAD" in wrapper and "sys.modules[__name__] = _module" in wrapper and "sys.path.insert(0, _PLUGIN)" in wrapper, wrapper
+    assert all(os.path.isfile(os.path.join(PLUGIN, name)) for name in WRAPPERS)
+    manifests = {rel: hunsu.load_json(os.path.join(PLUGIN, *rel.split("/"))) for rel in ("plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json")}
+    claude = hunsu.load_json(os.path.join(HERE, ".claude-plugin", "marketplace.json"))
+    codex = hunsu.load_json(os.path.join(HERE, ".agents", "plugins", "marketplace.json"))
+    entry = [e for e in claude["plugins"] if e["name"] == "hunsu"]
+    codex_entry = [e for e in codex["plugins"] if e["name"] == "hunsu"]
+    assert len(entry) == 1 and len(codex_entry) == 1, (claude, codex)
+    versions = [m["version"] for m in manifests.values()] + [claude["metadata"]["version"], entry[0]["version"]]
+    assert len(set(versions)) == 1, "the five version values differ: %s" % versions
+    assert all(m["name"] == "hunsu" and m["engines"] == {"python": ">=3.11"} for m in manifests.values()), manifests
+    assert entry[0]["source"] == "./plugin" and codex_entry[0]["source"] == {"source": "local", "path": "./plugin"}, (entry, codex_entry)
+    assert "version" not in codex_entry[0], "the Codex catalog carries no version field"
+    # every path the payload names lies in it
+    for rel, m in manifests.items():
+        tails = re.findall(r"\{plugin:hunsu\}/([^\s\"{}]+)", json.dumps(m))
+        assert tails and all(os.path.isfile(os.path.join(PLUGIN, t)) for t in tails), (rel, tails)
+    assert os.path.isdir(os.path.join(PLUGIN, manifests[".codex-plugin/plugin.json"]["skills"])), manifests[".codex-plugin/plugin.json"]
+    assert os.path.isfile(os.path.join(PLUGIN, manifests["plugin.json"]["extensions"]["com.openai"]["hooks"])), manifests["plugin.json"]
+    for hooks_file, var in (("hooks.json", "${CLAUDE_PLUGIN_ROOT}"), ("codex.json", "${PLUGIN_ROOT}")):
+        for groups in hunsu.load_json(os.path.join(PLUGIN, "hooks", hooks_file))["hooks"].values():
+            for hk in (x for g in groups for x in g["hooks"]):
+                scripts = re.findall(r'"\$\{(?:CLAUDE_)?PLUGIN_ROOT\}/([^"]+)"', hk["command"])
+                assert var in hk["command"] and scripts and all(os.path.isfile(os.path.join(PLUGIN, s)) for s in scripts), hk["command"]
+    for cmd in sorted(os.listdir(os.path.join(PLUGIN, "commands"))):
+        tails = re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\"\s]+)", io.open(os.path.join(PLUGIN, "commands", cmd), encoding="utf-8").read())
+        assert tails and all(os.path.isfile(os.path.join(PLUGIN, t)) for t in tails), (cmd, tails)
+    # the repository resolves its own payload, on both hosts, and never the checkout around it
+    for host in ("claude-code", "codex"):
+        with on_host(host):
+            assert hunsu.linked_source(HERE, "hunsu") == PLUGIN, host
+    assert io.open(os.path.join(HERE, "LICENSE"), "rb").read() == io.open(os.path.join(PLUGIN, "LICENSE"), "rb").read()
+    # the usage README the payload ships links nothing outside it
+    for target in re.findall(r"\]\(([^)\s#]+)", io.open(os.path.join(PLUGIN, "README.md"), encoding="utf-8").read()):
+        if not target.startswith(("http://", "https://", "mailto:")):
+            full = os.path.normpath(os.path.join(PLUGIN, target))
+            assert full.startswith(PLUGIN + os.sep) and os.path.exists(full), "plugin/README.md links outside the payload: " + target
+
+
+AUDIT_DRIVER = r'''
+import os, runpy, sys
+forbidden = {os.path.abspath(sys.argv[1]), os.path.realpath(sys.argv[1])}
+log, script = sys.argv[2], sys.argv[3]
+seen = []
+def audit(event, args):
+    if event not in ("open", "os.listdir", "os.scandir") or not args or args[0] is None or isinstance(args[0], int):
+        return
+    try:
+        path = os.path.abspath(os.fsdecode(os.fspath(args[0])))
+    except TypeError:
+        return
+    if any(path == f or path.startswith(f + os.sep) for f in forbidden):
+        seen.append("%s %s" % (event, path))
+sys.addaudithook(audit)
+sys.argv = [script] + sys.argv[4:]
+code = 0
+try:
+    runpy.run_path(script, run_name="__main__")
+except SystemExit as stop:
+    code = stop.code if isinstance(stop.code, int) else (0 if stop.code is None else 1)
+report = "\n".join(seen)
+with open(log, "w", encoding="utf-8") as fh:
+    fh.write(report)
+sys.exit(code)
+'''
+
+
+def test_payload_runs_alone_from_a_copy_outside_the_repository():
+    """plugin/ alone, copied where a host would install it — outside this repository, under a path with a space, with no
+    PYTHONPATH and a HOME of its own — is the whole plugin: the engine's CLI, init/add/check/lock on a project, the four hooks
+    and the judge worker run from it. Decoys named like its modules lie beside the copy and in the working directory and stop
+    the process if anything imports them; under `-I` an audit hook records any file of this checkout opened (none may be)."""
+    if os.path.realpath(sys.prefix).startswith(os.path.realpath(HERE) + os.sep):
+        raise Skip("this interpreter lives inside the repository: the audit would see its own files")
+    version = hunsu.load_json(os.path.join(PLUGIN, "plugin.json"))["version"]
+    tmp = tempfile.mkdtemp(prefix="hunsu payload ")
+    try:
+        home = os.path.join(tmp, "home")
+        claude, codex = os.path.join(home, ".claude"), os.path.join(home, ".codex")
+        parent = os.path.join(claude, "plugins", "cache", "hunsu", "hunsu")
+        copy = os.path.join(parent, version)
+        shutil.copytree(PLUGIN, copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        files = payload_files(copy)
+        assert files == payload_files(PLUGIN) and {f.split("/")[0] for f in files} == PAYLOAD_ENTRIES, files
+        work, project, scratch = (os.path.join(tmp, d) for d in ("work", "project", "scratch"))
+        for d in (work, project, scratch):
+            os.makedirs(d)
+        marker = os.path.join(tmp, "decoy-imported")
+        for where in (tmp, parent, work):
+            for module in ("hunsu", "hostcall", "judge_worker"):
+                write(os.path.join(where, module + ".py"), "open(%r, 'a').write(__file__ + '\\n')\nraise SystemExit(97)\n" % marker)
+        write(os.path.join(claude, "settings.json"), {"enabledPlugins": {"hunsu@hunsu": True}})
+        write(os.path.join(claude, "plugins", "installed_plugins.json"), {"plugins": {"hunsu@hunsu": [{"scope": "user", "installPath": copy, "version": version}]}})
+        write(os.path.join(claude, "plugins", "known_marketplaces.json"), {"hunsu": {"source": {"source": "github", "repo": "guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu"}}})
+        driver = os.path.join(tmp, "driver", "audit.py")
+        write(driver, AUDIT_DRIVER)
+        engine = os.path.join(copy, "hunsu.py")
+        hook = lambda name: os.path.join(copy, "hooks", name)
+        outputs = []
+        with host_path("claude-code") as bindir:
+            env = {"PATH": bindir, "HOME": home, "HUNSU_CLAUDE_DIR": claude, "HUNSU_CODEX_DIR": codex, "TMPDIR": scratch, "PYTHONDONTWRITEBYTECODE": "1"}
+
+            def py(argv, stdin=None, extra=None, audited=None):
+                """As a host runs it (`-E -s`: no PYTHONPATH, no user site), or under the audit (`-I`) writing what it saw to `audited`."""
+                head = [sys.executable, "-I", "-B", driver, HERE, audited] if audited else [sys.executable, "-E", "-s", "-B"]
+                done = subprocess.run(head + argv, input=stdin, capture_output=True, text=True, encoding="utf-8", cwd=work,
+                                      env=dict(env, **(extra or {})), timeout=180)
+                outputs.append(done.stdout + done.stderr)
+                return done
+
+            def ok(done, what):
+                assert done.returncode == 0, (what, done.returncode, done.stdout[-1500:], done.stderr[-1500:])
+                return done
+
+            assert "usage: hunsu" in ok(py([engine, "--help"]), "--help").stdout
+            ok(py([engine, "init", "--target", project]), "init")
+            ok(py([engine, "add", "hunsu", "--target", project]), "add")
+            m = hunsu.load_json(os.path.join(project, hunsu.MANIFEST))
+            assert m["plugins"]["hunsu"] == {"version": version, "source": "github:guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu", "marketplace": "hunsu"}, m
+            m.update(engines={"claude-code": ">=2.1", "python": ">=3.11"}, judge="skip")
+            hunsu.save_json(os.path.join(project, hunsu.MANIFEST), m)
+            done = ok(py([engine, "check", "--target", project]), "check")
+            assert done.stdout.strip().splitlines()[-1].startswith("errors 0 · warnings 0"), done.stdout
+            ok(py([engine, "lock", "--target", project]), "lock")
+            lock = hunsu.load_json(os.path.join(project, hunsu.LOCK))
+            assert lock["skills"] == ["hunsu:compose"] and lock["plugins"]["hunsu"]["version"] == version, lock
+            assert lock["plugins"]["hunsu"]["fingerprint"] == hunsu.tree_fingerprint(copy) == hunsu.tree_fingerprint(PLUGIN), "the installed shape is the payload's content"
+            root = {"CLAUDE_PLUGIN_ROOT": copy}
+            start = ok(py([hook("session_start.py")], json.dumps({"cwd": project, "hook_event_name": "SessionStart", "source": "startup"}), root), "session_start")
+            ctx = json.loads(start.stdout)["hookSpecificOutput"]["additionalContext"]
+            assert "environment matches hunsu.json" in ctx and "hunsu %s `%s`" % (version, copy.replace(os.sep, "/")) in ctx, ctx
+            assert ok(py([hook("prompt_submit.py")], json.dumps({"cwd": project, "prompt": "hi"}), root), "prompt_submit").stdout == ""
+            ok(py([hook("pre_skill.py")], json.dumps({"cwd": project, "tool_name": "Skill", "tool_input": {"skill": "hunsu:compose"}}), root), "pre_skill allows")
+            refused = py([hook("pre_skill.py")], json.dumps({"cwd": project, "tool_name": "Skill", "tool_input": {"skill": "other:thing"}}), root)
+            assert refused.returncode == 2 and "not in hunsu.lock.json" in refused.stderr, (refused.returncode, refused.stderr)
+            ok(py([hook("pre_bash.py")], json.dumps({"cwd": project, "tool_input": {"command": 'python3 "%s" check' % engine}}), root), "pre_bash allows")
+            stray = py([hook("pre_bash.py")], json.dumps({"cwd": project, "tool_input": {"command": 'python3 "%s" check' % os.path.join(parent, "0.0.1", "hunsu.py")}}), root)
+            assert stray.returncode == 2 and "is not the hunsu this project runs" in stray.stderr, (stray.returncode, stray.stderr)
+            assert "usage: judge_worker.py" in ok(py([os.path.join(copy, "judge_worker.py"), "--help"]), "judge_worker --help").stdout
+            # isolated mode and an audit of every file opened: nothing of this checkout is read
+            audited = [([engine, "check", "--target", project], None), ([hook("session_start.py")], json.dumps({"cwd": project})),
+                       ([hook("pre_bash.py")], json.dumps({"cwd": project, "tool_input": {"command": 'python3 "%s" check' % engine}})),
+                       ([os.path.join(copy, "judge_worker.py"), "--help"], None)]
+            for i, (argv, stdin) in enumerate(audited):
+                log = os.path.join(tmp, "audit-%d.log" % i)
+                ok(py(argv, stdin, root, audited=log), "audited %s" % argv[0])
+                assert io.open(log, encoding="utf-8").read() == "", "files of the checkout opened by %s: %s" % (argv[0], io.open(log, encoding="utf-8").read())
+            # Codex: the same payload in Codex's cache, with the receipt its installer writes, read through the Codex manifest
+            codex_copy = os.path.join(codex, "plugins", "cache", "hunsu", "hunsu", version)
+            shutil.copytree(copy, codex_copy)
+            write(os.path.join(codex_copy, ".codex-marketplace-install.json"), {"source": "https://github.com/guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu.git", "revision": "0" * 40})
+            write(os.path.join(codex, "config.toml"), '[marketplaces.hunsu]\nsource_type = "git"\nsource = "https://github.com/guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu.git"\n\n'
+                                                    '[plugins."hunsu@hunsu"]\nenabled = true\n')
+            s = json.loads(ok(py([engine, "survey", "--json", "--target", project], extra={"AGENT_HOST": "codex"}), "codex survey").stdout)
+            p = s["plugins"]["hunsu@hunsu"]
+            assert p["version"] == version and p["path"] == codex_copy.replace(os.sep, "/") and p["engines"] == {"python": ">=3.11"}, p
+            assert [sk["name"] for sk in s["skills"] if sk["plugin"] == "hunsu"] == ["compose"], s["skills"]
+            assert {h["event"] for h in s["hooks"] if h["source"] == "plugin:hunsu"} == {"SessionStart", "UserPromptSubmit", "PreToolUse"}, s["hooks"]
+            assert hunsu.tree_fingerprint(codex_copy) == hunsu.tree_fingerprint(PLUGIN), "one release installed by either host is one content"
+        assert not os.path.exists(marker), "a decoy beside the copy was imported: " + io.open(marker, encoding="utf-8").read()
+        for out in outputs:
+            assert HERE not in out and os.path.realpath(HERE) not in out, "the checkout's path reached the output: " + out[-800:]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+COMPAT_IMPORTS = r"""
+import importlib, json, os, sys
+plugin, project, claude = sys.argv[1:4]
+import hunsu, hostcall, judge_worker
+out = {"files": {m.__name__: os.path.realpath(m.__file__) for m in (hunsu, hostcall, judge_worker)},
+       "first": os.path.realpath(sys.path[0]),
+       "one hostcall": sys.modules["hostcall"] is hostcall and judge_worker.run_claude is hostcall.run_claude}
+sys.path.insert(0, plugin)   # what plugin/'s hooks do before their `import hunsu`
+out["one hunsu"] = importlib.import_module("hunsu") is hunsu and sys.modules["hunsu"] is hunsu
+hunsu.CLAUDE = claude        # patched on the root import: the runtime's survey reads it
+out["survey"] = sorted(hunsu.survey(project)["plugins"])
+calls = []
+class Done:
+    returncode, stdout, stderr = 0, b"stream", b""
+class Subprocess:
+    @staticmethod
+    def run(cmd, **kw):
+        calls.append({"exe": cmd[0], "mark": kw["env"].get("HUNSU_COMPAT_MARK")})
+        return Done()
+hostcall.subprocess = Subprocess   # patched on the root import: judge_worker's host call goes through it
+hostcall.worker_env = lambda host: {"HUNSU_COMPAT_MARK": host}
+out["host call"] = list(judge_worker.run_claude("prompt", {"type": "object"}))
+out["calls"] = calls
+print(json.dumps(out))
+"""
+
+
+def test_compat_the_root_commands_and_imports_are_the_payloads_own():
+    """The source checkout's entry points before 2.2.0 — `python3 hunsu.py …`, `python3 judge_worker.py …`, `import hunsu`,
+    `import hostcall`, `import judge_worker` at the root — keep working through root wrappers, and they are the payload's one
+    implementation: the same output and exit code as plugin/'s files, the same module objects as plugin/'s hooks and workers
+    import, monkeypatches on a root import reaching the runtime. Fresh interpreters (`-E -s`, nothing of this suite's
+    sys.path bootstrap), a fake host and disposable targets."""
+    with tempfile.TemporaryDirectory(prefix="hunsu-compat-") as tmp:
+        claude, project, other = (os.path.join(tmp, d) for d in ("claude", "project", "other"))
+        for d in (project, other):
+            os.makedirs(d)
+        write(os.path.join(claude, "settings.json"), {"enabledPlugins": {"alpha@m1": True}})
+        write(os.path.join(claude, "plugins", "installed_plugins.json"), {"plugins": {"alpha@m1": [{"scope": "user", "installPath": os.path.join(claude, "a"), "version": "1.0.0"}]}})
+        write(os.path.join(claude, "plugins", "known_marketplaces.json"), {"m1": {"source": {"source": "github", "repo": "org/m1"}}})
+        write(os.path.join(claude, "a", ".claude-plugin", "plugin.json"), {"name": "alpha", "version": "1.0.0"})
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON") and k not in ("AGENT_HOST", "AGENT_WORKER", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT", "HUNSU_SURVEY")}
+        env.update(HOME=tmp, HUNSU_CLAUDE_DIR=os.path.join(tmp, "nohost"), HUNSU_CODEX_DIR=os.path.join(tmp, "nocodex"), PYTHONDONTWRITEBYTECODE="1")
+
+        def fresh(argv, cwd):
+            return subprocess.run([sys.executable, "-E", "-s", "-B"] + argv, cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", timeout=120)
+
+        def same(argv, code):
+            root, payload = fresh([os.path.join(HERE, argv[0])] + argv[1:], other), fresh([os.path.join(PLUGIN, argv[0])] + argv[1:], other)
+            assert root.returncode == payload.returncode == code, (argv, root.returncode, payload.returncode, root.stderr[-800:])
+            assert (root.stdout, root.stderr) == (payload.stdout, payload.stderr), (argv, root.stdout[-800:], payload.stdout[-800:], root.stderr[-800:])
+            return root
+
+        assert "usage: hunsu" in same(["hunsu.py", "--help"], 0).stdout
+        assert "usage: judge_worker.py" in same(["judge_worker.py", "--help"], 0).stdout
+        done = same(["hunsu.py", "check", "--target", project], 1)
+        assert "no hunsu.json" in done.stdout + done.stderr, (done.stdout, done.stderr)
+        done = fresh([os.path.join(HERE, "hunsu.py"), "init", "--target", project], other)
+        assert done.returncode == 0 and os.path.isfile(os.path.join(project, hunsu.MANIFEST)), (done.stdout, done.stderr)
+        assert same(["hunsu.py", "check", "--target", project], 0).stdout.strip().splitlines()[-1].startswith("errors 0")
+        # imports at the root: the payload's modules, one object each with what plugin/ imports, patches reaching the runtime
+        done = fresh(["-c", COMPAT_IMPORTS, PLUGIN, project, claude], HERE)
+        assert done.returncode == 0, done.stderr[-1500:]
+        out = json.loads(done.stdout)
+        real = os.path.realpath(PLUGIN)
+        assert out["files"] == {n: os.path.join(real, n + ".py") for n in ("hunsu", "hostcall", "judge_worker")}, out["files"]
+        assert out["first"] == real and out["one hostcall"] and out["one hunsu"], out
+        assert out["survey"] == ["alpha@m1"], "the patched hunsu.CLAUDE is what the runtime read: %s" % out["survey"]
+        assert out["host call"] == [0, "stream", ""] and out["calls"] == [{"exe": "claude", "mark": "claude"}], out
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
