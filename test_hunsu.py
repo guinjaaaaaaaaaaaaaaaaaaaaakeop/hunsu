@@ -668,12 +668,28 @@ def test_a_generated_codex_hook_whose_copy_is_gone_is_said_from_either_host_and_
         doc["description"] = hunsu.CODEX_HOOK_PROVENANCE + json.dumps(record)
         hunsu.save_json(path, doc)
         assert hunsu.check(h.target)[0] == [], "every script is here: nothing to say"
+        command = assert_dispatched(h)   # Q-dispatch: the generated group runs the project's dispatcher
         # the update: Codex removes the 1.0.0 copy and installs 2.0.0; the project takes it (`hunsu add`)
         shutil.rmtree(old)
         new = codex_hook_project(h, codex, "2.0.0")
         run("add", "alpha", "--target", h.target)
         home = os.path.expanduser("~")
         stale = os.path.join(old, "hooks", "prompt.py").replace(home, "~")
+        lost_warn = ("codex hook UserPromptSubmit: runs %s, which is not on this machine — the project's own group (not in hunsu's provenance), so `lock` "
+                     "keeps it: fix or remove it in .codex/hooks.json" % os.path.join(tools, "lost.py").replace(home, "~"))
+        # Q-dispatch: the dispatched group survives the update — nothing is said of it on either host, and it runs 2.0.0's script
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors, warnings, _ = hunsu.check(h.target)
+            assert not [e for e in errors if e.startswith("codex hook")], (host, errors)
+            assert [w for w in warnings if w.startswith("codex hook") and not w.startswith(SKEW_WARN)] == [lost_warn], (host, warnings)
+        r, _ = run_hook(h, codex, command)
+        assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+        # the gone-copy diagnosis stays for a file in the 2.3.0 versioned form, generated from the removed 1.0.0 copy
+        versioned = versioned_group(old)
+        hunsu.save_json(path, {"description": hunsu.CODEX_HOOK_PROVENANCE + json.dumps({"hooks": {"UserPromptSubmit": [versioned]}, "description": "Our project hooks"},
+                                                                                      ensure_ascii=False, separators=(",", ":")),
+                               "hooks": {"UserPromptSubmit": [guard, versioned, lost]}})
         errors, warnings, _ = hunsu.check(h.target)   # on Claude Code
         # Q-active-hooks: the 2.0.0 group the render names is absent from the file — one not-active error besides the gone hook's
         active = [e for e in errors if e.startswith("codex hooks: ")]
@@ -682,16 +698,14 @@ def test_a_generated_codex_hook_whose_copy_is_gone_is_said_from_either_host_and_
         assert errors == ["codex hook UserPromptSubmit: runs %s, which is not on this machine — a group hunsu lock generated, so Codex fails this "
                           "hook on every UserPromptSubmit event; it was generated from alpha 1.0.0, a copy no longer in the Codex plugin cache (which "
                           "holds 2.0.0 now); a Codex `lock` would not write it again: %s" % (stale, hunsu.REGENERATES)], errors
-        assert [w for w in warnings if w.startswith("codex hook")] == [
-            "codex hook UserPromptSubmit: runs %s, which is not on this machine — the project's own group (not in hunsu's provenance), so `lock` "
-            "keeps it: fix or remove it in .codex/hooks.json" % os.path.join(tools, "lost.py").replace(home, "~")], warnings
+        assert [w for w in warnings if w.startswith("codex hook") and not w.startswith(SKEW_WARN)] == [lost_warn], warnings
         code, out = run("lock", "--target", h.target)   # Claude Code cannot regenerate Codex's file: it refuses and says the Codex command
         assert code != 0 and "AGENT_HOST=codex" in out, out
         with patch.object(hunsu, "HOST", "codex"):
             code, out = run("lock", "--target", h.target)
             assert code == 0 and "codex: 1 hook group(s)" in out, out
             after = hunsu.load_json(path)
-            generated = {"hooks": [{"type": "command", "command": "python3 \"%s/hooks/prompt.py\"" % new.replace("\\", "/")}]}
+            generated = generated_group(h.target)   # Q-dispatch: the regenerated group is dispatched, naming no version
             assert after["hooks"] == {"UserPromptSubmit": [guard, lost, generated]}, after["hooks"]
             kept = json.loads(after["description"][len(hunsu.CODEX_HOOK_PROVENANCE):])
             assert kept == {"hooks": {"UserPromptSubmit": [generated]}, "description": "Our project hooks"}, kept
@@ -702,7 +716,8 @@ def test_a_generated_codex_hook_whose_copy_is_gone_is_said_from_either_host_and_
         # the installed copy itself lacks the script: a regeneration would not help, so it is said as a reinstall and stops lock
         os.remove(os.path.join(new, "hooks", "prompt.py"))
         hooks = [e for e in hunsu.check(h.target)[0] if e.startswith("codex hook")]   # the copy's content also differs from the lock now
-        assert len(hooks) == 1 and "alpha 2.0.0, installed for Codex, has no such file — reinstall it" in hooks[0] and hunsu.REGENERATES not in hooks[0], hooks
+        assert len(hooks) == 1 and "dispatches to alpha 2.0.0's hooks/prompt.py, which that copy lacks" in hooks[0] and "reinstall" in hooks[0] \
+            and hunsu.REGENERATES not in hooks[0], hooks
         with patch.object(hunsu, "HOST", "codex"):
             code, out = run("lock", "--target", h.target)
             assert code != 0 and "reinstall it" in out, out
@@ -1508,8 +1523,14 @@ def test_codex_survey_and_lock_materialize_the_projects_hooks():
             assert code == 0 and "codex: 1 hook group(s)" in out.getvalue(), out.getvalue()
             hooks = hunsu.load_json(os.path.join(target, ".codex", "hooks.json"))["hooks"]
             py = "python3" if shutil.which("python3") else "python"   # the plugin wrote `python`; the materialized file names what this machine has
-            assert hooks["SessionStart"][0]["hooks"][0]["command"] == '%s "%s/hooks/s.py"' % (py, plug.replace("\\", "/")), hooks
-            assert ".codex/hooks.json" in io.open(os.path.join(target, ".gitignore"), encoding="utf-8").read()
+            # Q-dispatch: the group runs the project's dispatcher, which finds alpha's copy at hook time; the matcher is kept
+            assert hooks["SessionStart"][0]["hooks"][0]["command"] == dispatched_command(target, "alpha@m1", "hooks/s.py", py=py), hooks
+            assert hooks["SessionStart"][0]["matcher"] == "startup", hooks
+            assert plug.replace("\\", "/") not in json.dumps(hooks), "the generated groups name no versioned copy"
+            dispatcher = os.path.join(target, ".codex", "hunsu-dispatch.py")
+            assert os.path.isfile(dispatcher) and read_bytes(dispatcher) == read_bytes(DISPATCH), "no byte-equal .codex/hunsu-dispatch.py"
+            ignored = io.open(os.path.join(target, ".gitignore"), encoding="utf-8").read().split("\n")
+            assert ".codex/hooks.json" in ignored and ".codex/hunsu-dispatch.py" in ignored, ignored
             # the materialized file is hunsu's own: a second survey must not count its hooks as the project's (each would register twice)
             again = h2.survey(target)
             assert {hk["source"] for hk in again["hooks"]} == {"plugin:alpha", "user"} and len(again["hooks"]) == len(s["hooks"]), again["hooks"]
@@ -2618,33 +2639,35 @@ def test_a_codex_lock_repairs_only_what_its_next_render_drops():
             beta = os.path.join(codex, "plugins", "cache", "beta", "beta")
             os.remove(os.path.join(beta, "1.0.0", "hooks", "b.py"))   # its copy is still in the cache, without the script
             errors = hooks_errors()
-            assert len(errors) == 3 and all(hunsu.REGENERATES in e for e in errors), errors
-            assert "it was generated from beta 1.0.0, whose copy in the Codex plugin cache lacks it; a Codex `lock` would not write it again" in errors[1], errors
+            # Q-check 2: beta's dispatched group names a script its copy lacks, and the render no longer writes it — REGENERATES
+            assert errors and all(hunsu.REGENERATES in e for e in errors), errors
+            assert [e for e in errors if "dispatches to beta 1.0.0's hooks/b.py, which that copy lacks" in e], errors
             shutil.rmtree(beta)   # uninstalled from Codex too: nothing to reinstall, and nothing a lock would write
             errors = hooks_errors()
-            assert len(errors) == 3 and "it was generated from beta 1.0.0, a copy gone, and the Codex plugin cache holds none of beta now; a Codex `lock` would not write it again" in errors[1], errors
+            # Q-check 1: the dispatched key resolves to no copy; beta is out of hunsu.json, so a regeneration drops the group
+            assert errors and all(hunsu.REGENERATES in e for e in errors), errors
+            assert [e for e in errors if "dispatches to beta@beta, which is not installed for Codex on this machine" in e], errors
             code, out = run("lock", "--target", target)
             assert code == 0, out
             doc = hunsu.load_json(path)
-            generated = {"hooks": [{"type": "command", "command": 'python3 "%s/hooks/a.py"' % old_alpha}]}
+            generated = {"hooks": [{"type": "command", "command": dispatched_command(target, "alpha@alpha", "hooks/a.py")}]}
             assert doc["hooks"] == {"Stop": [custom, gone], "UserPromptSubmit": [generated]}, doc["hooks"]
             record = json.loads(doc["description"][len(hunsu.CODEX_HOOK_PROVENANCE):])
             assert record == {"hooks": {"UserPromptSubmit": [generated]}, "description": "Our project hooks"}, record
             assert hooks_errors() == []
-            # alpha's copy is replaced by one whose hooks name the missing external script: the old group is not repaired by a lock
+            # alpha's copy is replaced by one whose hooks name the missing external script. Q-dispatch: the dispatched group is not broken
+            # by the replacement (it runs 2.0.0's hooks/a.py) — only the new render's missing script is said, and it stops the lock
             shutil.rmtree(old_alpha)
             copy("alpha", "2.0.0", ['python3 "${PLUGIN_ROOT}/hooks/a.py"', 'python3 "%s"' % tool])
             declare(alpha="2.0.0")
-            errors = hooks_errors()   # the old group is not repairable while the new render fails, and the new render's missing script is said itself
-            active = not_active()   # alpha 2.0.0's groups are absent from the file
-            assert len(active) == 1 and "alpha 2.0.0" in active[0] and "lacks" in active[0], active
-            assert len(errors) == 2 and "a Codex `lock` would drop it, but the groups it would write name ~/external tools/tool.py, which is not on this machine either" in errors[0], errors
-            assert "a Codex `lock` would write a group that runs ~/external tools/tool.py, which is not on this machine — alpha 2.0.0's hooks/codex.json names it" in errors[1], errors
-            code, out = run("lock", "--target", target)
-            assert code != 0 and "would drop it" in out, out
-            write(tool, "")   # once it is here, the regeneration repairs the old group, and a lock is clean
             errors = hooks_errors()
-            assert len(errors) == 1 and "a copy no longer in the Codex plugin cache (which holds 2.0.0 now); a Codex `lock` would not write it again" in errors[0], errors
+            active = not_active()   # alpha 2.0.0's second group is absent from the file
+            assert len(active) == 1 and "alpha 2.0.0" in active[0] and "lacks" in active[0], active
+            assert len(errors) == 1 and "a Codex `lock` would write a group that runs ~/external tools/tool.py, which is not on this machine — alpha 2.0.0's hooks/codex.json names it" in errors[0], errors
+            code, out = run("lock", "--target", target)
+            assert code != 0 and "external tools/tool.py" in out, out
+            write(tool, "")   # once it is here, nothing is said and a lock is clean
+            assert hooks_errors() == [], hooks_errors()
             code, out = run("lock", "--target", target)
             assert code == 0, out
             assert hooks_errors() == [] and not_active() == [] and hunsu.load_json(path)["hooks"]["Stop"] == [custom, gone]
@@ -4167,8 +4190,10 @@ def hooks_path(h):
     return os.path.join(h.target, ".codex", "hooks.json")
 
 
-def generated_group(root):
-    return {"hooks": [{"type": "command", "command": "python3 \"%s/hooks/prompt.py\"" % root.replace("\\", "/")}]}
+def generated_group(target, key="alpha@m1", script="hooks/prompt.py"):
+    """Q-dispatch: the generated group of alpha's `python3 "${PLUGIN_ROOT}/<script>"` in the project `target` — it runs the project's
+    .codex/hunsu-dispatch.py, which finds the copy Codex has installed at hook time; the text names no version."""
+    return {"hooks": [{"type": "command", "command": dispatched_command(target, key, script)}]}
 
 
 def not_active(target):
@@ -4193,6 +4218,11 @@ def tree_bytes(root):
     return out
 
 
+def as_project(doc, twin, target):
+    """A twin project's .codex/hooks.json read as the project's own: the dispatched commands name the twin's path (Q-migrate)."""
+    return json.loads(json.dumps(doc, ensure_ascii=False).replace(posix(twin), posix(target)))
+
+
 def test_Q_active_hooks_1_an_installed_codex_hook_with_no_project_file_is_said_on_both_hosts_and_a_codex_lock_writes_it():
     with Host() as h, codex_here(h) as (codex, _):
         root = codex_hooks_project(h, codex)
@@ -4214,7 +4244,7 @@ def test_Q_active_hooks_1_an_installed_codex_hook_with_no_project_file_is_said_o
         with on_codex():   # a Codex lock writes exactly the render: it does not stop for the error, and repairs it
             code, out = run("lock", "--target", h.target)
             assert code == 0, out
-        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(root)]}, hunsu.load_json(hooks_path(h))
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(h.target)]}, hunsu.load_json(hooks_path(h))
         for host in ("claude-code", "codex"):
             with on_host(host):
                 errors = hunsu.check(h.target)[0]
@@ -4238,30 +4268,37 @@ def test_Q_active_hooks_2_a_file_of_only_the_projects_own_group_lacks_the_plugin
             code, out = run("lock", "--target", h.target)
             assert code == 0, out
         doc = hunsu.load_json(hooks_path(h))
-        assert doc["hooks"]["PreToolUse"] == [guard] and doc["hooks"]["UserPromptSubmit"] == [generated_group(root)], doc
+        assert doc["hooks"]["PreToolUse"] == [guard] and doc["hooks"]["UserPromptSubmit"] == [generated_group(h.target)], doc
         assert not not_active(h.target)
 
 
 def test_Q_active_hooks_3_a_group_from_an_older_copy_still_in_the_cache_is_one_a_regeneration_drops():
+    """Amended to Q-migrate: with dispatched groups an older copy left in the cache drops nothing — the group the file holds is the one
+    the render writes, nothing is said, and the hook runs the newest copy."""
     with Host() as h, codex_here(h) as (codex, _):
+        record = os.path.join(h.home, "ran.jsonl")
         old = codex_hooks_project(h, codex, "1.0.0")
         with on_codex():
             assert run("lock", "--target", h.target)[0] == 0
-        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(old)]}
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(h.target)]}, hunsu.load_json(hooks_path(h))
+        before = read_bytes(hooks_path(h))
         new = codex_hook_project(h, codex, "2.0.0")   # the update: 2.0.0 installed, the 1.0.0 copy still in the cache, every file there
+        recorder(old, record, "alpha 1.0.0 said\n", 0)
+        recorder(new, record, "alpha 2.0.0 said\n", 0)
         assert os.path.isfile(os.path.join(old, "hooks", "prompt.py"))
         run("add", "alpha", "--target", h.target)
         for host in ("claude-code", "codex"):
             with on_host(host):
                 errors = hunsu.check(h.target)[0]
             hooks = [e for e in errors if e.startswith("codex hook")]
-            assert len(hooks) == 1 and hooks[0].startswith("codex hooks: "), (host, errors)
-            e = hooks[0]
-            for part in ("not active", "alpha 2.0.0", "UserPromptSubmit", "lacks", "drops", "alpha 1.0.0", "`hunsu upgrade --hooks-only`"):
-                assert part in e, (host, part, e)
+            assert hooks == [], (host, errors)
+        r, _ = run_hook(h, codex, prompt_command(h))
+        ran = recorded_runs(record)
+        assert r.returncode == 0 and r.stdout == "alpha 2.0.0 said\n" and len(ran) == 1, (r.returncode, r.stdout, r.stderr, ran)
+        assert os.path.realpath(ran[0]["file"]) == os.path.realpath(os.path.join(new, "hooks", "prompt.py")), ran
         with on_codex():
             assert run("lock", "--target", h.target)[0] == 0
-        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(new)]}
+        assert read_bytes(hooks_path(h)) == before, "the regeneration writes the same groups: nothing was dropped"
         assert codex_hook_errors(h.target) == []
 
 
@@ -4445,28 +4482,30 @@ def test_Q_upgrade_6_hooks_only_takes_no_pin_and_regenerates_the_codex_groups():
         assert code == 0, out
         assert read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == before, "--hooks-only takes no pin"
         assert "alpha 1.0.0 -> 2.0.0" not in out, out
-        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(new)]}, hunsu.load_json(hooks_path(h))
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(h.target)]}, hunsu.load_json(hooks_path(h))
+        assert os.path.isfile(dispatcher_of(h)) and read_bytes(dispatcher_of(h)) == read_bytes(DISPATCH)
         assert not not_active(h.target)
 
 
 def test_Q_upgrade_7_from_claude_code_the_generated_groups_are_rewritten_and_the_projects_own_kept():
     with Host() as h, codex_here(h) as (codex, _):
         old, new, guard, own = codex_update(h, codex)
-        assert any(e.startswith("codex hook UserPromptSubmit") and "not on this machine" in e for e in hunsu.check(h.target)[0]), "the stale group is said"
+        # Q-dispatch: the generated group runs through the dispatcher, so the replaced copy breaks nothing and no stale group is said
+        assert not [e for e in hunsu.check(h.target)[0] if e.startswith("codex hook")], hunsu.check(h.target)[0]
         # what a Codex lock writes for the same pins, on a copy of the project: the regeneration must be exactly that
         twin = os.path.join(h.home, "twin")
         shutil.copytree(h.target, twin)
         run("add", "alpha", "--target", twin)
         with on_codex():
             assert run("lock", "--target", twin)[0] == 0
-        expected = hunsu.load_json(os.path.join(twin, ".codex", "hooks.json"))
+        expected = as_project(hunsu.load_json(os.path.join(twin, ".codex", "hooks.json")), twin, h.target)   # the twin's dispatcher path is its own
         code, out = upgrade("--target", h.target)   # on Claude Code
         assert code == 0, out
         assert pins(h)["alpha"]["version"] == "2.0.0" and "alpha 1.0.0 -> 2.0.0" in out, (pins(h), out)
         doc = hunsu.load_json(hooks_path(h))
         assert doc == expected, (doc, expected)
         groups = doc["hooks"]["UserPromptSubmit"]
-        assert generated_group(new) in groups and generated_group(old) not in groups, groups
+        assert generated_group(h.target) in groups and versioned_group(old) not in groups and versioned_group(new) not in groups, groups
         assert [g for g in groups if g in (guard, own)] == [guard, own], groups   # the project's own, in their order
         kept = json.loads(doc["description"][len(hunsu.CODEX_HOOK_PROVENANCE):])
         assert kept["description"] == "Our project hooks", kept
@@ -4704,7 +4743,8 @@ def test_Q_eyes_Q_upgrade_a_manifest_plugin_codex_has_not_installed_is_said_and_
         said = [l for l in out.splitlines() if "beta" in l and "codex" in l.lower() and re.search(r"\bnot\b.*\binstall", l)]
         assert said, out
         assert os.path.exists(hooks_path(h)), out
-        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(root)]}, hunsu.load_json(hooks_path(h))
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(h.target)]}, hunsu.load_json(hooks_path(h))
+        assert os.path.isfile(dispatcher_of(h)), "upgrade wrote no .codex/hunsu-dispatch.py beside the dispatched group"
 
 
 def test_Q_eyes_Q_upgrade_an_existing_file_is_regenerated_to_the_projects_own_groups_when_codex_holds_no_hooks():
@@ -4718,7 +4758,7 @@ def test_Q_eyes_Q_upgrade_an_existing_file_is_regenerated_to_the_projects_own_gr
         guard = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"%s/guard.py\"" % tools}]}
         doc["hooks"]["PreToolUse"] = [guard]
         hunsu.save_json(hooks_path(h), doc)
-        assert generated_group(root) in doc["hooks"]["UserPromptSubmit"], doc
+        assert generated_group(h.target) in doc["hooks"]["UserPromptSubmit"], doc
         shutil.rmtree(root)   # the update: 2.0.0 installed for both hosts, a release that declares no Codex hooks
         new = codex_hook_project(h, codex, "2.0.0")
         os.remove(os.path.join(new, "hooks", "codex.json"))   # Codex now holds no hooks
@@ -4727,12 +4767,920 @@ def test_Q_eyes_Q_upgrade_an_existing_file_is_regenerated_to_the_projects_own_gr
         run("add", "alpha", "--target", twin)   # what a Codex lock writes for the same pins
         with on_codex():
             assert run("lock", "--target", twin)[0] == 0
-        expected = hunsu.load_json(os.path.join(twin, ".codex", "hooks.json"))
+        expected = as_project(hunsu.load_json(os.path.join(twin, ".codex", "hooks.json")), twin, h.target)
         code, out = upgrade("--target", h.target)   # on Claude Code
         assert code == 0, out
         after = hunsu.load_json(hooks_path(h))
         assert after["hooks"] == {"PreToolUse": [guard]}, after
         assert after == expected, (after, expected)
+
+
+# ---------------------------------------------------------------- Q-dispatch, Q-check, Q-migrate (the 2.4.0 contract)
+# The generated Codex groups run through the project's .codex/hunsu-dispatch.py, which finds at hook time the copy Codex has
+# installed. Every Codex here is the fake host's (codex_here); a subprocess gets HUNSU_CODEX_DIR and no AGENT_HOST.
+
+DISPATCH = os.path.join(PLUGIN, "hooks", "dispatch.py")
+DISPATCH_PREFIX = "hunsu dispatch:"
+VERSIONED_WARN = "codex hooks: 1 generated group(s) name versioned copies in the Codex plugin cache"
+SKEW_WARN = "codex hooks: the dispatched groups run the copies installed for Codex"
+DISPATCHER_FINDING = "codex hook dispatcher: "
+
+
+def posix(path):
+    return os.path.abspath(path).replace("\\", "/")
+
+
+def machine_python():
+    return "python3" if shutil.which("python3") else "python"
+
+
+def dispatched_command(target, key="alpha@m1", script="hooks/prompt.py", py=None):
+    """The generated command Q-dispatch names for `python3 "${PLUGIN_ROOT}/<script>"` of `key` in the project `target`."""
+    import shlex
+    py = py or machine_python()
+    dispatcher = "%s/.codex/hunsu-dispatch.py" % posix(target)
+    # Q-review 5: double quotes unless the path holds a character special inside them, then shlex.quote
+    quoted = shlex.quote(dispatcher) if any(c in dispatcher for c in '"$`\\!') else '"%s"' % dispatcher
+    return '%s %s %s %s "{PLUGIN_ROOT}/%s"' % (py, quoted, key, py, script)
+
+
+def versioned_group(root, script="hooks/prompt.py"):
+    """The 2.3.0 form of alpha's generated group: the copy's versioned path substituted for ${PLUGIN_ROOT}."""
+    return {"hooks": [{"type": "command", "command": "python3 \"%s/%s\"" % (root.replace("\\", "/"), script)}]}
+
+
+def dispatcher_of(h):
+    return os.path.join(h.target, ".codex", "hunsu-dispatch.py")
+
+
+def dispatch_module():
+    """plugin/hooks/dispatch.py loaded by path, the way check imports its resolution; importing it must run nothing."""
+    import importlib.util
+    assert os.path.isfile(DISPATCH), "no plugin/hooks/dispatch.py"
+    spec = importlib.util.spec_from_file_location("hunsu_dispatch_under_test", DISPATCH)
+    mod = importlib.util.module_from_spec(spec)
+    out, err = io.StringIO(), io.StringIO()
+    argv = list(sys.argv)
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        spec.loader.exec_module(mod)
+    assert out.getvalue() == "" and err.getvalue() == "" and sys.argv == argv, ("importing dispatch.py ran something", out.getvalue(), err.getvalue())
+    assert callable(getattr(mod, "resolve", None)), "dispatch.py has no resolve()"
+    assert isinstance(getattr(mod, "Absent", None), type) and issubclass(mod.Absent, Exception), "dispatch.py has no Absent exception"
+    return mod
+
+
+def recorder(root, record, says, code):
+    """The copy's hooks/prompt.py: records its own path, the stdin it read, PLUGIN_ROOT and its parent's pid; prints `says`; exits `code`."""
+    write(os.path.join(root, "hooks", "prompt.py"),
+          "import json, os, sys\n"
+          "data = sys.stdin.read()\n"
+          "with open(%r, 'a', encoding='utf-8') as fh:\n"
+          "    fh.write(json.dumps({'file': os.path.abspath(__file__), 'stdin': data, 'root': os.environ.get('PLUGIN_ROOT'), 'ppid': os.getppid()}) + '\\n')\n"
+          "sys.stdout.write(%r)\n"
+          "sys.exit(%d)\n" % (record, says, code))
+
+
+def recorded_runs(record):
+    if not os.path.exists(record):
+        return []
+    return [json.loads(l) for l in io.open(record, encoding="utf-8").read().splitlines() if l.strip()]
+
+
+def run_hook(h, codex, command, extra=None, drop=()):
+    """Run a generated command the way Codex runs a hook: split with shlex, the hook's JSON on stdin, HUNSU_CODEX_DIR the fake Codex,
+    AGENT_HOST removed. Returns (completed process, the stdin payload)."""
+    import shlex
+    env = dict(os.environ)
+    for k in ("AGENT_HOST", "HUNSU_CODEX_DIR", "AGENT_CODEX_HOME", "CODEX_HOME", "PLUGIN_ROOT"):
+        env.pop(k, None)
+    env["HUNSU_CODEX_DIR"] = codex
+    env.update(extra or {})
+    for k in drop:
+        env.pop(k, None)
+    payload = json.dumps({"cwd": h.target, "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": "hello there"})
+    r = subprocess.run(shlex.split(command), input=payload, capture_output=True, text=True, env=env, cwd=h.target, timeout=120)
+    return r, payload
+
+
+def file_commands(h, event="UserPromptSubmit"):
+    return [hk["command"] for g in hunsu.load_json(hooks_path(h))["hooks"].get(event, []) for hk in g["hooks"]]
+
+
+def prompt_command(h):
+    """The one command of the file that runs alpha's hooks/prompt.py (asserted, so a missing file or form is a failure, not an error)."""
+    assert os.path.isfile(hooks_path(h)), "no .codex/hooks.json"
+    found = [c for c in file_commands(h) if "hooks/prompt.py" in c]
+    assert len(found) == 1, found
+    return found[0]
+
+
+def assert_dispatched(h, key="alpha@m1"):
+    command = prompt_command(h)
+    assert command == dispatched_command(h.target, key), (command, dispatched_command(h.target, key))
+    assert os.path.isfile(dispatcher_of(h)), "no .codex/hunsu-dispatch.py beside the dispatched groups"
+    return command
+
+
+def stderr_lines(r):
+    return [l for l in r.stderr.splitlines() if l.strip()]
+
+
+def assert_dispatch_failed(r, *parts):
+    lines = stderr_lines(r)
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert r.stdout == "", ("the dispatcher wrote to stdout", r.stdout)
+    assert len(lines) == 1 and lines[0].startswith(DISPATCH_PREFIX), lines
+    for part in parts:
+        assert part in lines[0], (part, lines[0])
+    return lines[0]
+
+
+def write_2_3_0_form(h, root, before=(), after=(), description=None, event="UserPromptSubmit"):
+    """.codex/hooks.json as hunsu 2.3.0 wrote it: the provenance names the versioned group of `root`, the project's own around it."""
+    gen = versioned_group(root)
+    record = {"hooks": {event: [gen]}}
+    if description is not None:
+        record["description"] = description
+    doc = {"description": hunsu.CODEX_HOOK_PROVENANCE + json.dumps(record, ensure_ascii=False, separators=(",", ":")),
+           "hooks": {event: list(before) + [gen] + list(after)}}
+    os.makedirs(os.path.dirname(hooks_path(h)), exist_ok=True)
+    hunsu.save_json(hooks_path(h), doc)
+    gitignore = os.path.join(h.target, ".gitignore")
+    if not os.path.exists(gitignore):
+        write(gitignore, ".codex/hooks.json\n")
+    return gen
+
+
+def codex_hook_findings(target):
+    errors, warnings, _ = hunsu.check(target)
+    return [e for e in errors if e.startswith("codex hook")], [w for w in warnings if w.startswith("codex hook")]
+
+
+def gitignore_names_both(target):
+    lines = io.open(os.path.join(target, ".gitignore"), encoding="utf-8").read().split("\n")
+    return ".codex/hooks.json" in lines and ".codex/hunsu-dispatch.py" in lines
+
+
+# ---- Q-dispatch
+
+def test_Q_dispatch_1_a_cache_version_change_between_lock_and_hook_time_runs_the_installed_copy_and_says_the_skew():
+    with Host() as h, codex_here(h) as (codex, _):
+        record = os.path.join(h.home, "ran.jsonl")
+        old = codex_hooks_project(h, codex, "1.0.0")
+        recorder(old, record, "alpha 1.0.0 said\n", 4)
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        command = assert_dispatched(h)
+        before = read_bytes(hooks_path(h))
+        # Codex takes a release: the 1.0.0 copy removed, 2.0.0 installed; nobody regenerates the project's file
+        shutil.rmtree(old)
+        new = codex_hook_project(h, codex, "2.0.0")
+        recorder(new, record, "alpha 2.0.0 said\n", 5)
+        r, payload = run_hook(h, codex, command)
+        assert r.returncode == 5 and r.stdout == "alpha 2.0.0 said\n", (r.returncode, r.stdout, r.stderr)
+        ran = recorded_runs(record)
+        assert len(ran) == 1, ran
+        assert os.path.realpath(ran[0]["file"]) == os.path.realpath(os.path.join(new, "hooks", "prompt.py")), ran
+        assert ran[0]["stdin"] == payload, ran
+        assert os.path.realpath(ran[0]["root"]) == os.path.realpath(new), ("PLUGIN_ROOT is the resolved copy's root", ran)
+        if os.name == "posix":   # the dispatcher replaced itself with the hook (os.execvpe): the hook's parent is the one that ran the command
+            assert ran[0]["ppid"] == os.getpid(), ("the hook was not exec'd in the dispatcher's place", ran[0]["ppid"], os.getpid())
+        lines = stderr_lines(r)
+        assert len(lines) == 1 and lines[0].startswith(DISPATCH_PREFIX), lines
+        assert "alpha" in lines[0] and "2.0.0" in lines[0] and "1.0.0" in lines[0], lines
+        assert read_bytes(hooks_path(h)) == before, "the update left the project's file as it was"
+        # the project takes 2.0.0: the regeneration writes the same text again (it names no version), and the skew line is gone
+        run("add", "alpha", "--target", h.target)
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert prompt_command(h) == command and read_bytes(hooks_path(h)) == before, "a regeneration after the update writes the same groups"
+        r, _ = run_hook(h, codex, command)
+        assert r.returncode == 5 and r.stdout == "alpha 2.0.0 said\n" and r.stderr == "", (r.returncode, r.stdout, r.stderr)
+        os.remove(os.path.join(h.target, hunsu.LOCK))   # no lock: nothing to compare, nothing said
+        r, _ = run_hook(h, codex, command)
+        assert r.returncode == 5 and r.stderr == "", (r.returncode, r.stderr)
+
+
+def test_Q_dispatch_2_a_missing_plugin_fails_loudly_with_exit_2_and_runs_nothing():
+    with Host() as h, codex_here(h) as (codex, _):
+        record = os.path.join(h.home, "ran.jsonl")
+        root = codex_hooks_project(h, codex, "1.0.0")
+        recorder(root, record, "ran\n", 0)
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        command = assert_dispatched(h)
+        config = os.path.join(codex, "config.toml")
+        saved = read_bytes(config)
+        markets_only = '[marketplaces.m1]\nsource_type = "git"\nsource = "https://github.com/org/m1"\n'
+        mod = dispatch_module()
+        reasons = {}
+        cache = os.path.join(codex, "plugins", "cache", "m1", "alpha")
+        aside = os.path.join(h.home, "alpha-aside")
+
+        def restore():
+            with io.open(config, "wb") as fh:
+                fh.write(saved)
+            if os.path.isdir(aside):
+                shutil.move(aside, cache)
+
+        for case in ("disabled", "section absent", "cache removed", "config absent", "config not toml"):
+            restore()
+            if case == "disabled":
+                write(config, saved.decode("utf-8").replace("enabled = true", "enabled = false"))
+            elif case == "section absent":
+                write(config, markets_only)
+            elif case == "cache removed":
+                shutil.move(cache, aside)
+            elif case == "config absent":
+                os.remove(config)
+            else:
+                write(config, "[plugins.\"alpha@m1\"\nenabled = = true\n")
+            try:
+                mod.resolve(codex, "alpha@m1")
+            except mod.Absent as why:
+                assert str(why).strip(), (case, "Absent carries a reason")
+                reasons[case] = str(why)
+            else:
+                raise AssertionError("resolve did not raise Absent: %s" % case)
+            r, _ = run_hook(h, codex, command)
+            assert_dispatch_failed(r, "alpha@m1")
+            assert recorded_runs(record) == [], (case, "the hook ran although its plugin is absent")
+        restore()
+        # each kind of absence has its own reason
+        assert len({reasons["config absent"], reasons["config not toml"], reasons["disabled"], reasons["cache removed"]}) == 4, reasons
+        r, _ = run_hook(h, codex, command)
+        assert r.returncode == 0 and len(recorded_runs(record)) == 1, (r.returncode, r.stderr)
+
+
+def test_Q_dispatch_3_a_missing_script_bad_arguments_or_an_unstartable_program_exit_2_and_run_nothing():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        command = assert_dispatched(h)
+        os.remove(os.path.join(root, "hooks", "prompt.py"))   # the copy lacks the hook's script
+        r, _ = run_hook(h, codex, command)
+        assert_dispatch_failed(r, "1.0.0", "hooks/prompt.py")
+        write(os.path.join(root, "hooks", "prompt.py"), "")
+        dispatcher = posix(dispatcher_of(h))
+        py = machine_python()
+        for argv in ('%s "%s"' % (py, dispatcher), '%s "%s" alpha@m1' % (py, dispatcher)):   # fewer than two arguments
+            r, _ = run_hook(h, codex, argv)
+            assert_dispatch_failed(r)
+        r, _ = run_hook(h, codex, '%s "%s" alpha@m1 no-such-program-hunsu-q "{PLUGIN_ROOT}/hooks/prompt.py"' % (py, dispatcher))
+        assert_dispatch_failed(r)   # PROGRAM cannot be started: exit 2, never 127 or 1
+
+
+def test_Q_dispatch_4_the_dispatcher_is_the_projects_byte_equal_copy_standard_library_only_and_runs_with_no_hunsu_anywhere():
+    import ast
+    with Host() as h, codex_here(h) as (codex, _):
+        record = os.path.join(h.home, "ran.jsonl")
+        root = codex_hooks_project(h, codex, "1.0.0")
+        recorder(root, record, "ran\n", 0)
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        command = assert_dispatched(h)
+        path = dispatcher_of(h)
+        assert os.path.isfile(DISPATCH), "no plugin/hooks/dispatch.py"
+        assert read_bytes(path) == read_bytes(DISPATCH), "the project's dispatcher is not byte-equal to the payload's"
+        assert not os.path.realpath(path).startswith(os.path.realpath(codex) + os.sep), path
+        assert gitignore_names_both(h.target), io.open(os.path.join(h.target, ".gitignore"), encoding="utf-8").read()
+        # standard library only, nothing of hunsu
+        tree = ast.parse(read_bytes(DISPATCH).decode("utf-8"))
+        imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+        imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module and not n.level}
+        assert not [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.level], "a relative import"
+        assert imported and imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
+        # no hunsu copy anywhere on the fake host: only alpha in either cache
+        for d, dirs, files in os.walk(h.home):
+            assert "hunsu.py" not in files and not ("cache" in d.split(os.sep) and "hunsu" in dirs), d
+        r, _ = run_hook(h, codex, command, drop=("PYTHONPATH",))
+        assert r.returncode == 0 and r.stdout == "ran\n" and r.stderr == "", (r.returncode, r.stdout, r.stderr)
+        # replacing every copy leaves it in place
+        shutil.rmtree(os.path.join(codex, "plugins", "cache"))
+        assert os.path.isfile(path)
+
+
+def test_Q_dispatch_5_the_newest_copy_in_version_order_is_resolved_as_the_codex_survey_reports():
+    with Host() as h, codex_here(h) as (codex, _):
+        older = codex_hook_project(h, codex, "1.9.0")
+        newest = codex_hook_project(h, codex, "1.10.0")
+        os.makedirs(os.path.join(codex, "plugins", "cache", "m1", "alpha", "local-build"))   # not a version: first in the order
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        mod = dispatch_module()
+        root, version = mod.resolve(codex, "alpha@m1")
+        assert version == "1.10.0" and os.path.normpath(root) == os.path.normpath(newest), (root, version)
+        surveyed = hunsu.survey_codex(h.target)["plugins"]["alpha@m1"]
+        assert os.path.normpath(root) == os.path.normpath(surveyed["path"]) and version == surveyed["version"], (root, version, surveyed)
+        # the version is the one the copy declares (.codex-plugin/plugin.json, else plugin.json), else the directory's name
+        write(os.path.join(newest, ".codex-plugin", "plugin.json"), {"name": "alpha", "version": "1.10.0-declared"})
+        assert mod.resolve(codex, "alpha@m1")[1] == "1.10.0-declared"
+        os.remove(os.path.join(newest, ".codex-plugin", "plugin.json"))
+        write(os.path.join(newest, "plugin.json"), {"name": "alpha", "version": "1.10.0-root"})
+        assert mod.resolve(codex, "alpha@m1")[1] == "1.10.0-root"
+        os.remove(os.path.join(newest, "plugin.json"))
+        assert mod.resolve(codex, "alpha@m1")[1] == "1.10.0"
+        assert os.path.isdir(older)
+
+
+def test_Q_dispatch_5_at_hook_time_codex_home_is_hunsu_codex_dir_then_agent_codex_home_then_codex_home_then_home():
+    with Host() as h, codex_here(h) as (codex, _):
+        record = os.path.join(h.home, "ran.jsonl")
+        root = codex_hooks_project(h, codex, "1.0.0")
+        recorder(root, record, "ran\n", 0)
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        command = assert_dispatched(h)
+        nowhere = os.path.join(h.home, "no-codex-here")
+        os.makedirs(nowhere)
+        cases = (({"HUNSU_CODEX_DIR": codex, "AGENT_CODEX_HOME": nowhere, "CODEX_HOME": nowhere}, (), 0),
+                 ({"AGENT_CODEX_HOME": codex, "CODEX_HOME": nowhere}, ("HUNSU_CODEX_DIR",), 0),
+                 ({"CODEX_HOME": codex}, ("HUNSU_CODEX_DIR",), 0),
+                 ({"HOME": h.home}, ("HUNSU_CODEX_DIR",), 0),   # ~/.codex of the fake host's HOME
+                 ({"HUNSU_CODEX_DIR": nowhere, "AGENT_CODEX_HOME": codex, "CODEX_HOME": codex}, (), 2))
+        for extra, drop, want in cases:
+            r, _ = run_hook(h, codex, command, extra=extra, drop=drop)
+            assert r.returncode == want, (extra, drop, r.returncode, r.stderr)
+
+
+def test_Q_dispatch_6_other_commands_render_as_before_and_a_dispatched_hook_keeps_its_fields_and_matcher():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex, "1.0.0")
+        tools = os.path.join(h.target, "tools")
+        write(os.path.join(tools, "x.py"), "")
+        two = 'cd "${PLUGIN_ROOT}" && python3 hooks/prompt.py'
+        assign = 'FOO=1 python3 "${PLUGIN_ROOT}/hooks/prompt.py"'
+        plain = 'python3 "%s/x.py"' % posix(tools)
+        write(os.path.join(root, "hooks", "codex.json"), {"hooks": {
+            "SessionStart": [{"matcher": "startup", "hooks": [{"type": "command", "command": 'python3 "${PLUGIN_ROOT}/hooks/prompt.py"', "timeout": 30, "statusMessage": "checking"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": plain}]}, {"hooks": [{"type": "command", "command": two}]},
+                     {"hooks": [{"type": "command", "command": assign}]}]}})
+        run("add", "alpha", "--target", h.target)
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        hooks = hunsu.load_json(hooks_path(h))["hooks"]
+        assert hooks["SessionStart"] == [{"matcher": "startup", "hooks": [{"type": "command", "command": dispatched_command(h.target), "timeout": 30,
+                                                                           "statusMessage": "checking"}]}], hooks["SessionStart"]
+        r = root.replace("\\", "/")
+        assert hooks["Stop"] == [{"hooks": [{"type": "command", "command": plain}]},
+                                 {"hooks": [{"type": "command", "command": 'cd "%s" && python3 hooks/prompt.py' % r}]},
+                                 {"hooks": [{"type": "command", "command": 'FOO=1 python3 "%s/hooks/prompt.py"' % r}]}], hooks["Stop"]
+
+
+def test_Q_dispatch_6_with_only_python_on_path_both_interpreters_are_python():
+    with Host() as h, codex_here(h) as (codex, bin_dir):
+        codex_hooks_project(h, codex, "1.0.0")
+        os.remove(os.path.join(bin_dir, "python3"))
+        os.symlink(sys.executable, os.path.join(bin_dir, "python"))
+        assert shutil.which("python3") is None and shutil.which("python")
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        command = prompt_command(h)
+        assert command == dispatched_command(h.target, py="python"), command
+        assert command.startswith('python "%s/.codex/hunsu-dispatch.py" alpha@m1 python "{PLUGIN_ROOT}/' % posix(h.target)), command
+
+
+def test_Q_dispatch_writing_no_dispatcher_without_a_dispatched_command_and_never_removing_one():
+    with Host() as h, codex_here(h) as (codex, _):
+        tools = os.path.join(h.target, "tools")
+        write(os.path.join(tools, "x.py"), "")
+        plain = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": 'python3 "%s/x.py"' % posix(tools)}]}]}}
+        dispatched = {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": 'python3 "${PLUGIN_ROOT}/hooks/prompt.py"'}]}]}}
+        root = codex_hooks_project(h, codex, "1.0.0")
+
+        def release(version, hooks):   # Codex takes a release of alpha whose hooks/codex.json is `hooks`; the project takes it and locks
+            nonlocal root
+            shutil.rmtree(root)
+            root = codex_hook_project(h, codex, version)
+            write(os.path.join(root, "hooks", "codex.json"), hooks)
+            run("add", "alpha", "--target", h.target)
+            with on_codex():
+                code, out = run("lock", "--target", h.target)
+            assert code == 0, out
+
+        release("1.1.0", plain)
+        assert os.path.isfile(hooks_path(h)) and not os.path.exists(dispatcher_of(h)), "a dispatcher written with no dispatched command"
+        release("1.2.0", dispatched)
+        assert_dispatched(h)
+        release("1.3.0", plain)   # a release with no dispatched command: the dispatcher stays
+        assert os.path.isfile(dispatcher_of(h)) and read_bytes(dispatcher_of(h)) == read_bytes(DISPATCH)
+
+
+# ---- Q-check
+
+def test_Q_check_1_a_file_in_the_2_3_0_form_is_one_versioned_warn_no_not_active_error_and_a_claude_lock_succeeds():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex, "1.0.0")
+        write_2_3_0_form(h, root)
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors, warnings = codex_hook_findings(h.target)
+            assert errors == [], (host, errors)
+            versioned = [w for w in warnings if w.startswith(VERSIONED_WARN)]
+            assert len(versioned) == 1, (host, warnings)
+            for part in ("alpha 1.0.0", "UserPromptSubmit", "`hunsu upgrade --hooks-only`", ".codex/hunsu-dispatch.py"):
+                assert part in versioned[0], (host, part, versioned[0])
+            assert "drops" not in versioned[0], versioned[0]
+        code, out = run("lock", "--target", h.target)   # on Claude Code
+        assert code == 0, out
+
+
+def test_Q_check_2_the_projects_own_group_naming_a_versioned_copy_is_warned_and_kept_by_a_regeneration():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert_dispatched(h)
+        mine = {"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "%s/hooks/prompt.py"' % root.replace("\\", "/")}]}
+        doc = hunsu.load_json(hooks_path(h))
+        doc["hooks"]["PreToolUse"] = [mine]
+        hunsu.save_json(hooks_path(h), doc)
+        tail = ", a versioned copy in the Codex plugin cache (alpha 1.0.0) — it fails once Codex replaces that copy; hunsu keeps the project's own groups: fix it in .codex/hooks.json"
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors, warnings = codex_hook_findings(h.target)
+            assert errors == [], (host, errors)
+            own = [w for w in warnings if w.startswith("codex hook PreToolUse [Bash]: the project's own group runs ")]
+            assert len(own) == 1 and own[0].endswith(tail) and "hooks/prompt.py" in own[0], (host, warnings)
+            assert not [w for w in warnings if w.startswith(VERSIONED_WARN)], (host, warnings)
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert hunsu.load_json(hooks_path(h))["hooks"]["PreToolUse"] == [mine], "a regeneration keeps the project's own group"
+        # a file that predates the provenance: a group other than the render is the project's — the same warn
+        hunsu.save_json(hooks_path(h), {"description": "written by hunsu lock from the locked plugins' hooks/codex.json; machine paths — not committed",
+                                        "hooks": {"PreToolUse": [mine]}})
+        warnings = codex_hook_findings(h.target)[1]
+        assert len([w for w in warnings if w.startswith("codex hook PreToolUse [Bash]: the project's own group runs ") and w.endswith(tail)]) == 1, warnings
+
+
+def test_Q_check_3_a_dispatched_group_whose_plugin_left_codex_is_an_error_and_a_claude_lock_refuses():
+    with Host() as h, codex_here(h) as (codex, _):
+        codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert_dispatched(h)
+        ghost = {"hooks": [{"type": "command", "command": dispatched_command(h.target, key="ghost@m9")}]}   # the project's own, dispatched
+        doc = hunsu.load_json(hooks_path(h))
+        doc["hooks"]["Stop"] = [ghost]
+        hunsu.save_json(hooks_path(h), doc)
+        warnings = codex_hook_findings(h.target)[1]
+        assert len([w for w in warnings if w.startswith("codex hook Stop: dispatches to ghost@m9, which is not installed for Codex on this machine (")]) == 1, warnings
+        config = os.path.join(codex, "config.toml")
+        write(config, '[marketplaces.m1]\nsource_type = "git"\nsource = "https://github.com/org/m1"\n')   # alpha left Codex; hunsu.json still declares it
+        errors = codex_hook_findings(h.target)[0]
+        said = [e for e in errors if e.startswith("codex hook UserPromptSubmit: dispatches to alpha@m1, which is not installed for Codex on this machine (")]
+        assert len(said) == 1, errors
+        assert "the dispatcher stops this hook (exit 2) on every UserPromptSubmit event" in said[0] and "codex plugin add alpha@m1" in said[0], said
+        assert hunsu.REGENERATES not in said[0], said
+        code, out = run("lock", "--target", h.target)   # Claude Code
+        assert code != 0 and "alpha@m1" in out, out
+        # alpha out of hunsu.json too: a regeneration drops the group, and a Codex lock passes for it
+        manifest(h.target, plugins={})
+        errors = codex_hook_findings(h.target)[0]
+        said = [e for e in errors if e.startswith("codex hook UserPromptSubmit: dispatches to alpha@m1, which is not installed for Codex")]
+        assert len(said) == 1 and hunsu.REGENERATES in said[0], errors
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert not hunsu.load_json(hooks_path(h))["hooks"].get("UserPromptSubmit"), hunsu.load_json(hooks_path(h))
+        assert hunsu.load_json(hooks_path(h))["hooks"]["Stop"] == [ghost], "the project's own group is kept"
+
+
+def test_Q_check_4_a_dispatched_group_whose_copy_lacks_the_script_is_a_reinstall_until_a_release_drops_the_hook():
+    with Host() as h, codex_here(h) as (codex, _):
+        old = codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert_dispatched(h)
+        os.remove(os.path.join(old, "hooks", "prompt.py"))   # hooks/codex.json still names it
+        lead = "codex hook UserPromptSubmit: dispatches to alpha 1.0.0's hooks/prompt.py, which that copy lacks — the dispatcher stops this hook (exit 2) on every UserPromptSubmit event"
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors = codex_hook_findings(h.target)[0]
+            said = [e for e in errors if e.startswith(lead)]
+            assert len(said) == 1 and "reinstall" in said[0] and hunsu.REGENERATES not in said[0], (host, errors)
+        code, out = run("lock", "--target", h.target)
+        assert code != 0 and "hooks/prompt.py" in out, out
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code != 0 and "hooks/prompt.py" in out, out
+        # a release whose hooks/codex.json no longer has that hook (it runs hooks/other.py), and lacks hooks/prompt.py
+        shutil.rmtree(old)
+        new = codex_hook_project(h, codex, "2.0.0", script=False)
+        write(os.path.join(new, "hooks", "codex.json"), {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": 'python3 "${PLUGIN_ROOT}/hooks/other.py"'}]}]}})
+        write(os.path.join(new, "hooks", "other.py"), "")
+        run("add", "alpha", "--target", h.target)
+        errors = codex_hook_findings(h.target)[0]
+        said = [e for e in errors if e.startswith("codex hook UserPromptSubmit: dispatches to alpha 2.0.0's hooks/prompt.py, which that copy lacks")]
+        assert len(said) == 1 and hunsu.REGENERATES in said[0], errors
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert file_commands(h) == [dispatched_command(h.target, script="hooks/other.py")], file_commands(h)
+        assert codex_hook_findings(h.target)[0] == []
+
+
+def test_Q_check_5_a_deleted_dispatcher_is_one_error_a_codex_lock_writes_back_and_an_edited_one_a_warn():
+    with Host() as h, codex_here(h) as (codex, _):
+        codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert_dispatched(h)
+        os.remove(dispatcher_of(h))
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors, warnings, _ = hunsu.check(h.target)
+            said = [e for e in errors if e.startswith(DISPATCHER_FINDING)]
+            assert len(said) == 1 and ".codex/hunsu-dispatch.py" in said[0] and "`hunsu upgrade --hooks-only`" in said[0], (host, errors)
+            assert not [w for w in warnings if w.startswith(DISPATCHER_FINDING)], (host, warnings)
+        code, out = run("lock", "--target", h.target)   # Claude Code refuses
+        assert code != 0 and "hunsu-dispatch.py" in out, out
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert os.path.isfile(dispatcher_of(h)) and read_bytes(dispatcher_of(h)) == read_bytes(DISPATCH)
+        with io.open(dispatcher_of(h), "a", encoding="utf-8") as fh:
+            fh.write("# edited here\n")
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not [e for e in errors if e.startswith(DISPATCHER_FINDING)], errors
+        said = [w for w in warnings if w.startswith(DISPATCHER_FINDING)]
+        assert len(said) == 1 and "`hunsu upgrade --hooks-only`" in said[0], warnings
+
+
+def test_Q_check_6_skew_between_the_lock_and_the_codex_copy_is_one_warn_on_claude_code_and_none_on_codex():
+    with Host() as h, codex_here(h) as (codex, _):
+        old = codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert_dispatched(h)
+        shutil.rmtree(old)
+        codex_hook_project(h, codex, "2.0.0")
+        with on_host("claude-code"):
+            warnings = hunsu.check(h.target)[1]
+        said = [w for w in warnings if w.startswith(SKEW_WARN)]
+        assert len(said) == 1 and "alpha" in said[0] and "2.0.0" in said[0] and "1.0.0" in said[0], warnings
+        with on_codex():
+            errors, warnings, _ = hunsu.check(h.target)
+        assert not [x for x in errors + warnings if x.startswith(SKEW_WARN)], (errors, warnings)
+        os.remove(os.path.join(h.target, hunsu.LOCK))
+        with on_host("claude-code"):
+            errors, warnings, _ = hunsu.check(h.target)
+        assert not [x for x in errors + warnings if x.startswith(SKEW_WARN)], warnings
+
+
+# ---- Q-migrate
+
+def migrate_project(h, codex):
+    """alpha 1.0.0 for both hosts; .codex/hooks.json in the 2.3.0 form with the project's own groups around the generated one and a
+    project description. Returns (root, guard, own, record)."""
+    record = os.path.join(h.home, "ran.jsonl")
+    root = codex_hooks_project(h, codex, "1.0.0")
+    tools = os.path.join(h.target, "tools")
+    write(os.path.join(tools, "guard.py"), ""); write(os.path.join(tools, "own.py"), "")
+    guard = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"%s/guard.py\"" % tools}]}
+    own = {"hooks": [{"type": "command", "command": "python3 \"%s/own.py\"" % tools}]}
+    write_2_3_0_form(h, root, before=[guard], after=[own], description="Our project hooks")
+    return root, guard, own, record
+
+
+def assert_migrated(h, guard, own):
+    doc = hunsu.load_json(hooks_path(h))
+    gen = generated_group(h.target)
+    assert doc["hooks"] == {"UserPromptSubmit": [guard, own, gen]}, doc["hooks"]
+    assert doc["description"].startswith(hunsu.CODEX_HOOK_PROVENANCE), doc["description"]
+    kept = json.loads(doc["description"][len(hunsu.CODEX_HOOK_PROVENANCE):])
+    assert kept == {"hooks": {"UserPromptSubmit": [gen]}, "description": "Our project hooks"}, kept
+    assert os.path.isfile(dispatcher_of(h)) and read_bytes(dispatcher_of(h)) == read_bytes(DISPATCH), "no byte-equal .codex/hunsu-dispatch.py"
+    assert gitignore_names_both(h.target)
+
+
+def replace_copy_and_run(h, codex, old, record):
+    shutil.rmtree(old)
+    new = codex_hook_project(h, codex, "2.0.0")
+    recorder(new, record, "alpha 2.0.0 said\n", 0)
+    errors = codex_hook_findings(h.target)[0]
+    assert errors == [], errors
+    r, _ = run_hook(h, codex, prompt_command(h))
+    ran = recorded_runs(record)
+    assert r.returncode == 0 and r.stdout == "alpha 2.0.0 said\n" and len(ran) == 1, (r.returncode, r.stdout, r.stderr, ran)
+    assert os.path.realpath(ran[0]["file"]) == os.path.realpath(os.path.join(new, "hooks", "prompt.py")), ran
+
+
+def test_Q_migrate_1_from_claude_code_upgrade_hooks_only_dispatches_the_generated_groups_and_keeps_the_projects_own():
+    with Host() as h, codex_here(h) as (codex, _):
+        root, guard, own, record = migrate_project(h, codex)
+        code, out = run("lock", "--target", h.target)   # Claude Code: the 2.3.0 form does not stop it
+        assert code == 0, out
+        code, out = upgrade("--hooks-only", "--target", h.target)
+        assert code == 0, out
+        assert_migrated(h, guard, own)
+        errors, warnings = codex_hook_findings(h.target)
+        assert errors == [] and warnings == [], (errors, warnings)
+        replace_copy_and_run(h, codex, root, record)
+
+
+def test_Q_migrate_2_a_codex_lock_migrates_the_same_way():
+    with Host() as h, codex_here(h) as (codex, _):
+        root, guard, own, record = migrate_project(h, codex)
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert_migrated(h, guard, own)
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors, warnings = codex_hook_findings(h.target)
+            assert errors == [] and warnings == [], (host, errors, warnings)
+        replace_copy_and_run(h, codex, root, record)
+
+
+def test_Q_migrate_3_a_second_upgrade_hooks_only_changes_no_byte_of_either_file():
+    with Host() as h, codex_here(h) as (codex, _):
+        root, guard, own, record = migrate_project(h, codex)
+        code, out = upgrade("--hooks-only", "--target", h.target)
+        assert code == 0, out
+        assert_migrated(h, guard, own)
+        files = [hooks_path(h), dispatcher_of(h), os.path.join(h.target, ".gitignore")]
+        before = {p: read_bytes(p) for p in files}
+        code, out = upgrade("--hooks-only", "--target", h.target)
+        assert code == 0, out
+        assert {p: read_bytes(p) for p in files} == before
+
+
+def test_Q_migrate_a_file_from_before_the_provenance_takes_its_versioned_render_groups_as_hunsus_and_keeps_the_rest():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex, "1.0.0")
+        tools = os.path.join(h.target, "tools")
+        write(os.path.join(tools, "guard.py"), "")
+        guard = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"%s/guard.py\"" % tools}]}
+        os.makedirs(os.path.dirname(hooks_path(h)), exist_ok=True)
+        hunsu.save_json(hooks_path(h), {"description": "written by hunsu lock from the locked plugins' hooks/codex.json; machine paths — not committed",
+                                        "hooks": {"UserPromptSubmit": [versioned_group(root)], "PreToolUse": [guard]}})
+        code, out = upgrade("--hooks-only", "--target", h.target)
+        assert code == 0, out
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(h.target)], "PreToolUse": [guard]}, hunsu.load_json(hooks_path(h))
+        assert os.path.isfile(dispatcher_of(h)) and read_bytes(dispatcher_of(h)) == read_bytes(DISPATCH)
+
+
+# ---- Q-review: the build of Q-dispatch/Q-check fixed after a non-author review's findings
+
+def hook_env(codex, extra=None):
+    """The environment run_hook gives a generated command: HUNSU_CODEX_DIR the fake Codex, no AGENT_HOST or other Codex home."""
+    env = dict(os.environ)
+    for k in ("AGENT_HOST", "HUNSU_CODEX_DIR", "AGENT_CODEX_HOME", "CODEX_HOME", "PLUGIN_ROOT"):
+        env.pop(k, None)
+    env["HUNSU_CODEX_DIR"] = codex
+    env.update(extra or {})
+    return env
+
+
+def hook_payload(h):
+    return json.dumps({"cwd": h.target, "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": "hello there"})
+
+
+def dispatched_project(h, codex, says="ran\n", code=0):
+    """alpha 1.0.0 for both hosts, its prompt.py the recorder; a Codex lock wrote the dispatched group. Returns (root, command, record)."""
+    record = os.path.join(h.home, "ran.jsonl")
+    root = codex_hooks_project(h, codex, "1.0.0")
+    recorder(root, record, says, code)
+    with on_codex():
+        code_, out = run("lock", "--target", h.target)
+    assert code_ == 0, out
+    return root, assert_dispatched(h), record
+
+
+def no_traceback(what, fn, *args):
+    """Call fn; any exception but SystemExit's code (run() already turns that into a code) is a failed assertion naming it."""
+    import traceback
+    try:
+        return fn(*args)
+    except Exception:
+        raise AssertionError("%s raised: %s" % (what, traceback.format_exc()))
+
+
+def test_Q_review_1_with_tomllib_unavailable_the_dispatcher_exits_2_with_one_line_naming_3_11_and_runs_nothing():
+    import shlex
+    with Host() as h, codex_here(h) as (codex, _):
+        _, command, record = dispatched_project(h, codex)
+        words = shlex.split(command)[1:]   # <dispatcher> <key> <program words…>
+        driver = ("import runpy, sys; sys.modules['tomllib'] = None; sys.argv = [sys.argv[1]] + sys.argv[2:]; "
+                  "runpy.run_path(sys.argv[0], run_name='__main__')")
+        r = subprocess.run([sys.executable, "-c", driver] + words, input=hook_payload(h), capture_output=True, text=True,
+                           env=hook_env(codex), cwd=h.target, timeout=120)
+        assert "Traceback" not in r.stderr, ("the dispatcher died at import", r.returncode, r.stderr)
+        line = assert_dispatch_failed(r, "3.11")
+        assert recorded_runs(record) == [], ("the hook ran although the plugin could not be resolved", line)
+        # its repair is the interpreter's, not a plugin install (the docs task: Absent carries its own repair)
+        assert "PATH" in line and "codex plugin add" not in line and "install the plugin" not in line, line
+
+
+def test_Q_review_1_a_base_exception_from_resolve_is_one_dispatch_line_and_exit_2():
+    import shlex
+    with Host() as h, codex_here(h) as (codex, _):
+        _, command, record = dispatched_project(h, codex)
+        words = shlex.split(command)[1:]
+        marker = os.path.join(h.home, "resolve-called")
+        driver = ("import importlib.util, sys\n"
+                  "spec = importlib.util.spec_from_file_location('hunsu_dispatch_driven', sys.argv[1])\n"
+                  "mod = importlib.util.module_from_spec(spec)\n"
+                  "spec.loader.exec_module(mod)\n"
+                  "def resolve(*a, **k):\n"
+                  "    open(%r, 'w').close()\n"
+                  "    raise KeyboardInterrupt()\n"
+                  "mod.resolve = resolve\n"
+                  "sys.exit(mod.main(sys.argv[2:]))\n" % marker)
+        r = subprocess.run([sys.executable, "-c", driver] + words, input=hook_payload(h), capture_output=True, text=True,
+                           env=hook_env(codex), cwd=h.target, timeout=120)
+        assert os.path.exists(marker), ("the patched resolve was never called", r.returncode, r.stderr)
+        assert "Traceback" not in r.stderr, (r.returncode, r.stderr)
+        assert_dispatch_failed(r)
+        assert recorded_runs(record) == []
+
+
+def test_Q_review_2_a_lock_that_does_not_read_never_stops_the_hook():
+    with Host() as h, codex_here(h) as (codex, _):
+        _, command, record = dispatched_project(h, codex, "alpha said\n", 7)
+        lock = os.path.join(h.target, hunsu.LOCK)
+        saved = read_bytes(lock)
+        cases = ("<<<<<<< HEAD\n", "[]", '{"plugins": "x"}', '{"plugins": {"alpha": "x"}}', '{"plugins": {"alpha": {"version": 3}}}', None)
+        try:
+            for i, bad in enumerate(cases):
+                if os.path.isdir(lock):
+                    os.rmdir(lock)
+                elif os.path.exists(lock):
+                    os.remove(lock)
+                if bad is None:
+                    os.makedirs(lock)   # the lock path is a directory
+                else:
+                    write(lock, bad)
+                r, _ = run_hook(h, codex, command)
+                said = stderr_lines(r)
+                assert r.returncode == 7, (bad, "the lock stopped the hook", r.returncode, r.stderr)
+                assert len(recorded_runs(record)) == i + 1, (bad, "the hook did not run")
+                assert r.stdout == "alpha said\n", (bad, r.stdout)
+                assert len(said) <= 1 and all(l.startswith(DISPATCH_PREFIX) for l in said), (bad, said)
+        finally:
+            if os.path.isdir(lock):
+                os.rmdir(lock)
+            with io.open(lock, "wb") as fh:
+                fh.write(saved)
+
+
+def test_Q_review_3_a_codex_manifest_without_a_version_beside_a_plugin_json_with_one_is_the_directorys_name_as_the_survey_says():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex, "1.0.0")
+        write(os.path.join(root, ".codex-plugin", "plugin.json"), {"name": "alpha"})
+        write(os.path.join(root, "plugin.json"), {"name": "alpha", "version": "9.9.9"})
+        surveyed = hunsu.survey_codex(h.target)["plugins"]["alpha@m1"]["version"]
+        assert surveyed == "1.0.0", ("the survey takes the first non-empty manifest, then the directory's name", surveyed)
+        mod = dispatch_module()
+        resolved = no_traceback("resolve", mod.resolve, codex, "alpha@m1")
+        assert resolved[1] == surveyed, ("resolve's version is not the survey's", resolved, surveyed)
+
+
+def test_Q_review_3_a_malformed_registry_or_copy_ends_check_and_upgrade_with_no_traceback_and_resolve_raises_only_absent():
+    states = ("config plugins a string", "config entry not a table", "copy manifest not json", "newest cache entry a file")
+    for state in states:
+        with Host() as h, codex_here(h) as (codex, _):
+            root, _, _ = dispatched_project(h, codex)
+            config = os.path.join(codex, "config.toml")
+            markets = '[marketplaces.m1]\nsource_type = "git"\nsource = "https://github.com/org/m1"\n'
+            if state == "config plugins a string":
+                write(config, 'plugins = "x"\n' + markets)
+            elif state == "config entry not a table":
+                write(config, markets + '[plugins]\n"alpha@m1" = "on"\n')
+            elif state == "copy manifest not json":
+                write(os.path.join(root, ".codex-plugin", "plugin.json"), "{not json")
+            else:
+                write(os.path.join(codex, "plugins", "cache", "m1", "alpha", "9.9.9"), "not a copy\n")
+            mod = dispatch_module()
+            try:
+                mod.resolve(codex, "alpha@m1")
+            except mod.Absent as why:
+                assert str(why).strip(), (state, "Absent carries a reason")
+            except BaseException as err:
+                import traceback
+                raise AssertionError("%s: resolve raised %s, not Absent: %s" % (state, type(err).__name__, traceback.format_exc()))
+            with on_host("claude-code"):
+                no_traceback("%s: check" % state, hunsu.check, h.target)
+                code, out = no_traceback("%s: upgrade --hooks-only" % state, run, "upgrade", "--hooks-only", "--target", h.target)
+            assert code in (0, 1), (state, code, out)
+            assert "Traceback" not in out, (state, out)
+            if code == 1:
+                assert out.strip(), (state, "exit 1 with no message")
+
+
+def test_Q_review_4_a_missing_dispatcher_named_only_by_the_projects_own_group_is_not_passed_by_a_codex_lock():
+    with Host() as h, codex_here(h) as (codex, _):
+        codex_hooks_project(h, codex, "1.0.0")
+        manifest(h.target, plugins={})   # the render writes no dispatched command
+        with on_codex():
+            run("lock", "--target", h.target)
+        doc = hunsu.load_json(hooks_path(h)) if os.path.isfile(hooks_path(h)) else None
+        doc = doc or {"hooks": {}}
+        doc.setdefault("hooks", {})["Stop"] = [{"hooks": [{"type": "command", "command": dispatched_command(h.target, key="alpha@m1")}]}]
+        os.makedirs(os.path.dirname(hooks_path(h)), exist_ok=True)
+        hunsu.save_json(hooks_path(h), doc)
+        if os.path.exists(dispatcher_of(h)):
+            os.remove(dispatcher_of(h))
+        own = [c for g in hunsu.load_json(hooks_path(h))["hooks"].values() for gr in g for c in [hk["command"] for hk in gr["hooks"]]
+               if "hunsu-dispatch.py" in c]
+        assert len(own) == 1, ("the project's own group is the only dispatched one", own)
+        errors = hunsu.check(h.target)[0]
+        said = [e for e in errors if e.startswith(DISPATCHER_FINDING)]
+        assert len(said) == 1, errors
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+        assert code != 0, ("a Codex lock passed a dispatcher it does not write", out)
+        assert "hunsu-dispatch.py" in out, out
+        assert not os.path.exists(dispatcher_of(h)), "a refusing lock wrote the dispatcher"
+
+
+def test_Q_review_5_a_project_path_with_a_dollar_and_a_space_runs_through_sh_and_check_has_no_dispatcher_error():
+    if os.name != "posix":
+        raise Skip("/bin/sh -c is POSIX")
+    with Host() as h, codex_here(h) as (codex, _):
+        h.target = os.path.join(h.home, "pro $x ject")
+        os.makedirs(h.target)
+        _, _, record = dispatched_project(h, codex, "alpha said\n", 6)
+        command = prompt_command(h)
+        r = subprocess.run(["/bin/sh", "-c", command], input=hook_payload(h), capture_output=True, text=True,
+                           env=hook_env(codex, {"x": "EXPANDED"}), cwd=h.target, timeout=120)
+        assert r.returncode == 6 and r.stdout == "alpha said\n", ("the shell did not run the project's dispatcher", command, r.returncode, r.stderr)
+        assert len(recorded_runs(record)) == 1, recorded_runs(record)
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors, warnings, _ = hunsu.check(h.target)
+            assert not [x for x in errors + warnings if x.startswith(DISPATCHER_FINDING)], (host, errors, warnings)
+    with Host() as h, codex_here(h) as (codex, _):
+        _, command, _ = dispatched_project(h, codex)
+        assert command.startswith('python3 "' + posix(h.target) + '/.codex/hunsu-dispatch.py"'), command
+
+
+def test_Q_review_6_the_missing_script_line_names_the_copys_root_and_says_reinstall_once():
+    with Host() as h, codex_here(h) as (codex, _):
+        root, command, _ = dispatched_project(h, codex)
+        os.remove(os.path.join(root, "hooks", "prompt.py"))
+        r, _ = run_hook(h, codex, command)
+        line = assert_dispatch_failed(r, "alpha@m1", "hooks/prompt.py")
+        assert posix(root) in line or posix(os.path.realpath(root)) in line, ("the copy's root is not named", root, line)
+        assert line.count("reinstall") == 1, line
+
+
+def test_Q_review_6_checks_missing_dispatcher_error_writes_the_path_with_a_tilde():
+    with Host() as h, codex_here(h) as (codex, _):
+        dispatched_project(h, codex)
+        os.remove(dispatcher_of(h))
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors = hunsu.check(h.target)[0]
+            said = [e for e in errors if e.startswith(DISPATCHER_FINDING)]
+            assert len(said) == 1, (host, errors)
+            assert "~/project/.codex/hunsu-dispatch.py" in said[0], (host, said[0])
+            assert posix(h.home) not in said[0] and os.path.realpath(h.home) not in said[0], (host, said[0])
+
+
+def test_Q_review_7_a_payload_without_hooks_dispatch_py_runs_help_init_and_check_and_hunsu_imports_with_tomllib_blocked():
+    work = tempfile.mkdtemp(prefix="hunsu-payload-")
+    try:
+        payload = os.path.join(work, "plugin")
+        shutil.copytree(PLUGIN, payload, ignore=shutil.ignore_patterns("__pycache__"))
+        os.remove(os.path.join(payload, "hooks", "dispatch.py"))
+        claude, codex, home = (os.path.join(work, d) for d in ("claude", "codex", "home"))
+        project = os.path.join(work, "P")
+        for d in (claude, codex, home, project):
+            os.makedirs(d)
+        with host_path("claude-code", "codex"):
+            env = dict(os.environ)
+        for k in ("PYTHONPATH", "AGENT_HOST", "AGENT_CODEX_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"):
+            env.pop(k, None)
+        env.update({"HUNSU_CLAUDE_DIR": claude, "HUNSU_CODEX_DIR": codex, "HOME": home})
+        env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + "/usr/bin:/bin"
+        hunsu_py = os.path.join(payload, "hunsu.py")
+
+        def call(*argv):
+            return subprocess.run([sys.executable, hunsu_py] + list(argv), capture_output=True, text=True, env=env, cwd=work, timeout=120)
+
+        r = call("--help")
+        assert r.returncode == 0 and "Traceback" not in r.stderr, ("--help", r.returncode, r.stderr)
+        r = call("init", "--target", project)
+        assert r.returncode == 0 and "Traceback" not in r.stderr, ("init", r.returncode, r.stdout, r.stderr)
+        r = call("check", "--target", project)
+        assert "Traceback" not in r.stderr + r.stdout, ("check", r.returncode, r.stderr)
+        assert re.search(SUMMARY_RE, r.stdout + r.stderr), ("check did not reach its summary line", r.returncode, r.stdout, r.stderr)
+        r = subprocess.run([sys.executable, "-c", "import sys; sys.modules['tomllib'] = None; sys.path.insert(0, %r); import hunsu" % PLUGIN],
+                           capture_output=True, text=True, env=env, cwd=work, timeout=120)
+        assert r.returncode == 0, ("hunsu does not import with tomllib blocked", r.returncode, r.stderr)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):

@@ -27,13 +27,38 @@ import argparse
 import contextlib
 import functools
 import io
+import importlib.util
 import json
 import os
 import re
 import shutil
+import shlex
 import sys
 import tempfile
 import threading
+
+DISPATCH_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks", "dispatch.py")
+@functools.lru_cache(maxsize=1)
+def load_dispatch():
+    """Load the standalone dispatcher only for commands that need it."""
+    spec = importlib.util.spec_from_file_location("hunsu_dispatch", DISPATCH_SOURCE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def dispatched_command(command):
+    """(dispatcher, key, argv) for a project dispatcher command, else None."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if len(words) >= 4 and words[1].replace("\\", "/").endswith("/.codex/hunsu-dispatch.py"):
+        return words[1], words[2], words[3:]
+    return None
+
+
+
 
 HOME = os.path.expanduser("~")
 CLAUDE = os.environ.get("HUNSU_CLAUDE_DIR") or os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")   # the host honors CLAUDE_CONFIG_DIR; HUNSU_CLAUDE_DIR is for tests
@@ -214,6 +239,13 @@ def source_id(market):
 
 
 def survey_codex(target):
+    try:
+        return _survey_codex(target)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise SystemExit("Codex's registry does not read here: %s" % exc) from None
+
+
+def _survey_codex(target):
     """Everything that runs for `target` on Codex: ~/.codex/config.toml ([marketplaces.*], [plugins."name@market"]), plugin roots in
     ~/.codex/plugins/cache/<market>/<name>/<version>, the user's [[hooks.*]], the project's .codex/hooks.json. Codex no longer runs a
     plugin's own hooks (`plugin_hooks` is removed), so a plugin's hooks/codex.json is what `lock` materializes into the project."""
@@ -3011,7 +3043,7 @@ def codex_cache_copy(path):
 
 
 def codex_lock_render(target, manifest, s):
-    """What `hunsu lock` on Codex would write as hunsu's groups now — [(plugin, version, event, group)] from the copies Codex has installed
+    """What `hunsu lock` on Codex would write as hunsu's groups now — [(plugin, version, event, group, versioned_group)] from the copies Codex has installed
     for the manifest's plugins, rendered as `materialize_codex_hooks` renders them — or None when this machine's Codex registry
     cannot be read from here. On Codex the survey is Codex's; on Claude Code, Codex's registry is read for it (read-only)."""
     if HOST == "codex":
@@ -3024,8 +3056,9 @@ def codex_lock_render(target, manifest, s):
     out = []
     for name, want in (manifest.get("plugins") or {}).items():
         plugin = enabled(codex, name, want)
-        for event, groups in (codex_plugin_hooks([plugin]).items() if plugin else ()):
-            out += [(name, plugin.get("version"), event, g) for g in groups]
+        direct = codex_plugin_hooks([plugin]) if plugin else {}
+        for event, groups in (codex_plugin_hooks([plugin], target).items() if plugin else ()):
+            out += [(name, plugin.get("version"), event, g, old) for g, old in zip(groups, direct[event])]
     return out
 
 
@@ -3077,13 +3110,14 @@ def codex_hook_findings(target, manifest, s):
             groups = codex_lock_render(target, manifest, s)
             seen["groups"] = groups or []
             seen["readable"], seen["names"] = groups is not None, {}
-            for name, version, event, g in groups or []:
-                for p in group_paths(g):
+            for name, version, event, g, direct in groups or []:
+                for p in group_paths(direct):
                     seen["names"].setdefault(p, (name, version, event))
             seen["missing"] = [p for p in seen["names"] if not os.path.exists(p)]
         return seen["readable"], seen["names"], seen["missing"]
 
     doc, owned = {}, {}
+    dispatchers, versioned, skew = {}, [], set()
     if os.path.isfile(path):
         try:
             doc = load_json(path)
@@ -3100,12 +3134,52 @@ def codex_hook_findings(target, manifest, s):
         owned = (record or {}).get("hooks") or {}
         for event, groups in (doc.get("hooks") or {}).items():
             mine = list(owned.get(event, []))
-            for group in groups:
+            for group_index, group in enumerate(groups):
                 generated = group in mine
                 if generated:
                     mine.remove(group)   # one owned occurrence, as `lock` counts them
                 where = "%s%s" % (event, " [%s]" % group.get("matcher") if group.get("matcher") else "")
-                for script in group_paths(group):
+                dispatched = [d for h in group.get("hooks", []) if (d := dispatched_command(h.get("command", "")))]
+                for dispatcher, key, words in dispatched:
+                    dispatchers.setdefault(dispatcher, set()).add((event, group_index))
+                    name = key.partition("@")[0]
+                    DISPATCH = load_dispatch()
+                    try:
+                        root, version = DISPATCH.resolve(CODEX, key)
+                    except DISPATCH.Absent as why:
+                        repaired = generated and name not in manifest.get("plugins", {})
+                        how = REGENERATES if repaired else "install it for Codex (`codex plugin add %s`)" % key
+                        out.append(("error" if generated else "warning", "codex hook %s: dispatches to %s, which is not installed for Codex on this machine (%s) — the dispatcher stops this hook (exit 2) on every %s event; %s" % (where, key, why, event, how), repaired))
+                        continue
+                    if generated and HOST != "codex":
+                        pin = load_json(os.path.join(target, LOCK)).get("plugins", {}).get(name, {}).get("version")
+                        if pin and pin != version:
+                            skew.add((name, version, pin))
+                    for word in words:
+                        if "{PLUGIN_ROOT}" not in word:
+                            continue
+                        script = word.replace("{PLUGIN_ROOT}", root)
+                        if os.path.exists(script):
+                            continue
+                        readable, names, missing = render()
+                        repaired = generated and readable and script not in names and not missing
+                        if script in names:
+                            reported.add(script)
+                        how = REGENERATES if repaired else "reinstall it (`codex plugin remove` + `add`); a lock cannot repair it"
+                        out.append(("error" if generated else "warning", "codex hook %s: dispatches to %s %s's %s, which that copy lacks — the dispatcher stops this hook (exit 2) on every %s event; %s" % (where, name, version, word.replace("{PLUGIN_ROOT}/", ""), event, how), repaired))
+                direct_paths = [p for p in group_paths(group) if p not in [d[0] for d in dispatched]]
+                for _, _, words in dispatched:
+                    for script in hook_paths(shlex.join(words)):
+                        if script not in direct_paths:
+                            direct_paths.append(script)
+                origins = [(p, codex_cache_copy(p)) for p in direct_paths if os.path.exists(p) and codex_cache_copy(p)]
+                if origins:
+                    if generated and all(os.path.exists(p) for p in direct_paths):
+                        versioned.append((event, group, origins))
+                    elif not generated:
+                        script, copy = origins[0]
+                        out.append(("warning", "codex hook %s: the project's own group runs %s, a versioned copy in the Codex plugin cache (%s %s) — it fails once Codex replaces that copy; hunsu keeps the project's own groups: fix it in .codex/hooks.json" % (where, script.replace(home, "~"), copy[0], copy[1]), False))
+                for script in direct_paths:
                     if os.path.exists(script):
                         continue
                     shown, copy = script.replace(home, "~"), codex_cache_copy(script)
@@ -3144,6 +3218,29 @@ def codex_hook_findings(target, manifest, s):
                         how = "%sa Codex `lock` would not write it again: %s" % (gone, REGENERATES)
                     out.append(("error", "codex hook %s: runs %s, which is not on this machine — a group hunsu lock generated, so Codex fails this hook on "
                                          "every %s event; %s" % (where, shown, event, how), repaired))
+    for dispatcher, groups in dispatchers.items():
+        shown = dispatcher.replace(home, "~")
+        if not os.path.exists(dispatcher):
+            render()
+            repaired = (os.path.abspath(dispatcher) == os.path.join(os.path.abspath(target), ".codex", "hunsu-dispatch.py")
+                        and any(dispatched_command(h.get("command", "")) for _, _, _, g, _ in seen["groups"] for h in g.get("hooks", [])))
+            how = REGENERATES + ", writing the dispatcher with the groups" if repaired else "fix or remove the groups that name it"
+            out.append(("error", "codex hook dispatcher: %s is missing; %d group(s) run it and Codex fails each of them on every event; %s" % (shown, len(groups), how), repaired))
+        else:
+            with open(dispatcher, "rb") as stream, open(DISPATCH_SOURCE, "rb") as source:
+                differs = stream.read() != source.read()
+            if differs:
+                out.append(("warning", "codex hook dispatcher: %s is not the one this hunsu writes; %s, writing the dispatcher with the groups" % (shown, REGENERATES), True))
+    if versioned:
+        render()
+        labels = sorted({"%s %s (%s)" % (copy[0], copy[1], event) for event, _, origins in versioned for _, copy in origins})
+        staying = sum(any(e == event and g == group for _, _, e, g, _ in seen["groups"]) for event, group, _ in versioned)
+        text = "codex hooks: %d generated group(s) name versioned copies in the Codex plugin cache — %s; Codex replaces a copy when it takes a release and each such group then fails on every event; %s, rewriting them through .codex/hunsu-dispatch.py" % (len(versioned), ", ".join(labels), REGENERATES)
+        if staying:
+            text += "; %d group(s) stay versioned because their commands are not dispatchable simple commands" % staying
+        out.append(("warning", text, False))
+    if skew:
+        out.append(("warning", "codex hooks: the dispatched groups run the copies installed for Codex — %s; the dispatcher runs them and says so at each hook" % ", ".join("%s %s (lock pins %s)" % entry for entry in sorted(skew)), False))
     # what a Codex `lock` would write next must run: on Codex (where `lock` writes, and the survey is Codex's) always — the first
     # lock too, with no file yet; on Claude Code when the render was read for a generated group above
     if HOST == "codex" or seen:
@@ -3160,10 +3257,10 @@ def codex_hook_findings(target, manifest, s):
     render()
     available = {event: list(groups) for event, groups in (doc.get("hooks") or {}).items()}
     absent = []
-    for name, version, event, group in seen["groups"]:
+    for name, version, event, group, direct in seen["groups"]:
         remaining = available.setdefault(event, [])
-        if group in remaining:
-            remaining.remove(group)
+        if group in remaining or direct in remaining:
+            remaining.remove(group if group in remaining else direct)
         else:
             absent.append((name, version, event))
     if absent:
@@ -3177,8 +3274,8 @@ def codex_hook_findings(target, manifest, s):
         text += (": .codex/hooks.json lacks them" if os.path.isfile(path) else
                  ": .codex/hooks.json does not exist (hunsu generates it per machine and it is not committed, so a new clone or worktree has none)")
         current = {}
-        for _, _, event, group in seen["groups"]:
-            current.setdefault(event, []).append(group)
+        for _, _, event, group, direct in seen["groups"]:
+            current.setdefault(event, []).extend([group, direct])
         dropped, copies = 0, []
         for event, groups in owned.items():
             remaining = list(current.get(event, []))
@@ -3218,7 +3315,7 @@ def lock_blocking(target, manifest, s, errors):
     return [e for e in errors if e not in repaired]
 
 
-def codex_plugin_hooks(plugins):
+def codex_plugin_hooks(plugins, target=None):
     """Render plugin hook groups exactly as Codex will run them on this machine."""
     merged = {}
     for p in plugins:
@@ -3231,7 +3328,20 @@ def codex_plugin_hooks(plugins):
                 text = json.dumps(g).replace("${PLUGIN_ROOT}", p["path"].replace("\\", "/"))
                 py = "python3" if shutil.which("python3") else "python"
                 text = re.sub(r'(?<=")python3? (?=\\")', py + " ", text)
-                merged.setdefault(event, []).append(json.loads(text))
+                rendered = json.loads(text)
+                if target is not None:
+                    for original, hook in zip(g.get("hooks", []), rendered.get("hooks", [])):
+                        command = original.get("command", "")
+                        try:
+                            words = shlex.split(command)
+                        except ValueError:
+                            words = []
+                        if "${PLUGIN_ROOT}" in command and len(shell_segments(command)) == 1 and words and not ASSIGNMENT.match(words[0]):
+                            command = re.sub(r"^python3?\s", py + " ", command).replace("${PLUGIN_ROOT}", "{PLUGIN_ROOT}")
+                            dispatcher = os.path.join(os.path.abspath(target), ".codex", "hunsu-dispatch.py").replace("\\", "/")
+                            quoted = shlex.quote(dispatcher) if any(c in dispatcher for c in '\"$`\\!') else '"%s"' % dispatcher
+                            hook["command"] = '%s %s %s %s' % (py, quoted, shlex.quote(p["name"] + "@" + p["marketplace"]), command)
+                merged.setdefault(event, []).append(rendered)
     return merged
 
 
@@ -3278,7 +3388,7 @@ def codex_project_hooks(target, plugins):
 def materialize_codex_hooks(target, manifest, s):
     """Keep project hooks and replace only hunsu's generated plugin groups."""
     doc = codex_project_hooks(target, s["plugins"])
-    managed = codex_plugin_hooks(enabled(s, name, want) for name, want in manifest["plugins"].items())
+    managed = codex_plugin_hooks((enabled(s, name, want) for name, want in manifest["plugins"].items()), target)
     record = {"hooks": managed}
     if "description" in doc:
         record["description"] = doc["description"]
@@ -3288,8 +3398,22 @@ def materialize_codex_hooks(target, manifest, s):
     doc["description"] = CODEX_HOOK_PROVENANCE + json.dumps(record, ensure_ascii=False, separators=(",", ":"))
     out = os.path.join(target, ".codex", "hooks.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
+    ignored = [".codex/hooks.json"]
+    if any(dispatched_command(h.get("command", "")) for groups in managed.values() for g in groups for h in g.get("hooks", [])):
+        dispatcher = os.path.join(target, ".codex", "hunsu-dispatch.py")
+        fd, temporary = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hunsu-dispatch.")
+        try:
+            with os.fdopen(fd, "wb") as stream, open(DISPATCH_SOURCE, "rb") as source:
+                stream.write(source.read())
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, dispatcher)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        ignored.append(".codex/hunsu-dispatch.py")
     save_json(out, doc)
-    ensure_ignored(target, [".codex/hooks.json"])
+    ensure_ignored(target, ignored)
     n = sum(len(v) for v in managed.values())
     print("codex: %d hook group(s) from the installed copies -> .codex/hooks.json (this machine's; run `codex` with hook trust, or exec with --dangerously-bypass-hook-trust)" % n)
 

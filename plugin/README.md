@@ -42,6 +42,16 @@ project's `.codex/hooks.json`. Review and trust those project hooks in Codex. Th
 `hooks/session_start.py` with `python3` to report lock status; installation alone does not materialize it. The file is
 this machine's and not committed, so a new clone or worktree has none: `check` says the installed hooks are not active
 there, and `hunsu upgrade --hooks-only` writes them from the installed copies, keeping the project's own groups.
+
+The generated groups name no versioned copy. Codex keeps one copy of a plugin in its cache and replaces it when it takes
+a release, by itself, so a group naming `~/.codex/plugins/cache/<market>/<name>/<version>/…` fails on every event after
+the next release (on 11-06, a minute after a push). A plugin hook whose command uses `${PLUGIN_ROOT}` and is one simple
+command runs instead through the project's `.codex/hunsu-dispatch.py`, which `lock` and `upgrade` write beside the hooks
+file: at each hook it finds the copy Codex has installed for that plugin from the declared marketplace and runs the same
+script from it, with the hook's stdin, output and exit code. When that copy is not the version `hunsu.lock.json` pins,
+it says so on stderr and runs it; when the plugin is not installed for Codex or its copy lacks the script, it stops the
+hook with exit 2 — a guard is never skipped. Groups generated before 2.4.0 still name versioned copies (`check` warns):
+`hunsu upgrade --hooks-only` on either host, or `hunsu lock` on Codex, rewrites them and keeps the project's own groups.
 The host integration limits below distinguish declared hooks from verified behavior.
 
 Codex discovers the existing `compose` skill as `hunsu:compose`. Invoke it with `$hunsu:compose`, or select it from
@@ -109,6 +119,7 @@ allows. No lock, no enforcement.
 | `hunsu-judgments.json` | yes | the judge round's verdicts per situation, fingerprinted by the members' text — the file the judge gate reads (`compose` stops without it; the lock's `judge` line only records the outcome); `hunsu-conflicts.md` is its rendering (`judge render`, not committed) |
 | `.claude/settings.local.json` | no (`init` and `dev` add it to `.gitignore`; `check` fails if it is committed) | `dev` — the working sources this machine runs instead of the manifest's copies |
 | `.codex/hooks.json` | no (`lock` and `upgrade` add it to `.gitignore`) | `lock` on Codex and `upgrade` on either host — the hook groups generated from the copies installed for Codex (this machine's paths), beside the project's own groups, which they keep |
+| `.codex/hunsu-dispatch.py` | no (`lock` and `upgrade` add it to `.gitignore`) | `lock` on Codex and `upgrade` on either host, whenever a generated group runs through it — a byte copy of this payload's `hooks/dispatch.py`, the version-independent entry the generated groups call (standalone: it imports nothing of hunsu, so replacing any copy in the cache leaves it working), written before the groups |
 | `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine; by hand, `local-hooks-ok` for user-level hooks that are only yours, and `hosts` when this machine runs one host |
 
 ## Commands
@@ -146,7 +157,10 @@ copy differs from the pin, and names each manifest plugin not installed for Code
 When no copy installed for Codex declares a hook and the project has no `.codex/hooks.json`, nothing is written for
 Codex: no empty file and no `.gitignore` line. An existing file is still regenerated, even to no generated group.
 Claude Code runs hooks from the installed copy's hooks/hooks.json; nothing is generated for it. When Codex is not a
-host here, nothing is written for Codex.
+host here, nothing is written for Codex. When a generated group runs through the dispatcher, it writes
+`.codex/hunsu-dispatch.py` before `.codex/hooks.json`. This is also the migration of groups generated before 2.4.0:
+their versioned paths become dispatched commands, the project's own groups, their order and description stay, and a
+second `upgrade --hooks-only` changes no byte of either file.
 
 An unknown plugin name refuses. Before writing either pins or hooks it also refuses an unreadable project hooks
 file, a Codex registry that cannot be read when Codex is in use, or a generated group naming a file absent on this
@@ -217,12 +231,34 @@ which `lock` keeps — one naming a copy in the Codex plugin cache is likely a g
 groups it wrote (1.15.1), to remove by hand. (guin-site, 11-01: generated groups still named a removed 1.x copy and Codex
 prompts were blocked until a Codex `lock` regenerated them; nothing had said so.)
 
+**Dispatched hooks.** A group that runs `.codex/hunsu-dispatch.py` is judged as the dispatcher will run it: its
+`NAME@MARKET` is resolved with the dispatcher's own function against Codex's registry and cache, from either host.
+`dispatches to NAME@MARKET, which is not installed for Codex on this machine (why)` and `dispatches to NAME VERSION's
+REL, which that copy lacks` say a hook the dispatcher stops (exit 2) on every event — an `error` in a generated group,
+a `warn` in the project's own. While hunsu.json declares the plugin, the repair is to install it for Codex
+(`codex plugin add NAME@MARKET`), or to reinstall a copy whose `hooks/codex.json` still names the missing script, and no
+lock repairs it; when a regeneration would no longer write the group (the plugin left hunsu.json, or a release dropped
+the hook) a Codex `lock` passes and drops it. `codex hook dispatcher: …` is one `error` when the dispatcher a group runs
+is missing — a Codex `lock` passes it only where it writes that file, this project's own with a generated group
+dispatched — and one `warn` when it is not the one this hunsu writes; `hunsu upgrade --hooks-only` rewrites it. On Claude
+Code, a dispatched generated group whose copy is not the version hunsu.lock.json pins gives one `warn`, `codex hooks: the
+dispatched groups run the copies installed for Codex — …`; on Codex the drift error says it.
+
+**Versioned groups.** A generated group still naming an existing copy in the Codex plugin cache (written before 2.4.0)
+is one `warn` for all of them, `codex hooks: N generated group(s) name versioned copies in the Codex plugin cache — …`,
+naming each plugin, version and event: they fail once Codex replaces that copy, and `hunsu upgrade --hooks-only` (either
+host) or `hunsu lock` on Codex rewrites them through `.codex/hunsu-dispatch.py`; a command that is not one simple command
+is counted as staying versioned. Such a group is active — the not-active comparison counts it present — and a Claude
+Code `lock` does not stop for the warning. A project's own group naming an existing versioned copy is a `warn` of its own;
+hunsu keeps it, so fix it in `.codex/hooks.json`. A missing versioned path keeps the error above.
+
 **Not active.** A plugin installed for Codex is not an active hook until `.codex/hooks.json` holds its groups: Codex runs a
 plugin's hooks only from the project's file, which hunsu generates per machine and which is not committed, so a new
 clone or worktree has none. Where Codex runs for the project on this machine, `check` compares the groups a regeneration
 would write now (rendered from the copies installed for Codex, on either host) with every group in the project's file.
-Any group missing from it is one `error`, `codex hooks: N hook group(s) the copies installed for Codex declare are not
-active in this project — …`, naming each plugin with its installed version and the events of its missing groups, whether
+A group is present in its dispatched form or in the current copy's versioned form (said as versioned above). Any group
+missing from it is one `error`, `codex hooks: N hook group(s) the copies installed for Codex declare are not active in
+this project — …`, naming each plugin with its installed version and the events of its missing groups, whether
 the file does not exist or lacks them, and the generated groups from an older copy still in the cache that a
 regeneration drops. The repair is `hunsu upgrade --hooks-only` on either host, or `hunsu lock` on Codex; both keep the
 project's own groups. A Codex `lock` does not stop for this error (it writes exactly that render); a Claude Code `lock`
@@ -245,8 +281,9 @@ copy `check` finds corrupted (reinstall) and, through `install --refresh`, for a
 step `outdated` names for a linked plugin. A linked plugin keeps `hunsu add X` to take the goal into hunsu.json and the
 separate `hunsu check` step with `hunsu judge request --out DIR --stale`, judging those packets, and
 `hunsu judge consume --dir DIR`: `upgrade` does not take a linked plugin. The stale-session line uses the same exception
-when hunsu itself is linked. After any of them the generated Codex hooks name the old copy until `hunsu
-upgrade` (on either host) or a `hunsu lock` on Codex regenerates them.
+when hunsu itself is linked. Generated Codex groups that run through the dispatcher follow the copy Codex installs;
+groups generated before 2.4.0 name the old copy until `hunsu upgrade --hooks-only` (on either host) or a `hunsu lock` on
+Codex rewrites them.
 
 `check` reads project data without writing project state, but rendering role prompts and modes may need temporary
 scratch files; `--remote` also needs scratch space for marketplace clones, and the mutation lock that every command
@@ -582,8 +619,14 @@ snapshot and the plugins installed from it; `install --refresh` re-snapshots a l
 - On Codex the shell-command hook is declared with matcher `*` and reads `tool_input.command` (a string, or argv joined);
   that Codex passes its shell commands that way is unverified.
 - On Codex the UserPromptSubmit hook (`hooks/codex.json`, materialized by `lock`) is declared the same way; that Codex runs
-  it and takes its `additionalContext` is unverified. There `${PLUGIN_ROOT}` is resolved at lock time, so the hook runs from
-  the copy this machine locked; a lock pulled from someone else that pins another hunsu is said the same way.
+  it and takes its `additionalContext` is unverified.
+- The dispatcher (`.codex/hunsu-dispatch.py`, since 2.4.0) is tested on fake hosts only: no live Codex session has run a
+  dispatched hook, and how Codex runs a hook command (which shell, which PATH) is not verified here. Whether Codex shows a
+  successful hook's stderr is unverified, so the skew line is also `check`'s (on Claude Code; on Codex its drift error).
+  A trusted dispatched group runs whichever copy Codex installed for that plugin and marketplace — the command text no
+  longer changes with a release. A command that is not one simple command (`a && b`, a leading `VAR=value`) stays
+  versioned. The dispatcher needs Python 3.11+ (`tomllib`) as `python3` on the PATH Codex runs hooks with: an older one
+  (macOS's own `/usr/bin/python3` is 3.9) stops every dispatched hook with exit 2, where a versioned group ran its script.
 - `compose` stops at every human decision (exit 2). It does not decide; it refuses to advance. Its gates: plugins →
   engines → check errors → conflict judgment (or `judge: skip`) → user-level hooks and skills, unmanaged plugins → lock.
 - Both judge worker paths have run: Claude Code (14 calls on a 5-plugin project, 27 findings, 0 rejected) and Codex (8

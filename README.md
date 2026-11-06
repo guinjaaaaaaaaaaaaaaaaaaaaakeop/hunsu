@@ -51,7 +51,7 @@ installed.
 | `plugin/judge_worker.py`, `plugin/hostcall.py` | the judge worker and the host call it runs through (vendored: the same `hostcall.py` in mangsang, dwitbuk and hacheong) | yes |
 | `plugin/skills/compose/SKILL.md` | the shared workflow for both hosts | yes |
 | `plugin/commands/*.md` | Claude Code slash commands, one engine action each | yes |
-| `plugin/hooks/` | `hooks.json` (Claude Code), `codex.json` (Codex, materialized by `lock`), the four hook scripts | yes |
+| `plugin/hooks/` | `hooks.json` (Claude Code), `codex.json` (Codex, materialized by `lock`), the four hook scripts, and `dispatch.py` (copied into a project as `.codex/hunsu-dispatch.py`) | yes |
 | `plugin/plugin.json`, `plugin/.claude-plugin/plugin.json`, `plugin/.codex-plugin/plugin.json` | the manifests | yes |
 | `plugin/README.md`, `plugin/LICENSE` | the usage manual and the license | yes |
 | `.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json` | the catalogs, selecting `./plugin` | no |
