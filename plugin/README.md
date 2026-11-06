@@ -37,14 +37,16 @@ codex plugin marketplace add guinjaaaaaaaaaaaaaaaaaaaaakeop/hunsu
 codex plugin add hunsu@hunsu
 ```
 
-For this adapter, `lock` materializes the locked plugins' `hooks/codex.json` into the project's
-`.codex/hooks.json`. Review and trust those project hooks in Codex. The declared SessionStart hook runs
-`hooks/session_start.py` with `python3` to report lock status; installation alone does not materialize it.
+For this adapter, `lock` on Codex and `upgrade` on either host materialize the plugins' `hooks/codex.json` into the
+project's `.codex/hooks.json`. Review and trust those project hooks in Codex. The declared SessionStart hook runs
+`hooks/session_start.py` with `python3` to report lock status; installation alone does not materialize it. The file is
+this machine's and not committed, so a new clone or worktree has none: `check` says the installed hooks are not active
+there, and `hunsu upgrade --hooks-only` writes them from the installed copies, keeping the project's own groups.
 The host integration limits below distinguish declared hooks from verified behavior.
 
 Codex discovers the existing `compose` skill as `hunsu:compose`. Invoke it with `$hunsu:compose`, or select it from
 `/skills`; you can also ask Codex to compose, check, or lock the project environment in plain language. The engine
-commands remain `survey`, `init`, `add`, `check`, `lock`, and `compose`.
+commands remain `survey`, `init`, `add`, `upgrade`, `check`, `lock`, and `compose`.
 
 The `/hunsu:*` command files below are this plugin's Claude Code adapters. On Codex, use the shared
 skill or the Python engine.
@@ -106,11 +108,12 @@ allows. No lock, no enforcement.
 | `hunsu.lock.json` | yes | `lock` — the resolved snapshot: versions, skills, hooks, engine versions found, warnings |
 | `hunsu-judgments.json` | yes | the judge round's verdicts per situation, fingerprinted by the members' text — the file the judge gate reads (`compose` stops without it; the lock's `judge` line only records the outcome); `hunsu-conflicts.md` is its rendering (`judge render`, not committed) |
 | `.claude/settings.local.json` | no (`init` and `dev` add it to `.gitignore`; `check` fails if it is committed) | `dev` — the working sources this machine runs instead of the manifest's copies |
+| `.codex/hooks.json` | no (`lock` and `upgrade` add it to `.gitignore`) | `lock` on Codex and `upgrade` on either host — the hook groups generated from the copies installed for Codex (this machine's paths), beside the project's own groups, which they keep |
 | `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine; by hand, `local-hooks-ok` for user-level hooks that are only yours, and `hosts` when this machine runs one host |
 
 ## Commands
 
-Ten are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin>`, `/hunsu:check`, `/hunsu:outdated`,
+Eleven are also slash commands: `/hunsu:survey`, `/hunsu:init`, `/hunsu:add <plugin>`, `/hunsu:upgrade [plugin…] [--hooks-only]`, `/hunsu:check`, `/hunsu:outdated`,
 `/hunsu:policy`, `/hunsu:role`, `/hunsu:capability`, `/hunsu:lock`, `/hunsu:compose`; `remove`, `judge`, `install`, `link`/`unlink` are the engine's (`python3 <plugin root>/hunsu.py …`).
 The `compose` skill is the same flow driven by the agent.
 
@@ -127,6 +130,35 @@ empty manifest; `.gitignore` entry for the local file
 record version and source from the survey. Local marketplace → `unpublished` + link. `--take-content "why"` when a
 release was rewritten under its own version: the content is taken as that version's, the reason recorded in the
 manifest, and `check` accepts exactly that content
+
+### `upgrade`
+
+`hunsu upgrade [PLUGIN ...] [--hooks-only] [--target DIR]` takes the releases installed for this project on the
+host it runs on into hunsu.json. With names, only those plugins; without names, all declared plugins. It takes only
+a release newer than the pin, recording its version, shareable source and marketplace as `add` does. It never takes
+a marketplace's uninstalled version, an older version, a linked or development plugin, a local source, or a copy
+this host has not installed. It says which it leaves; non-release versions are left for `add` to decide.
+`--hooks-only` takes no pins.
+
+For the hosts this project runs here, it rewrites the generated Codex groups from the copies installed for Codex,
+from either host, keeping the project's own groups, their order and description. It says when that installed
+copy differs from the pin, and names each manifest plugin not installed for Codex (no groups for it).
+When no copy installed for Codex declares a hook and the project has no `.codex/hooks.json`, nothing is written for
+Codex: no empty file and no `.gitignore` line. An existing file is still regenerated, even to no generated group.
+Claude Code runs hooks from the installed copy's hooks/hooks.json; nothing is generated for it. When Codex is not a
+host here, nothing is written for Codex.
+
+An unknown plugin name refuses. Before writing either pins or hooks it also refuses an unreadable project hooks
+file, a Codex registry that cannot be read when Codex is in use, or a generated group naming a file absent on this
+machine — reinstall that copy. It installs nothing, runs no host command, and never changes host registries,
+settings or caches, hunsu.lock.json, hunsu-judgments.json, or another project's files.
+
+It lists what remains, in order: stale situations by label and their judge request/consume commands, unclustered
+skills needing a cluster round, a session restart when pins changed, and `hunsu lock` with the records to commit
+inside a run. With `judge: "skip"` it lists no judge step. (11-06: six projects pinned releases older than the ones
+installed while the Codex cache held only the newest copies, so every generated group named a copy that was gone and
+every Claude Code `lock` was refused; taking the releases was an `add` per plugin, a Codex `lock` and judge rounds in
+each project, by hand.)
 
 ### `check`
 
@@ -185,19 +217,36 @@ which `lock` keeps — one naming a copy in the Codex plugin cache is likely a g
 groups it wrote (1.15.1), to remove by hand. (guin-site, 11-01: generated groups still named a removed 1.x copy and Codex
 prompts were blocked until a Codex `lock` regenerated them; nothing had said so.)
 
+**Not active.** A plugin installed for Codex is not an active hook until `.codex/hooks.json` holds its groups: Codex runs a
+plugin's hooks only from the project's file, which hunsu generates per machine and which is not committed, so a new
+clone or worktree has none. Where Codex runs for the project on this machine, `check` compares the groups a regeneration
+would write now (rendered from the copies installed for Codex, on either host) with every group in the project's file.
+Any group missing from it is one `error`, `codex hooks: N hook group(s) the copies installed for Codex declare are not
+active in this project — …`, naming each plugin with its installed version and the events of its missing groups, whether
+the file does not exist or lacks them, and the generated groups from an older copy still in the cache that a
+regeneration drops. The repair is `hunsu upgrade --hooks-only` on either host, or `hunsu lock` on Codex; both keep the
+project's own groups. A Codex `lock` does not stop for this error (it writes exactly that render); a Claude Code `lock`
+does. Nothing is said when no copy installed for Codex declares a hook, when Codex is not installed or its registry does
+not read from here, or when Codex is not a host of the project on this machine; an unreadable file keeps its own error.
+(guin-site, 11-05: a worktree with valid installed hook scripts and no project file had no finding at all.)
+
 A version skew between this machine and the manifest (`plugin X: manifest A, host B`), a plugin behind a release, and the
 stale-session line say the way out as numbered steps, each only when it is owed, in this order: `claude plugin marketplace
 update M`, `claude plugin update X@M --scope project` (in the project), restart the session (a `/clear` does not reload
-plugins), `hunsu add X`, `hunsu check` and a `--stale` judge round for what it calls stale, `hunsu lock` — committed with
-`hunsu.json` inside a run, like any change to the environment. On Codex the first two are `codex plugin marketplace upgrade
+plugins), `hunsu upgrade X` — which takes the installed release into hunsu.json, rewrites the generated Codex hooks and
+lists the situations a `--stale` judge round re-reads — then `hunsu lock`, committed with `hunsu.json` inside a run, like
+any change to the environment. On Codex the first two are `codex plugin marketplace upgrade
 M`, which refreshes this machine's Git snapshot of the marketplace and the plugins installed from it, and a verification
 that the installed copy is the intended release — its version, and the revision its `.codex-marketplace-install.json`
 receipt names, and its files compared with the release's (`check` compares content only with what a lock recorded for the
 same version) — before the rest; an upgrade takes what the marketplace publishes now and by itself proves no version.
 `codex plugin remove` + `add` is not part of an ordinary update — the upgrade has refreshed the copy already: it is for a
 copy `check` finds corrupted (reinstall) and, through `install --refresh`, for a linked development source, which is the
-step `outdated` names for a linked plugin. After any of them the generated Codex hooks name the old copy until the `hunsu
-lock` step, run on Codex, regenerates them.
+step `outdated` names for a linked plugin. A linked plugin keeps `hunsu add X` to take the goal into hunsu.json and the
+separate `hunsu check` step with `hunsu judge request --out DIR --stale`, judging those packets, and
+`hunsu judge consume --dir DIR`: `upgrade` does not take a linked plugin. The stale-session line uses the same exception
+when hunsu itself is linked. After any of them the generated Codex hooks name the old copy until `hunsu
+upgrade` (on either host) or a `hunsu lock` on Codex regenerates them.
 
 `check` reads project data without writing project state, but rendering role prompts and modes may need temporary
 scratch files; `--remote` also needs scratch space for marketplace clones, and the mutation lock that every command
@@ -397,6 +446,21 @@ delegation — and leaves a proposal nobody has read at `reviewed: false`: the j
 into approved history. Any other verdict marks the resolution `reviewed: false`. Either way it stays, and dwitbuk lists a
 `reviewed: false` one until a human re-reads.
 
+A judgment is about its members' words. Since 2.3.0 each situation's fingerprints are taken over the text with
+whitespace normalized (`" ".join(text.split())`), recorded as `fingerprint-text: whitespace-normalized`. This covers
+`member-fingerprints`, `members-text-fingerprint` and `modes-read`, including each mode's injected text. A rewrap,
+re-indentation or blank-line change stales nothing; any word or punctuation change does, including joining or splitting
+words. The judge still receives the text itself, and quotes are checked against that text.
+
+A situation judged before this records no form and is compared raw: it stays fresh while its raw fingerprints match,
+and goes stale on any change once, a rewrap included. The re-judge then records the new form, even when its findings
+are kept unchanged. `check`, `lock` and `upgrade` rewrite no judgment record.
+
+A judge's reading of unchanged words can vary. On 2026-11-06 a re-judge after a rewrap classed three findings as
+`authority` that the earlier round had settled as `sequenced`. hunsu does not re-run a judge to average it out.
+A whitespace-only change no longer asks a judge at all; a changed word asks a judge again, and its verdict is a new
+reading a person reads in `hunsu-conflicts.md`.
+
 What the judge reads is what a session reads, never a script's name. A skill is its SKILL.md. The project's committed
 instruction files — `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md` — are modes (`file:<path>`, members of every
 situation, identified by their content); a situation judged with other modes than a session now gets (one added, one
@@ -506,7 +570,7 @@ snapshot and the plugins installed from it; `install --refresh` re-snapshots a l
 - Without a judge round (`"judge": "skip"`), skill overlap is detected by name only: two differently named skills that do the same thing are not caught, and two same-named skills for different situations need an `accept`. With a round, the judge decides both.
 - The host CLI installs whatever version a marketplace currently has; `install` cannot pin (verified: `claude plugin
   install` takes no version). `check` reports the drift; a human either takes the new version into the manifest
-  (`hunsu add <plugin>` again, then the stale situations are re-judged) or the marketplace owner pins.
+  (`hunsu upgrade <plugin>`, then the stale situations it lists are re-judged) or the marketplace owner pins.
 - `install` has been exercised on a fresh host (`CLAUDE_CONFIG_DIR`).
 - A link or a `directory` marketplace resolves as [`link`](#link--unlink) says. Since 2.2.0 a catalog source that leaves
   its directory (absolute, `..`, a symlink out), names a directory without the plugin's manifest, or names another plugin,
@@ -526,9 +590,10 @@ snapshot and the plugins installed from it; `install --refresh` re-snapshots a l
   + 2 calls on the same products, 7 situations, 1 finding).
 - Hosts: Claude Code (`~/.claude`, or `CLAUDE_CONFIG_DIR`; `HUNSU_CLAUDE_DIR` for tests) and Codex
   (`~/.codex/config.toml` and its plugin cache; selected by `AGENT_HOST=codex`, `HUNSU_CODEX_DIR` for tests). On
-  Codex, which no longer runs a plugin's own hooks, `lock` materializes the locked plugins' `hooks/codex.json` into
-  the project's `.codex/hooks.json` (machine paths; gitignored; run `codex` with hook trust or
-  `exec --dangerously-bypass-hook-trust`). Existing project hooks, later additions, and edits survive each lock; only
+  Codex, which no longer runs a plugin's own hooks, `lock` (and `upgrade`, on either host) materializes the plugins'
+  `hooks/codex.json` into the project's `.codex/hooks.json` (machine paths; gitignored; run `codex` with hook trust or
+  `exec --dangerously-bypass-hook-trust`). hunsu checks that the groups are in the file, not that Codex trusts or runs
+  them. Existing project hooks, later additions, and edits survive each lock; only
   the previously generated groups are replaced. Their ownership is recorded in the file's supported `description`
   field, published atomically with the hooks. Keep that generated description when editing hooks. Older generated
   files have no ownership snapshot: migration removes exact matches to currently known plugin groups and preserves

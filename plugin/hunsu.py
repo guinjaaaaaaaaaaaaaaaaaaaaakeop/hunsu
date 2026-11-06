@@ -41,6 +41,7 @@ CODEX = os.environ.get("HUNSU_CODEX_DIR") or os.environ.get("AGENT_CODEX_HOME") 
 HOST = "codex" if os.environ.get("AGENT_HOST") == "codex" else "claude-code"   # which host this machine's survey reads; a runner on Codex sets AGENT_HOST
 HOST_EXE = {"claude-code": "claude", "codex": "codex"}   # engine name in the manifest -> the executable whose --version is the floor
 MANIFEST = "hunsu.json"
+TEXT_FORM = "whitespace-normalized"
 
 
 def load_json(path):
@@ -617,7 +618,7 @@ def update_steps(name, market, goal, installed=None, pinned=None, locked=None, c
     (guin-site, 10-13: twice). `installed` is what this host has installed for the project, `pinned` hunsu.json's version,
     `locked` the lock's, `copy` the version this machine's copy of the marketplace has (None when unknown), `linked` whether this
     machine links the plugin to a development source (hunsu.local.json). Each step only
-    when it is owed: an install already at `goal` needs no update, a manifest already at it no `add`. The session restarts
+    when it is owed: an install already at `goal` needs no update, a manifest already at it no `upgrade`. The session restarts
     whenever the plugins it runs may differ from what is installed: a host loads plugins once, at start."""
     steps = []
     if installed != goal:
@@ -642,8 +643,11 @@ def update_steps(name, market, goal, installed=None, pinned=None, locked=None, c
     elif pinned != goal or locked != goal:
         steps.append("restart the session if it started before %s %s was installed — a /clear does not reload plugins" % (name, goal))
     if pinned != goal:
-        steps.append("`hunsu add %s` — hunsu.json takes %s" % (name, goal))
-        steps.append("`hunsu check` — situations whose members' text changed are stale: `hunsu judge request --out DIR --stale`, judge those packets, `hunsu judge consume --dir DIR`")
+        if linked:
+            steps.append("`hunsu add %s` — hunsu.json takes %s" % (name, goal))
+            steps.append("`hunsu check` — situations whose members' text changed are stale: `hunsu judge request --out DIR --stale`, judge those packets, `hunsu judge consume --dir DIR`")
+        else:
+            steps.append("`hunsu upgrade %s` — hunsu.json takes the installed %s, the generated hooks are rewritten from the installed copies, and it lists the stale situations to judge" % (name, goal))
     if pinned != goal or locked != goal:
         steps.append("`hunsu lock`, and commit hunsu.json, hunsu.lock.json (and hunsu-judgments.json when it changed) inside a run, like any change to the environment")
     return steps
@@ -1460,13 +1464,18 @@ def _hash12(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
-def member_fingerprints(s, members, manifest=None):
+def fingerprint_text(text, form):
+    """The member's words for a fingerprint; judge packets and quote checks keep the text itself."""
+    return " ".join(text.split()) if form == TEXT_FORM else text
+
+
+def member_fingerprints(s, members, manifest=None, *, form="raw"):
     """Each judged member's identity on its own (member_texts, hashed) — so a changed situation can say which member moved."""
     texts = member_texts(s, manifest)
-    return {m: _hash12(texts.get(m, "<absent>")) for m in sorted(members)}
+    return {m: _hash12(fingerprint_text(texts.get(m, "<absent>"), form)) for m in sorted(members)}
 
 
-def modes_read(mode_packets):
+def modes_read(mode_packets, *, form="raw"):
     """What the judge read of each mode — the text its hook says in an empty project (mode_text), hashed per source (a plugin
     with two SessionStart hooks injects two). A mode's identity is its script, but a script can change in ways that leave its
     text alone (chongdae 1.20.0 changed how its line counts open tasks; the line read the same): then what was judged did not
@@ -1474,24 +1483,24 @@ def modes_read(mode_packets):
     (Judged before 1.14, this hashed the project's live line: the first script change after is one re-judge.)"""
     by = {}
     for m in mode_packets:
-        by.setdefault(m.get("source"), []).append(str(m.get("text", "")))
+        by.setdefault(m.get("source"), []).append(fingerprint_text(str(m.get("text", "")), form))
     return {src: _hash12("\n".join(sorted(texts))) for src, texts in by.items()}
 
 
-def mode_read_now(s, source):
+def mode_read_now(s, source, *, form="raw"):
     """The same hash for the text `source`'s hooks inject now — the hooks are run (mode_text), so only asked of a mode whose
     script moved since it was judged. An instruction file is its own text: nothing to run, its identity says it all."""
     hooks = [h for h in s["hooks"] if h["event"] == "SessionStart" and h["source"] == source]
-    return _hash12("\n".join(sorted(mode_text(h, s) for h in hooks))) if hooks else None
+    return _hash12("\n".join(sorted(fingerprint_text(mode_text(h, s), form) for h in hooks))) if hooks else None
 
 
-def members_text_fingerprint(s, members, manifest=None, scripts=True):
+def members_text_fingerprint(s, members, manifest=None, scripts=True, *, form="raw"):
     """Identity of one situation's judged members by content — see member_texts. A member no longer present hashes as absent.
     `scripts=False` is the identity judgments made before 1.2 carry (a mode by its command alone); judgments_status accepts
     either, so an upgrade stales nothing — the next consume records the fuller one."""
     import hashlib
     texts = member_texts(s, manifest, scripts)
-    return hashlib.sha256("\n".join("%s\0%s" % (m, texts.get(m, "<absent>")) for m in sorted(members)).encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha256("\n".join("%s\0%s" % (m, fingerprint_text(texts.get(m, "<absent>"), form)) for m in sorted(members)).encode("utf-8")).hexdigest()[:12]
 
 
 def judgments_status(manifest, s, target):
@@ -1515,18 +1524,19 @@ def judgments_status(manifest, s, target):
             if "members-text-fingerprint" in r and set(r.get("modes", [])) != now_modes:
                 return True
             members = r.get("members", []) + r.get("modes", [])
+            form = r.get("fingerprint-text") or "raw"
             if "member-fingerprints" in r:
                 # per member: one whose identity moved is a change only when what the judge read of it moved — for a skill, a
                 # role or an instruction file that is its identity; for a mode, the text its hook injects (asked only now).
                 # guin-site, 10-13: chongdae's hook script changed, its line did not, and all nine situations were re-judged
-                now = member_fingerprints(s, members, manifest)
+                now = member_fingerprints(s, members, manifest, form=form)
                 read = r.get("modes-read") or {}
                 moved = [m for m in members if now.get(m) != r["member-fingerprints"].get(m)]
                 if os.environ.get("HUNSU_SURVEY"):   # inside a probe a moved mode is not asked (its hook cannot run here): only the rest count
                     moved = [m for m in moved if m not in read]
-                return any(not (m in read and mode_read_now(s, m) == read[m]) for m in moved)
+                return any(not (m in read and mode_read_now(s, m, form=form) == read[m]) for m in moved)
             if "members-text-fingerprint" in r:
-                return r["members-text-fingerprint"] not in (members_text_fingerprint(s, members, manifest), members_text_fingerprint(s, members, manifest, scripts=False))
+                return r["members-text-fingerprint"] not in (members_text_fingerprint(s, members, manifest, form=form), members_text_fingerprint(s, members, manifest, scripts=False, form=form))
             return r.get("members-fingerprint", "?") != members_fingerprint(manifest, members)
         stale = {"situations": [r["situation"] for r in j.get("situations", []) if changed(r)],
                  "unclustered": sorted(locked - set(j["skills"]))}
@@ -1768,9 +1778,10 @@ def judge_consume(args, target, manifest, j):
         verdicts[req.get("situation", name)] = (resp.get("resolution_verdict"), packed, account)
         results.append({"situation": req.get("situation", name), "members": members, "modes": mode_ids,
                         "members-fingerprint": members_fingerprint(manifest, members + mode_ids),
-                        "members-text-fingerprint": members_text_fingerprint(s, members + mode_ids, manifest),
-                        "member-fingerprints": member_fingerprints(s, members + mode_ids, manifest),
-                        "modes-read": modes_read(req.get("modes", [])),
+                        "fingerprint-text": TEXT_FORM,
+                        "members-text-fingerprint": members_text_fingerprint(s, members + mode_ids, manifest, form=TEXT_FORM),
+                        "member-fingerprints": member_fingerprints(s, members + mode_ids, manifest, form=TEXT_FORM),
+                        "modes-read": modes_read(req.get("modes", []), form=TEXT_FORM),
                         # who judged: the worker's own account (host + model, machine-readable) when the response
                         # carries one; --by is the runner's claim, kept only as the fallback — "default model" tells
                         # a later reader nothing, "claude-code claude-opus-5[1m]" does
@@ -2726,7 +2737,7 @@ def stale_session_line(target, root):
         goal = have if newer else locked["version"]
         pinned = (load_json(os.path.join(target, MANIFEST)).get("plugins") or {}).get("hunsu", {}).get("version")
         steps = update_steps("hunsu", locked.get("marketplace"), goal, installed=have, pinned=pinned, locked=locked["version"],
-                             scope=install_scope(target, "hunsu", locked.get("marketplace")))
+                             scope=install_scope(target, "hunsu", locked.get("marketplace")), linked="hunsu" in links(target))
         if goal == have and running != have:
             steps.insert(0, "restart the session (a /clear does not reload plugins)")
         return ("hunsu: this session runs hunsu %s while hunsu.lock.json pins %s and hunsu %s is installed for this project — %s"
@@ -2941,7 +2952,7 @@ def stray_paths_reason(found):
 
 CODEX_HOOK_PROVENANCE = "written by hunsu lock; managed hooks: "
 # said in a stale-generated-hook error that a Codex `lock` repairs by regenerating: lock and compose on Codex do not stop for it
-REGENERATES = "on Codex (`AGENT_HOST=codex` from a shell), `hunsu lock` regenerates hunsu's groups from the installed copies and keeps the project's own"
+REGENERATES = "`hunsu upgrade --hooks-only` (on either host) or, on Codex (`AGENT_HOST=codex` from a shell), `hunsu lock` regenerates hunsu's groups from the installed copies and keeps the project's own"
 SCRIPT_EXTS = (".py", ".js", ".mjs", ".cjs", ".sh", ".ps1", ".rb", ".pl", ".bat", ".cmd")
 
 
@@ -3064,6 +3075,7 @@ def codex_hook_findings(target, manifest, s):
         """Once: {path: (plugin, version, event)} a Codex `lock` would write now, and whether that could be read here."""
         if not seen:
             groups = codex_lock_render(target, manifest, s)
+            seen["groups"] = groups or []
             seen["readable"], seen["names"] = groups is not None, {}
             for name, version, event, g in groups or []:
                 for p in group_paths(g):
@@ -3071,6 +3083,7 @@ def codex_hook_findings(target, manifest, s):
             seen["missing"] = [p for p in seen["names"] if not os.path.exists(p)]
         return seen["readable"], seen["names"], seen["missing"]
 
+    doc, owned = {}, {}
     if os.path.isfile(path):
         try:
             doc = load_json(path)
@@ -3144,6 +3157,49 @@ def codex_hook_findings(target, manifest, s):
                                  "names it%s; `lock` on Codex refuses until it is here"
                         % (event, p.replace(home, "~"), name, version,
                            " and its installed copy lacks the file: reinstall it (`codex plugin remove` + `add`)" if copy and copy[1] == version else ""), False))
+    render()
+    available = {event: list(groups) for event, groups in (doc.get("hooks") or {}).items()}
+    absent = []
+    for name, version, event, group in seen["groups"]:
+        remaining = available.setdefault(event, [])
+        if group in remaining:
+            remaining.remove(group)
+        else:
+            absent.append((name, version, event))
+    if absent:
+        plugins = {}
+        for name, version, event in absent:
+            events = plugins.setdefault((name, version), [])
+            if event not in events:
+                events.append(event)
+        text = "codex hooks: %d hook group(s) the copies installed for Codex declare are not active in this project — " % len(absent)
+        text += ", ".join("%s %s (%s)" % (name, version, ", ".join(events)) for (name, version), events in plugins.items())
+        text += (": .codex/hooks.json lacks them" if os.path.isfile(path) else
+                 ": .codex/hooks.json does not exist (hunsu generates it per machine and it is not committed, so a new clone or worktree has none)")
+        current = {}
+        for _, _, event, group in seen["groups"]:
+            current.setdefault(event, []).append(group)
+        dropped, copies = 0, []
+        for event, groups in owned.items():
+            remaining = list(current.get(event, []))
+            present = list((doc.get("hooks") or {}).get(event, []))
+            for group in groups:
+                if group not in present:
+                    continue
+                present.remove(group)
+                if group in remaining:
+                    remaining.remove(group)
+                elif all(os.path.exists(p) for p in group_paths(group)):
+                    dropped += 1
+                    origins = [codex_cache_copy(p) for p in group_paths(group)]
+                    labels = ["%s %s" % origin[:2] for origin in origins if origin] or ["another copy"]
+                    for label in labels:
+                        if label not in copies:
+                            copies.append(label)
+        if dropped:
+            text += "; it also holds %d generated group(s) from %s that a regeneration drops" % (dropped, ", ".join(copies))
+        text += " — `hunsu upgrade --hooks-only` writes them on either host (or `hunsu lock` on Codex), keeping the project's own groups"
+        out.append(("error", text, HOST == "codex"))
     return out
 
 
@@ -3235,11 +3291,17 @@ def materialize_codex_hooks(target, manifest, s):
     save_json(out, doc)
     ensure_ignored(target, [".codex/hooks.json"])
     n = sum(len(v) for v in managed.values())
-    print("codex: %d hook group(s) from the locked plugins -> .codex/hooks.json (this machine's; run `codex` with hook trust, or exec with --dangerously-bypass-hook-trust)" % n)
+    print("codex: %d hook group(s) from the installed copies -> .codex/hooks.json (this machine's; run `codex` with hook trust, or exec with --dangerously-bypass-hook-trust)" % n)
 
 
 def shareable(source):
     return source.startswith(("github:", "http"))
+
+
+def installed_entry(found):
+    """The shareable manifest entry for a copy installed on this host."""
+    return {"version": found["version"], "source": found["source"] if shareable(found["source"]) else "unpublished",
+            "marketplace": found["marketplace"]}
 
 
 @mutates_project
@@ -3258,7 +3320,7 @@ def cmd_add(args):
     found = next(iter(candidates.values()))
     args.plugin = name
     source = found["source"] if shareable(found["source"]) else "unpublished"
-    manifest["plugins"][name] = {"version": found["version"], "source": source, "marketplace": found["marketplace"]}
+    manifest["plugins"][name] = installed_entry(found)
     if getattr(args, "take_content", None):
         # the version's content changed under its name (a release rewritten, a history erased) and a person takes it as
         # this version's: the reason is the manifest's, committed, and `check` accepts exactly this content — not the next edit
@@ -3271,6 +3333,100 @@ def cmd_add(args):
         set_link(args.target, args.plugin, found["source"])
         note = " — local marketplace, linked in %s; the team cannot install it until it has a shareable source" % LOCAL
     print("added %s %s (%s)%s" % (args.plugin, found["version"], source, note))
+    return 0
+
+
+@mutates_project
+def cmd_upgrade(args):
+    target = args.target
+    path = os.path.join(target, MANIFEST)
+    manifest = load_json(path)
+    if not manifest:
+        raise SystemExit("no %s — run `hunsu init` first" % MANIFEST)
+    selected = sorted(set(args.plugins or manifest.get("plugins", {})))
+    for name in selected:
+        if name not in manifest.get("plugins", {}):
+            raise SystemExit("%s is not in hunsu.json — nothing written" % name)
+    s = survey(target)
+    linked, changed = links(target), False
+    if not args.hooks_only:
+        for name in selected:
+            want = manifest["plugins"][name]
+            if name in linked:
+                print("%s: linked to a development source here — not taken (`hunsu install --refresh %s`, then `hunsu add %s`)" % (name, name, name))
+                continue
+            if name in (s.get("dev") or {}):
+                print("%s: in development here — not taken" % name)
+                continue
+            found = enabled(s, name, want)
+            if found is None:
+                print("%s: not installed on this host (%s) — not taken" % (name, HOST))
+                continue
+            installed, pinned = found.get("version"), want.get("version")
+            iv, pv = _semver(installed), _semver(pinned)
+            if iv is None or pv is None:
+                print("%s: installed %s, pinned %s — not release versions, not taken (`hunsu add %s` decides)" % (name, installed, pinned, name))
+            elif iv > pv:
+                if not shareable(found["source"]):
+                    print("%s: installed from a local source — not taken (`hunsu add %s` decides)" % (name, name))
+                    continue
+                manifest["plugins"][name] = installed_entry(found)
+                changed = True
+                print("%s %s -> %s (installed for %s)" % (name, pinned, installed, HOST))
+            elif iv == pv:
+                print("%s %s: at the pin" % (name, pinned))
+            else:
+                print("%s: pinned %s, installed %s — not taken: upgrade takes only a newer release installed here (`hunsu check` says how to install %s)" % (name, pinned, installed, pinned))
+    hosts = hosts_in_use(target, manifest, s)
+    codex_s = None
+    if "codex" in hosts:
+        try:
+            codex_s = s if HOST == "codex" else survey_codex(target)
+        except SystemExit as why:
+            if str(why).startswith("codex hooks:"):
+                raise
+            raise SystemExit("Codex's registry does not read here — run `hunsu upgrade` on Codex — nothing written")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            raise SystemExit("Codex's registry does not read here — run `hunsu upgrade` on Codex — nothing written")
+        for name, want in sorted(manifest.get("plugins", {}).items()):
+            found = enabled(codex_s, name, want)
+            if not found:
+                print("codex: %s is not installed for Codex — no groups for it" % name)
+                continue
+            for groups in codex_plugin_hooks([found]).values():
+                for group in groups:
+                    for script in group_paths(group):
+                        if not os.path.exists(script):
+                            raise SystemExit("upgrade: nothing written — the generated hooks would run %s, which is not on this machine: %s %s's installed Codex copy lacks it — reinstall it" %
+                                             (script.replace(os.path.expanduser("~"), "~"), name, found["version"]))
+            if found["version"] != want["version"]:
+                print("codex: %s's groups come from the installed %s; the pin is %s" % (name, found["version"], want["version"]))
+    else:
+        print("codex: not a host here — nothing is written for Codex")
+    if "claude-code" in hosts:
+        print("claude-code: a plugin's hooks run from its installed copy (hooks/hooks.json); nothing is generated")
+    if changed:
+        save_json(path, manifest)
+    if codex_s is not None:
+        managed = codex_plugin_hooks(enabled(codex_s, name, want) for name, want in manifest["plugins"].items())
+        if not any(managed.values()) and not os.path.exists(os.path.join(target, ".codex", "hooks.json")):
+            print("codex: no copy installed for Codex declares a hook and this project has no .codex/hooks.json — nothing is written for Codex")
+        else:
+            materialize_codex_hooks(target, manifest, codex_s)
+    steps = []
+    if manifest.get("judge") != "skip":
+        _, stale = judgments_status(manifest, s, target)
+        situations = stale.get("situations", [])
+        if situations:
+            steps.append("judge the %d situation(s) whose members' text changed — %s: `hunsu judge request --out DIR --stale`, judge those packets, `hunsu judge consume --dir DIR`" % (len(situations), "; ".join(situations)))
+        if stale.get("unclustered"):
+            steps.append("skills no situation has seen — %s: a cluster round `hunsu judge request --out DIR`" % ", ".join(stale["unclustered"]))
+    if changed:
+        steps.append("restart the session — a session keeps the plugins it started with (a /clear does not reload them)")
+    steps.append("`hunsu lock` (it runs check first), and commit hunsu.json, hunsu.lock.json (and hunsu-judgments.json when it changed) inside a run")
+    print("next:")
+    for i, step in enumerate(steps, 1):
+        print("%d. %s" % (i, step))
     return 0
 
 
@@ -3607,13 +3763,16 @@ def cmd_compose(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="hunsu", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("survey", "init", "add", "remove", "check", "policy", "link", "unlink", "dev", "lock", "compose", "install", "judge", "outdated"):
+    for name in ("survey", "init", "add", "upgrade", "remove", "check", "policy", "link", "unlink", "dev", "lock", "compose", "install", "judge", "outdated"):
         p = sub.add_parser(name, **({"help": POLICY_HELP, "description": POLICY_HELP} if name == "policy" else
                                     {"help": OUTDATED_HELP, "description": OUTDATED_HELP} if name == "outdated" else {}))
         if name == "check":
             p.add_argument("--findings", action="store_true", help="print drift and unread resolutions as dwitbuk/findings@1 JSON")
             p.add_argument("--remote", action="store_true", help="then `outdated`: ask each locked plugin's marketplace what it publishes now (network, read-only)")
         p.add_argument("--target", default=".")
+        if name == "upgrade":
+            p.add_argument("plugins", nargs="*")
+            p.add_argument("--hooks-only", action="store_true")
         if name == "survey":
             p.add_argument("--json", action="store_true")
         if name in ("add", "remove", "link", "unlink", "dev"):
@@ -3657,7 +3816,7 @@ def main(argv=None):
     p.add_argument("--target", default=".")
     args = parser.parse_args(argv)
     try:
-        return {"role": cmd_role, "capability": cmd_capability, "survey": cmd_survey, "init": cmd_init, "add": cmd_add, "check": cmd_check,
+        return {"role": cmd_role, "capability": cmd_capability, "survey": cmd_survey, "init": cmd_init, "add": cmd_add, "upgrade": cmd_upgrade, "check": cmd_check,
                 "link": cmd_link, "unlink": cmd_unlink, "dev": cmd_dev, "lock": cmd_lock, "compose": cmd_compose,
                 "install": cmd_install, "judge": cmd_judge, "remove": cmd_remove, "policy": cmd_policy, "outdated": cmd_outdated}[args.cmd](args)
     except ScratchUnavailable as why:

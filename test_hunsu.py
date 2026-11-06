@@ -63,10 +63,17 @@ class Host:
         self.flush()
         self._old = hunsu.CLAUDE
         hunsu.CLAUDE = self.claude
+        # Q-active-hooks: no test reads this machine's Codex — an empty Codex directory of the fake host's own, unless a test
+        # installs a Codex copy (and patches hunsu.CODEX itself, as before)
+        self._old_codex = hunsu.CODEX
+        self.no_codex = os.path.join(self.home, "no-codex")
+        os.makedirs(self.no_codex)
+        hunsu.CODEX = self.no_codex
         return self
 
     def __exit__(self, *a):
         hunsu.CLAUDE = self._old
+        hunsu.CODEX = self._old_codex
         shutil.rmtree(self.home, ignore_errors=True)
 
 
@@ -333,7 +340,7 @@ def test_the_lock_names_content_so_an_unbumped_edit_is_caught_on_every_host():
         h.installed["alpha@m1"][0]["version"] = "1.0.1"; h.flush()
         errors, _, _ = hunsu.check(h.target)
         assert len(errors) == 1 and errors[0].startswith("plugin alpha: manifest 1.0.0, host 1.0.1 — to take 1.0.1: 1. restart the session if it started"), errors   # the bump is drift for the manifest to take, not a lie
-        assert "2. `hunsu add alpha`" in errors[0] and "`hunsu lock`, and commit" in errors[0] and "plugin update" not in errors[0], errors   # installed already: no update step
+        assert "2. `hunsu upgrade alpha`" in errors[0] and "`hunsu add alpha`" not in errors[0] and "`hunsu lock`, and commit" in errors[0] and "plugin update" not in errors[0], errors   # installed already: no update step
         run("add", "alpha", "--target", h.target)
         assert run("lock", "--target", h.target)[0] == 0 and not hunsu.check(h.target)[0]
 
@@ -668,6 +675,10 @@ def test_a_generated_codex_hook_whose_copy_is_gone_is_said_from_either_host_and_
         home = os.path.expanduser("~")
         stale = os.path.join(old, "hooks", "prompt.py").replace(home, "~")
         errors, warnings, _ = hunsu.check(h.target)   # on Claude Code
+        # Q-active-hooks: the 2.0.0 group the render names is absent from the file — one not-active error besides the gone hook's
+        active = [e for e in errors if e.startswith("codex hooks: ")]
+        assert len(active) == 1 and "not active" in active[0] and "alpha 2.0.0" in active[0] and "UserPromptSubmit" in active[0] and "lacks" in active[0], errors
+        errors = [e for e in errors if not e.startswith("codex hooks: ")]
         assert errors == ["codex hook UserPromptSubmit: runs %s, which is not on this machine — a group hunsu lock generated, so Codex fails this "
                           "hook on every UserPromptSubmit event; it was generated from alpha 1.0.0, a copy no longer in the Codex plugin cache (which "
                           "holds 2.0.0 now); a Codex `lock` would not write it again: %s" % (stale, hunsu.REGENERATES)], errors
@@ -700,7 +711,9 @@ def test_a_generated_codex_hook_whose_copy_is_gone_is_said_from_either_host_and_
         hunsu.save_json(path, {"description": "written by hunsu lock from the locked plugins' hooks/codex.json; machine paths — not committed",
                                "hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 \"%s/hooks/prompt.py\"" % old}]}]}})
         errors, warnings, _ = hunsu.check(h.target)
-        assert not errors and [w for w in warnings if w.startswith("codex hook")] == [
+        # Q-active-hooks: alpha 2.0.0's group is absent from the file (it holds only the old group): the not-active error, nothing else
+        assert len(errors) == 1 and errors[0].startswith("codex hooks: ") and "alpha 2.0.0" in errors[0] and "lacks" in errors[0], errors
+        assert [w for w in warnings if w.startswith("codex hook")] == [
             "codex hook UserPromptSubmit: runs %s, which is not on this machine — the project's own group (the file predates hunsu's ownership "
             "record), so `lock` keeps it: fix or remove it in .codex/hooks.json; it names alpha 1.0.0's copy in the Codex plugin cache — likely "
             "a group generated before hunsu recorded which groups it wrote (1.15.1): remove it by hand" % stale], warnings
@@ -719,11 +732,16 @@ def test_a_generated_codex_hook_whose_copy_is_gone_is_said_from_either_host_and_
                 assert code == 1 and hunsu.codex_hooks_unreadable(why) in out, (broken, out)   # one message on both hosts
                 code, out = run("lock", "--target", h.target)
                 assert code == 1 and hunsu.codex_hooks_unreadable(why) in out, (broken, out)
-        for empty in ({"hooks": None}, {"description": "ours"}, {"hooks": {}}):   # no hooks: nothing to judge, as before, on both hosts
+        # Q-active-hooks: an empty or description-only file while Codex has alpha's group installed is the not-active error, on both hosts
+        for empty in ({"hooks": None}, {"description": "ours"}, {"hooks": {}}):
             hunsu.save_json(path, empty)
-            assert not [e for e in hunsu.check(h.target)[0] if e.startswith("codex hook")], empty
+            hooks = [e for e in hunsu.check(h.target)[0] if e.startswith("codex hook")]
+            assert len(hooks) == 1 and hooks[0].startswith("codex hooks: ") and "not active" in hooks[0] and "alpha 2.0.0" in hooks[0] \
+                and "UserPromptSubmit" in hooks[0] and "lacks" in hooks[0] and "`hunsu upgrade --hooks-only`" in hooks[0], (empty, hooks)
             with patch.object(hunsu, "HOST", "codex"):
-                assert "hooks.json" not in run("check", "--target", h.target)[1], empty
+                errors = hunsu.check(h.target)[0]
+                hooks = [e for e in errors if e.startswith("codex hook")]
+                assert len(hooks) == 1 and hooks[0].startswith("codex hooks: ") and "alpha 2.0.0" in hooks[0] and "lacks" in hooks[0], (empty, hooks)
         # a machine that runs Claude Code only, where no role's worker runs on Codex, does not read Codex's file
         local(h.target, {"hosts": ["claude-code"]})
         assert not [e for e in hunsu.check(h.target)[0] if e.startswith("codex hook")]
@@ -757,8 +775,11 @@ def test_check_says_when_a_pinned_plugin_is_behind_a_release_available_here():
         assert len(behind) == 1 and behind[0].startswith("plugin alpha is behind: pinned 1.2.0; the marketplace m1 lists 1.3.0 (local copy) — to take it: "
                                                          "1. `claude plugin update alpha@m1 --scope project`, run in this project"), info
         # the copy already lists it: no marketplace update; then the restart, the manifest, the judgments, the lock — in that order
-        assert "marketplace update" not in behind[0] and [behind[0].index(x) for x in ("2. restart the session", "3. `hunsu add alpha`", "4. `hunsu check`", "5. `hunsu lock`")] == \
-            sorted(behind[0].index(x) for x in ("2. restart the session", "3. `hunsu add alpha`", "4. `hunsu check`", "5. `hunsu lock`")), behind
+        # Q-steps: the add and the separate check step are one `hunsu upgrade NAME` step; the order is otherwise unchanged
+        assert all(x in behind[0] for x in ("2. restart the session", "3. `hunsu upgrade alpha`", "4. `hunsu lock`")), behind
+        assert "marketplace update" not in behind[0] and [behind[0].index(x) for x in ("2. restart the session", "3. `hunsu upgrade alpha`", "4. `hunsu lock`")] == \
+            sorted(behind[0].index(x) for x in ("2. restart the session", "3. `hunsu upgrade alpha`", "4. `hunsu lock`")), behind
+        assert "`hunsu add alpha`" not in behind[0] and "`hunsu check`" not in behind[0], behind
         assert not any("alpha" in e for e in errors), "a release waiting is a choice, not a drift"
         # a linked checkout ahead of the pin says so too
         src = os.path.join(h.home, "src", "beta")
@@ -788,8 +809,8 @@ def test_the_ordinary_codex_update_is_a_named_upgrade_and_a_verification_never_a
         assert ".codex-marketplace-install.json" in steps[1] and "by itself proves no version" in steps[1], steps
         assert "compares content only with what a lock recorded for the same version" in steps[1], steps   # check does not vouch for a new release
         assert "remove" not in text and "plugin add" not in text, text
-        assert [s.split(" ")[0] for s in steps[2:]] == ["restart", "`hunsu", "`hunsu", "`hunsu"], steps   # restart, add, check, lock — as before
-        assert steps[3].startswith("`hunsu add dwitbuk`") and steps[5].startswith("`hunsu lock`"), steps
+        assert [s.split(" ")[0] for s in steps[2:]] == ["restart", "`hunsu", "`hunsu"], steps   # Q-steps: restart, upgrade, lock
+        assert steps[3].startswith("`hunsu upgrade dwitbuk`") and steps[4].startswith("`hunsu lock`"), steps
         # already at the release here: no upgrade, no verification step — only what the project still owes
         steps = hunsu.update_steps("dwitbuk", "dwitbuk", "2.0.2", installed="2.0.2", pinned="2.0.1", locked="2.0.1")
         assert not [s for s in steps if "codex plugin" in s or s.startswith("verify")], steps
@@ -1902,6 +1923,208 @@ def test_a_rejudge_that_finds_the_same_keeps_the_record_and_a_script_that_says_t
         assert b["findings"][0]["why"] == "deploying is building" and b["judged-by"] == "third", b
 
 
+AGENTS_WORDS = "# Working here\n\nKeep every change small and say why it is made; a reviewer reads the reason before the diff, and a\nchange without one is sent back.\n"
+AGENTS_REWRAP = "# Working here\n\n\n   Keep every change small\n\tand say why it is made;   a reviewer reads\n  the reason before the diff,\n\n and a change without one is sent back.   \n\n"
+BUILD_SKILL = "---\nname: build\ndescription: does build\n---\nBuild the change in small steps and run the tests after each one, then\nsay what moved.\n"
+BUILD_SKILL_REWRAP = "---\nname: build\ndescription: does build\n---\n\n  Build the change in small\n  steps and run the tests\n\n  after each one, then say what moved.\n\n"
+WORDS_MODE = "Never build before asking, and say why the build is needed."
+
+
+def words_project(h, d=None):
+    """Q-words: a project with an AGENTS.md (a mode of every situation) whose paragraph runs over several lines, two plugins'
+    skills (build has a body) and a plugin mode; judged once through judge request / --groups / consume."""
+    alpha = h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
+    write(os.path.join(alpha, "skills", "build", "SKILL.md"), BUILD_SKILL)
+    beta = h.add_plugin("m2", "beta", "2.0.0", ["review"], hooks=MODE_HOOK)
+    mode_script(beta, WORDS_MODE)
+    h.flush()
+    write(os.path.join(h.target, "AGENTS.md"), AGENTS_WORDS)
+    run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("add", "beta", "--target", h.target)
+    d = d or os.path.join(h.target, "judge")
+    assert run("judge", "request", "--target", h.target, "--out", d)[0] == 0
+    write(os.path.join(d, "cluster-response.json"), {"groups": [
+        {"situation": "reviewing", "members": ["alpha:critique", "beta:review"], "why": "both review"},
+        {"situation": "building", "members": ["alpha:build"], "why": "alone"}]})
+    assert run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))[0] == 0
+    write(os.path.join(d, "group-01-response.json"), {"findings": []})
+    write(os.path.join(d, "group-02-response.json"), {"findings": [
+        {"kind": "contradiction", "members": ["alpha:build", "plugin:beta"], "quotes": {"alpha:build": "does build", "plugin:beta": "Never build before asking"},
+         "why": "the mode forbids what build does", "proposed": {"order": ["plugin:beta", "alpha:build"]}}]})
+    code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "first")
+    assert code == 0, out
+    return alpha, beta
+
+
+def words_situations(h):
+    return {r["situation"]: r for r in hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))["situations"]}
+
+
+def words_stale(h):
+    """(stale situations per judgments_status, check's stale-situation errors)"""
+    m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))
+    stale = hunsu.judgments_status(m, hunsu.survey(h.target), h.target)[1]
+    return stale, [e for e in hunsu.check(h.target)[0] if "judged about other text" in e]
+
+
+def words_judged_new_form(h):
+    assert getattr(hunsu, "TEXT_FORM", None) == "whitespace-normalized", "no hunsu.TEXT_FORM = 'whitespace-normalized'"
+    forms = {name: r.get("fingerprint-text") for name, r in words_situations(h).items()}
+    assert forms == {"reviewing": "whitespace-normalized", "building": "whitespace-normalized"}, forms
+
+
+def test_Q_words_engine_shape_fingerprint_text_and_form_keywords():
+    import inspect
+    assert getattr(hunsu, "TEXT_FORM", None) == "whitespace-normalized", "no hunsu.TEXT_FORM"
+    assert callable(getattr(hunsu, "fingerprint_text", None)), "no hunsu.fingerprint_text(text, form)"
+    assert hunsu.fingerprint_text("a  b\n\n c\t", hunsu.TEXT_FORM) == "a b c"
+    assert hunsu.fingerprint_text("  \n\t ", hunsu.TEXT_FORM) == ""
+    assert hunsu.fingerprint_text("ab", hunsu.TEXT_FORM) != hunsu.fingerprint_text("a b", hunsu.TEXT_FORM), "joining two words is a change"
+    assert hunsu.fingerprint_text("a\r\nb", "raw") == "a\r\nb", "raw keeps every whitespace character"
+    assert hunsu.fingerprint_text("  a  b \n", "raw") == "  a  b \n"
+    for name in ("member_fingerprints", "members_text_fingerprint", "modes_read", "mode_read_now"):
+        p = inspect.signature(getattr(hunsu, name)).parameters.get("form")
+        assert p is not None and p.default == "raw" and p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD), (name, p)
+
+
+def test_Q_words_1_an_instruction_file_rewrapped_with_the_same_words_stales_nothing():
+    with Host() as h:
+        words_project(h)
+        assert words_stale(h) == ({}, []), "fresh right after the consume"
+        write(os.path.join(h.target, "AGENTS.md"), AGENTS_REWRAP)
+        stale, errs = words_stale(h)
+        assert stale == {}, "a rewrap of AGENTS.md (same words) staled: %s" % stale
+        assert errs == [], errs
+        words_judged_new_form(h)
+
+
+def test_Q_words_2_one_word_changed_stales_every_situation():
+    with Host() as h:
+        words_project(h)
+        words_judged_new_form(h)
+        changes = [("replaced", AGENTS_WORDS.replace("small", "tiny")),
+                   ("added", AGENTS_WORDS.replace("small and", "small and always")),
+                   ("removed", AGENTS_WORDS.replace(" every ", " ")),
+                   ("punctuation", AGENTS_WORDS.replace("made;", "made,")),
+                   ("split", AGENTS_WORDS.replace("reviewer", "re viewer"))]
+        for what, text in changes:
+            assert text != AGENTS_WORDS, what
+            write(os.path.join(h.target, "AGENTS.md"), text)
+            stale, errs = words_stale(h)
+            assert sorted(stale.get("situations", [])) == ["building", "reviewing"], (what, stale)
+            assert len(errs) == 1 and "2 situation(s)" in errs[0], (what, errs)
+            write(os.path.join(h.target, "AGENTS.md"), AGENTS_REWRAP)
+            assert words_stale(h) == ({}, []), "back to the judged words (rewrapped): fresh again after '%s'" % what
+
+
+def test_Q_words_3_two_adjacent_words_joined_stales():
+    with Host() as h:
+        words_project(h)
+        words_judged_new_form(h)
+        write(os.path.join(h.target, "AGENTS.md"), AGENTS_WORDS.replace("say why", "saywhy"))
+        stale, errs = words_stale(h)
+        assert sorted(stale.get("situations", [])) == ["building", "reviewing"], stale
+        assert errs, "a joined word is a word change: check says the situations are stale"
+        # joined across a line break, the rest rewrapped: still a change
+        write(os.path.join(h.target, "AGENTS.md"), AGENTS_REWRAP.replace("the diff,\n\n and", "the diff,and"))
+        assert sorted(words_stale(h)[0].get("situations", [])) == ["building", "reviewing"]
+
+
+def test_Q_words_4_a_skill_rewrapped_with_the_same_words_is_not_stale():
+    with Host() as h:
+        alpha, _ = words_project(h)
+        words_judged_new_form(h)
+        write(os.path.join(alpha, "skills", "build", "SKILL.md"), BUILD_SKILL_REWRAP)
+        stale, errs = words_stale(h)
+        assert stale == {} and errs == [], "build's SKILL.md only rewrapped: %s %s" % (stale, errs)
+        # a word in that body changed: its situation, and only it, is stale
+        write(os.path.join(alpha, "skills", "build", "SKILL.md"), BUILD_SKILL_REWRAP.replace("small", "large"))
+        stale, errs = words_stale(h)
+        assert stale.get("situations") == ["building"], stale
+
+
+def test_Q_words_5_every_situation_consumed_records_the_whitespace_normalized_form():
+    with Host() as h:
+        words_project(h)
+        assert getattr(hunsu, "TEXT_FORM", None) == "whitespace-normalized"
+        for name, r in words_situations(h).items():
+            assert r.get("fingerprint-text") == "whitespace-normalized", (name, r)
+            assert r.get("member-fingerprints") and r.get("members-text-fingerprint") and r.get("modes-read"), (name, r)
+        # a re-judge that finds the same keeps the findings — and still writes the new form for that situation
+        write(os.path.join(h.target, "AGENTS.md"), AGENTS_WORDS.replace("small", "tiny"))
+        before = words_situations(h)
+        d = os.path.join(h.target, "judge2")
+        assert run("judge", "request", "--target", h.target, "--out", d, "--stale")[0] == 0
+        for f in sorted(os.listdir(d)):
+            if re.match(r"group-\d+-request\.json$", f):
+                req = hunsu.load_json(os.path.join(d, f))
+                same = before["building"]["findings"] if "alpha:build" in json.dumps(req) else []
+                write(os.path.join(d, f.replace("request", "response")), {"findings": [
+                    {k: v for k, v in x.items() if k in ("kind", "members", "quotes", "why", "proposed")} for x in same]})
+        code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "second")
+        assert code == 0, out
+        after = words_situations(h)
+        assert after["building"]["findings"] == before["building"]["findings"], "the same findings are kept"
+        for name, r in after.items():
+            assert r.get("fingerprint-text") == "whitespace-normalized", (name, r)
+        assert words_stale(h) == ({}, [])
+
+
+def test_Q_words_6_a_raw_record_is_fresh_until_any_change_a_rewrap_included():
+    import inspect
+    for name in ("member_fingerprints", "members_text_fingerprint", "modes_read"):
+        assert "form" in inspect.signature(getattr(hunsu, name)).parameters, "%s takes no form=" % name
+    with Host() as h:
+        words_project(h)
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))
+        sv = hunsu.survey(h.target)
+        packets = hunsu.judge_context(h.target, m)["mode_packets"]
+        path = os.path.join(h.target, hunsu.JUDGMENTS)
+        doc = hunsu.load_json(path)
+        for r in doc["situations"]:   # what 2.2.0 recorded: no fingerprint-text, every hash over the raw text
+            r.pop("fingerprint-text", None)
+            members = r["members"] + r["modes"]
+            r["member-fingerprints"] = hunsu.member_fingerprints(sv, members, m, form="raw")
+            r["members-text-fingerprint"] = hunsu.members_text_fingerprint(sv, members, m, form="raw")
+            r["modes-read"] = hunsu.modes_read(packets, form="raw")
+            assert r["members-text-fingerprint"] == hunsu.members_text_fingerprint(sv, members, m), "the default form is raw"
+        hunsu.save_json(path, doc)
+        raw_bytes = io.open(path, "rb").read()
+        assert words_stale(h) == ({}, []), "a raw record whose raw fingerprints match is fresh"
+        run("lock", "--target", h.target)
+        assert io.open(path, "rb").read() == raw_bytes, "check and lock rewrite no record"
+        write(os.path.join(h.target, "AGENTS.md"), AGENTS_REWRAP)
+        stale, errs = words_stale(h)
+        assert sorted(stale.get("situations", [])) == ["building", "reviewing"], "a raw record is compared raw: a rewrap stales it: %s" % stale
+        assert errs, "check says the raw-judged situations are stale"
+        assert io.open(path, "rb").read() == raw_bytes, "check rewrites no record"
+        # one re-judge, and the record carries the new form: the next rewrap stales nothing
+        d = os.path.join(h.target, "judge2")
+        assert run("judge", "request", "--target", h.target, "--out", d, "--stale")[0] == 0
+        for f in sorted(os.listdir(d)):
+            if re.match(r"group-\d+-request\.json$", f):
+                write(os.path.join(d, f.replace("request", "response")), {"findings": []})
+        assert run("judge", "consume", "--target", h.target, "--dir", d, "--by", "second")[0] == 0
+        words_judged_new_form(h)
+        write(os.path.join(h.target, "AGENTS.md"), AGENTS_WORDS)
+        assert words_stale(h) == ({}, [])
+
+
+def test_Q_words_7_a_mode_whose_script_moved_and_text_only_rewrapped_is_not_stale():
+    with Host() as h:
+        words_project(h)
+        words_judged_new_form(h)
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)); m["plugins"]["beta"]["version"] = "2.1.0"; hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), m)
+        beta21 = h.add_plugin("m2", "beta", "2.1.0", ["review"], hooks=MODE_HOOK); h.flush()
+        mode_script(beta21, "Never build\n  before asking,\n\nand say why the build   is needed.\n")
+        with io.open(os.path.join(beta21, "mode.py"), "a", encoding="utf-8") as fh:
+            fh.write("\n# reworded the way it prints\n")
+        stale, errs = words_stale(h)
+        assert stale == {} and errs == [], "the mode's script moved and its text only rewrapped: %s %s" % (stale, errs)
+        mode_script(beta21, "Never build before asking, and say why the deploy is needed.")
+        stale, errs = words_stale(h)
+        assert sorted(stale.get("situations", [])) == ["building", "reviewing"], "a word in the mode's text changed: %s" % stale
+
+
 def _git(cwd, *argv):
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main"] + list(argv),
                    cwd=cwd, check=True, capture_output=True)
@@ -1963,10 +2186,11 @@ def test_outdated_asks_each_marketplace_read_only_and_says_the_steps_in_order():
         lines = out.splitlines()
         alpha = next(l for l in lines if l.strip().startswith("alpha"))
         assert "locked 1.2.0 · installed 1.2.0 · marketplace copy here 1.2.0 · published 1.3.0 — alpha 1.3.0 is published" in alpha, out
-        steps = lines[lines.index(alpha) + 1:lines.index(alpha) + 7]
-        assert [l.strip()[:2] for l in steps] == ["1.", "2.", "3.", "4.", "5.", "6."], steps
+        steps = lines[lines.index(alpha) + 1:lines.index(alpha) + 6]   # Q-steps: add and the separate check step are one upgrade step
+        assert [l.strip()[:2] for l in steps] == ["1.", "2.", "3.", "4.", "5."], steps
         assert "`claude plugin marketplace update m1`" in steps[0] and "`claude plugin update alpha@m1 --scope project`" in steps[1], steps
-        assert "restart the session" in steps[2] and "`hunsu add alpha`" in steps[3] and "--stale" in steps[4] and "`hunsu lock`" in steps[5] and "inside a run" in steps[5], steps
+        assert "restart the session" in steps[2] and steps[3].strip()[2:].strip().startswith("`hunsu upgrade alpha`") and "`hunsu lock`" in steps[4] and "inside a run" in steps[4], steps
+        assert not [l for l in steps if "`hunsu add alpha`" in l or "`hunsu check`" in l], steps
         assert "also recorded as alpha@old in installed_plugins.json, for 1 other project(s) — not this project's" in out, out
         beta = next(l for l in lines if l.strip().startswith("beta"))
         assert "published ?" in beta and "could not ask the marketplace" in beta, beta   # said, not an error
@@ -1986,7 +2210,7 @@ def test_outdated_asks_each_marketplace_read_only_and_says_the_steps_in_order():
         # after `claude plugin update` (faked: the host's record moves) the skew is check's, with the rest of the steps
         h.add_plugin("m1", "alpha", "1.3.0", ["build"]); h.markets["m1"]["installLocation"] = clone1; h.flush()   # (add_plugin renews the record)
         err = next(e for e in hunsu.check(h.target)[0] if e.startswith("plugin alpha"))
-        assert err.startswith("plugin alpha: manifest 1.2.0, host 1.3.0 — to take 1.3.0: 1. restart the session if it started before alpha 1.3.0") and "2. `hunsu add alpha`" in err, err
+        assert err.startswith("plugin alpha: manifest 1.2.0, host 1.3.0 — to take 1.3.0: 1. restart the session if it started before alpha 1.3.0") and "2. `hunsu upgrade alpha`" in err and "`hunsu add alpha`" not in err, err
         code, out = run("outdated", "--target", h.target)
         alpha = next(l for l in out.splitlines() if l.strip().startswith("alpha"))
         assert "installed 1.3.0" in alpha and "alpha 1.3.0 is published" in alpha and "plugin update" not in out.split(alpha)[1].split("\n  beta")[0], out
@@ -2009,9 +2233,9 @@ def test_a_session_whose_install_is_not_the_lock_is_told_the_whole_way_not_only_
         line = hunsu.stale_session_line(h.target, h.installed["hunsu@m1"][0]["installPath"])   # runs 1.1.0 = installed, lock 1.0.0
         assert line.startswith("hunsu: this session runs hunsu 1.1.0 while hunsu.lock.json pins 1.0.0 and hunsu 1.1.0 is installed for this project — "
                                "1. restart the session if it started before hunsu 1.1.0"), line
-        assert "2. `hunsu add hunsu`" in line and "`hunsu lock`" in line and "plugin update" not in line, line
+        assert "2. `hunsu upgrade hunsu`" in line and "`hunsu add hunsu`" not in line and "`hunsu lock`" in line and "plugin update" not in line, line
         line = hunsu.stale_session_line(h.target, old)   # runs 1.0.0, installed 1.1.0, lock 1.0.0: restart first, then take it
-        assert "1. restart the session (a /clear" in line and "`hunsu add hunsu`" in line, line
+        assert "1. restart the session (a /clear" in line and "`hunsu upgrade hunsu`" in line and "`hunsu add hunsu`" not in line, line
         hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": "1.2.0", "marketplace": "m1"}}})
         hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), {"plugins": {"hunsu": {"version": "1.2.0", "marketplace": "m1"}}})
         line = hunsu.stale_session_line(h.target, old)   # the lock is ahead of the install: a restart alone would load 1.1.0
@@ -2347,7 +2571,9 @@ def test_a_codex_lock_repairs_only_what_its_next_render_drops():
                                                           % (n, n, n, n) for n in ("alpha", "beta")))
         write(os.path.join(target, hunsu.MANIFEST), {"plugins": {n: {"version": v, "source": "github:org/" + n, "marketplace": n} for n, v in versions.items()},
                                                      "engines": {"codex": ">=0.0", "python": ">=3.0"}, "judge": "skip"})
-    hooks_errors = lambda: [e for e in hunsu.check(target)[0] if e.startswith("codex hook")]
+    # Q-active-hooks: the not-active error ("codex hooks: ") is counted on its own; these counts are the per-hook findings
+    hooks_errors = lambda: [e for e in hunsu.check(target)[0] if e.startswith("codex hook") and not e.startswith("codex hooks: ")]
+    not_active = lambda: [e for e in hunsu.check(target)[0] if e.startswith("codex hooks: ")]
     try:
         with host_path("codex"), patch.object(hunsu, "HOST", "codex"), patch.object(hunsu, "CODEX", codex), patch.dict(os.environ, {"HOME": root}):
             old_alpha = copy("alpha", "1.0.0", ['python3 "${PLUGIN_ROOT}/hooks/a.py"'])
@@ -2363,6 +2589,8 @@ def test_a_codex_lock_repairs_only_what_its_next_render_drops():
             errors = hooks_errors()
             assert len(errors) == 2 and all("a Codex `lock` would write a group that runs" in e and "beta 1.0.0's hooks/codex.json names it; `lock` on "
                                             "Codex refuses until it is here" in e for e in errors), errors
+            active = not_active()   # the file holds only the project's own groups: alpha's and beta's are not active
+            assert len(active) == 1 and "alpha 1.0.0" in active[0] and "beta 1.0.0" in active[0] and "lacks" in active[0], active
             code, out = run("lock", "--target", target)
             assert code != 0 and not os.path.exists(os.path.join(target, hunsu.LOCK)), out
             assert hunsu.load_json(path) == {"description": "Our project hooks", "hooks": {"Stop": [custom, gone]}}
@@ -2370,6 +2598,7 @@ def test_a_codex_lock_repairs_only_what_its_next_render_drops():
             code, out = run("lock", "--target", target)
             assert code == 0, out
             os.remove(interpreter); os.remove(tool)
+            assert not_active() == [], "the file holds what the render names"
             # now generated: a lock would write them again — the error is on the generated group, said once per path
             errors = hooks_errors()
             assert len(errors) == 2 and all("a Codex `lock` would write it again: beta 1.0.0's hooks/codex.json names it — `lock` cannot repair it" in e
@@ -2407,6 +2636,8 @@ def test_a_codex_lock_repairs_only_what_its_next_render_drops():
             copy("alpha", "2.0.0", ['python3 "${PLUGIN_ROOT}/hooks/a.py"', 'python3 "%s"' % tool])
             declare(alpha="2.0.0")
             errors = hooks_errors()   # the old group is not repairable while the new render fails, and the new render's missing script is said itself
+            active = not_active()   # alpha 2.0.0's groups are absent from the file
+            assert len(active) == 1 and "alpha 2.0.0" in active[0] and "lacks" in active[0], active
             assert len(errors) == 2 and "a Codex `lock` would drop it, but the groups it would write name ~/external tools/tool.py, which is not on this machine either" in errors[0], errors
             assert "a Codex `lock` would write a group that runs ~/external tools/tool.py, which is not on this machine — alpha 2.0.0's hooks/codex.json names it" in errors[1], errors
             code, out = run("lock", "--target", target)
@@ -2416,7 +2647,7 @@ def test_a_codex_lock_repairs_only_what_its_next_render_drops():
             assert len(errors) == 1 and "a copy no longer in the Codex plugin cache (which holds 2.0.0 now); a Codex `lock` would not write it again" in errors[0], errors
             code, out = run("lock", "--target", target)
             assert code == 0, out
-            assert hooks_errors() == [] and hunsu.load_json(path)["hooks"]["Stop"] == [custom, gone]
+            assert hooks_errors() == [] and not_active() == [] and hunsu.load_json(path)["hooks"]["Stop"] == [custom, gone]
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -3900,6 +4131,608 @@ def test_compat_the_root_commands_and_imports_are_the_payloads_own():
         assert out["first"] == real and out["one hostcall"] and out["one hunsu"], out
         assert out["survey"] == ["alpha@m1"], "the patched hunsu.CLAUDE is what the runtime read: %s" % out["survey"]
         assert out["host call"] == [0, "stream", ""] and out["calls"] == [{"exe": "claude", "mark": "claude"}], out
+
+
+# ---------------------------------------------------------------- Q-active-hooks, Q-upgrade, Q-steps (the 2.3.0 contract)
+
+ENGINES_BOTH = {"claude-code": ">=2.1", "codex": ">=0.165", "python": ">=3.0"}
+
+
+@contextlib.contextmanager
+def codex_here(h, *hosts):
+    """Codex installed under the fake host's home (hunsu.CODEX patched to it, as test_a_generated_codex_hook_… does), stub
+    host executables for `hosts` (both by default), HOME the fake host's. Yields (codex dir, stub bin dir)."""
+    from unittest.mock import patch
+    if sys.version_info < (3, 11):
+        raise Skip("the Codex survey reads config.toml with tomllib (3.11+)")
+    with host_path(*(hosts or ("claude-code", "codex"))) as bin_dir, patch.object(hunsu, "CODEX", os.path.join(h.home, ".codex")), \
+            patch.dict(os.environ, {"HOME": h.home}):
+        yield hunsu.CODEX, bin_dir
+
+
+def on_codex():
+    from unittest.mock import patch
+    return patch.object(hunsu, "HOST", "codex")
+
+
+def codex_hooks_project(h, codex, version="1.0.0"):
+    """alpha installed for both hosts (codex_hook_project), recorded in hunsu.json; no .codex/hooks.json yet."""
+    root = codex_hook_project(h, codex, version)
+    run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+    manifest(h.target, engines=ENGINES_BOTH, judge="skip")
+    return root
+
+
+def hooks_path(h):
+    return os.path.join(h.target, ".codex", "hooks.json")
+
+
+def generated_group(root):
+    return {"hooks": [{"type": "command", "command": "python3 \"%s/hooks/prompt.py\"" % root.replace("\\", "/")}]}
+
+
+def not_active(target):
+    return [e for e in hunsu.check(target)[0] if e.startswith("codex hooks: ")]
+
+
+def codex_hook_errors(target):
+    return [e for e in hunsu.check(target)[0] if e.startswith("codex hook")]
+
+
+def read_bytes(path):
+    with io.open(path, "rb") as fh:
+        return fh.read()
+
+
+def tree_bytes(root):
+    out = {}
+    for d, _, files in os.walk(root):
+        for f in files:
+            p = os.path.join(d, f)
+            out[os.path.relpath(p, root)] = read_bytes(p)
+    return out
+
+
+def test_Q_active_hooks_1_an_installed_codex_hook_with_no_project_file_is_said_on_both_hosts_and_a_codex_lock_writes_it():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex)
+        assert not os.path.exists(hooks_path(h))
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors = hunsu.check(h.target)[0]
+            active = [e for e in errors if e.startswith("codex hooks: ")]
+            assert len(active) == 1, (host, errors)
+            e = active[0]
+            for part in ("not active", "alpha 1.0.0", "UserPromptSubmit", "does not exist", "`hunsu upgrade --hooks-only`"):
+                assert part in e, (host, part, e)
+            assert "lacks" not in e, (host, e)
+            # in this order: what is not active, which, why, the repair
+            assert e.index("not active") < e.index("alpha 1.0.0") < e.index("does not exist") < e.index("`hunsu upgrade --hooks-only`"), (host, e)
+        code, out = run("lock", "--target", h.target)   # Claude Code: the not-active error stops lock and names its repair from here
+        assert code != 0 and "codex hooks: " in out and "`hunsu upgrade --hooks-only`" in out, out
+        assert not os.path.exists(os.path.join(h.target, hunsu.LOCK)) and not os.path.exists(hooks_path(h))
+        with on_codex():   # a Codex lock writes exactly the render: it does not stop for the error, and repairs it
+            code, out = run("lock", "--target", h.target)
+            assert code == 0, out
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(root)]}, hunsu.load_json(hooks_path(h))
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors = hunsu.check(h.target)[0]
+            assert not [x for x in errors if "codex hooks" in x], (host, errors)
+
+
+def test_Q_active_hooks_2_a_file_of_only_the_projects_own_group_lacks_the_plugins_and_keeps_it_after_regeneration():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex)
+        tools = os.path.join(h.target, "tools")
+        write(os.path.join(tools, "guard.py"), "")
+        guard = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"%s/guard.py\"" % tools}]}
+        write(hooks_path(h), {"description": "Our project hooks", "hooks": {"PreToolUse": [guard]}})
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors = hunsu.check(h.target)[0]
+            active = [e for e in errors if e.startswith("codex hooks: ")]
+            assert len(active) == 1 and "not active" in active[0] and "alpha 1.0.0" in active[0] and "UserPromptSubmit" in active[0] \
+                and "lacks" in active[0] and "does not exist" not in active[0] and "`hunsu upgrade --hooks-only`" in active[0], (host, errors)
+        with on_codex():
+            code, out = run("lock", "--target", h.target)
+            assert code == 0, out
+        doc = hunsu.load_json(hooks_path(h))
+        assert doc["hooks"]["PreToolUse"] == [guard] and doc["hooks"]["UserPromptSubmit"] == [generated_group(root)], doc
+        assert not not_active(h.target)
+
+
+def test_Q_active_hooks_3_a_group_from_an_older_copy_still_in_the_cache_is_one_a_regeneration_drops():
+    with Host() as h, codex_here(h) as (codex, _):
+        old = codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(old)]}
+        new = codex_hook_project(h, codex, "2.0.0")   # the update: 2.0.0 installed, the 1.0.0 copy still in the cache, every file there
+        assert os.path.isfile(os.path.join(old, "hooks", "prompt.py"))
+        run("add", "alpha", "--target", h.target)
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors = hunsu.check(h.target)[0]
+            hooks = [e for e in errors if e.startswith("codex hook")]
+            assert len(hooks) == 1 and hooks[0].startswith("codex hooks: "), (host, errors)
+            e = hooks[0]
+            for part in ("not active", "alpha 2.0.0", "UserPromptSubmit", "lacks", "drops", "alpha 1.0.0", "`hunsu upgrade --hooks-only`"):
+                assert part in e, (host, part, e)
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(new)]}
+        assert codex_hook_errors(h.target) == []
+
+
+def test_Q_active_hooks_4_a_machine_profile_that_leaves_codex_out_says_nothing():
+    with Host() as h, codex_here(h) as (codex, _):
+        codex_hooks_project(h, codex)
+        assert len(not_active(h.target)) == 1, "without a profile Codex runs here: said"
+        local(h.target, {"hosts": ["claude-code"]})   # no role's worker runs on Codex: Codex is not a host of the project here
+        assert codex_hook_errors(h.target) == [], hunsu.check(h.target)[0]
+
+
+def test_Q_active_hooks_5_codex_not_installed_or_no_hooks_declared_says_nothing():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex)
+        assert len(not_active(h.target)) == 1, "Codex installed with a hook group: said"
+        config = os.path.join(codex, "config.toml")
+        saved = read_bytes(config)
+        os.remove(config)   # Codex not installed here (no config): nothing to say
+        assert codex_hook_errors(h.target) == [], hunsu.check(h.target)[0]
+        with io.open(config, "wb") as fh:
+            fh.write(saved)
+        assert len(not_active(h.target)) == 1
+        os.remove(os.path.join(root, "hooks", "codex.json"))   # the copy declares no hooks: the render is empty
+        assert codex_hook_errors(h.target) == [], hunsu.check(h.target)[0]
+
+
+def upgrade(*argv):
+    return run("upgrade", *argv)
+
+
+def three_plugins(h, judged=True):
+    """alpha (m1) and beta (m2) via words_project when judged (situations judged once), gamma (m3); then alpha 1.1.0 (its
+    build skill's text changed, its marketplace's source moved) and beta 2.1.0 (the same text) installed; gamma at its pin."""
+    if judged:
+        words_project(h)
+    else:
+        h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
+        h.add_plugin("m2", "beta", "2.0.0", ["review"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("add", "beta", "--target", h.target)
+        manifest(h.target, judge="skip")
+    h.add_plugin("m3", "gamma", "3.0.0", ["retro"])
+    h.flush()
+    run("add", "gamma", "--target", h.target)
+    alpha = h.add_plugin("m1", "alpha", "1.1.0", ["critique", "build"], source={"source": "github", "repo": "org/alpha-moved"})
+    write(os.path.join(alpha, "skills", "build", "SKILL.md"), BUILD_SKILL.replace("small steps", "one step"))
+    beta = h.add_plugin("m2", "beta", "2.1.0", ["review"], hooks=MODE_HOOK if judged else None)
+    if judged:
+        mode_script(beta, WORDS_MODE)
+    h.flush()
+    return alpha, beta
+
+
+def pins(h):
+    return hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["plugins"]
+
+
+def test_Q_upgrade_1_two_newer_installs_are_taken_the_third_left_and_the_stale_situations_and_lock_step_listed():
+    with Host() as h, host_path("claude-code"):
+        three_plugins(h)
+        gamma = dict(pins(h)["gamma"])
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        p = pins(h)
+        assert (p["alpha"]["version"], p["alpha"]["source"], p["alpha"]["marketplace"]) == ("1.1.0", "github:org/alpha-moved", "m1"), p["alpha"]
+        assert (p["beta"]["version"], p["beta"]["source"], p["beta"]["marketplace"]) == ("2.1.0", "github:org/m2", "m2"), p["beta"]
+        assert p["gamma"] == gamma, p["gamma"]
+        assert "alpha 1.0.0 -> 1.1.0" in out and "beta 2.0.0 -> 2.1.0" in out and "gamma 3.0.0 ->" not in out, out
+        # what is left: the situation whose member text changed with the new pins, its judge step, and the lock last
+        assert "building" in out and "--stale" in out and "`hunsu lock`" in out, out
+        assert out.index("building") < out.rindex("--stale") < out.rindex("`hunsu lock`"), out
+        assert not os.path.exists(hooks_path(h)), "Codex is not a host here: nothing is written for it"
+
+
+def test_Q_upgrade_1_with_judge_skip_no_judge_step_is_listed():
+    with Host() as h, host_path("claude-code"):
+        three_plugins(h, judged=False)
+        code, out = upgrade("--target", h.target)
+        assert code == 0 and "alpha 1.0.0 -> 1.1.0" in out and "beta 2.0.0 -> 2.1.0" in out, out
+        assert "--stale" not in out and "judge request" not in out and "`hunsu lock`" in out, out
+
+
+def test_Q_upgrade_2_the_installed_version_is_taken_never_the_marketplace_copys():
+    with Host() as h, host_path("claude-code"):
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.add_plugin("m2", "beta", "2.0.0", ["review"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("add", "beta", "--target", h.target)
+        manifest(h.target, judge="skip")
+        h.add_plugin("m1", "alpha", "1.1.0", ["build"])
+        for market, name, listed in (("m1", "alpha", "1.3.0"), ("m2", "beta", "2.5.0")):   # each marketplace's copy lists a newer release
+            copy = os.path.join(h.home, "marketplaces", market)
+            write(os.path.join(copy, ".claude-plugin", "marketplace.json"), {"name": market, "plugins": [{"name": name, "source": "./", "version": listed}]})
+            write(os.path.join(copy, ".claude-plugin", "plugin.json"), {"name": name, "version": listed})
+            h.markets[market]["installLocation"] = copy
+        h.flush()
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        assert pins(h)["alpha"]["version"] == "1.1.0" and pins(h)["beta"]["version"] == "2.0.0", pins(h)
+        assert "alpha 1.0.0 -> 1.1.0" in out and "-> 1.3.0" not in out and "-> 2.5.0" not in out, out
+
+
+def test_Q_upgrade_3_a_pin_ahead_of_the_install_or_one_not_installed_is_said_and_unchanged():
+    with Host() as h, host_path("claude-code"):
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        m = hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))
+        m["plugins"]["alpha"]["version"] = "1.2.0"   # a pin taken elsewhere, ahead of this machine
+        m["plugins"]["delta"] = {"version": "0.1.0", "source": "github:org/m4", "marketplace": "m4"}   # not installed here
+        m["judge"] = "skip"
+        hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), m)
+        before = pins(h)
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        assert pins(h) == before, pins(h)
+        lines = out.splitlines()
+        assert any("alpha" in l and "not taken" in l for l in lines), out
+        assert any("delta" in l and "not taken" in l for l in lines), out
+        assert "alpha 1.2.0 ->" not in out and "-> 1.0.0" not in out and "delta 0.1.0 ->" not in out, out
+
+
+def test_Q_upgrade_4_named_plugins_only_and_an_unknown_name_refuses_writing_nothing():
+    with Host() as h, host_path("claude-code"):
+        three_plugins(h, judged=False)
+        path = os.path.join(h.target, hunsu.MANIFEST)
+        for argv in (["nosuch"], ["beta", "nosuch"]):
+            before = read_bytes(path)
+            code, out = upgrade(*argv, "--target", h.target)
+            assert code == 1, (argv, code, out)
+            assert read_bytes(path) == before and not os.path.exists(hooks_path(h)), argv
+        code, out = upgrade("alpha", "--target", h.target)
+        assert code == 0, out
+        assert pins(h)["alpha"]["version"] == "1.1.0" and pins(h)["beta"]["version"] == "2.0.0" and pins(h)["gamma"]["version"] == "3.0.0", pins(h)
+        assert "alpha 1.0.0 -> 1.1.0" in out and "beta 2.0.0 ->" not in out, out
+
+
+def test_Q_upgrade_5_a_linked_plugin_is_unchanged_and_said():
+    with Host() as h, host_path("claude-code"):
+        three_plugins(h, judged=False)
+        src = os.path.join(h.home, "src", "alpha")
+        write(os.path.join(src, ".claude-plugin", "plugin.json"), {"name": "alpha", "version": "1.1.0"})
+        local(h.target, {"links": {"alpha": src}})
+        alpha = dict(pins(h)["alpha"])
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        assert pins(h)["alpha"] == alpha and pins(h)["beta"]["version"] == "2.1.0", pins(h)
+        assert any("alpha" in l and "not taken" in l for l in out.splitlines()) and "alpha 1.0.0 ->" not in out, out
+
+
+def codex_update(h, codex):
+    """alpha 1.0.0 locked on Codex with the project's own groups around the generated one, then the update: the 1.0.0 copy
+    removed, 2.0.0 installed for both hosts; hunsu.json still pins 1.0.0. Returns (old, new, guard, own)."""
+    old = codex_hooks_project(h, codex, "1.0.0")
+    tools = os.path.join(h.target, "tools")
+    write(os.path.join(tools, "guard.py"), ""); write(os.path.join(tools, "own.py"), "")
+    with on_codex():
+        assert run("lock", "--target", h.target)[0] == 0
+    doc = hunsu.load_json(hooks_path(h))
+    guard = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"%s/guard.py\"" % tools}]}
+    own = {"hooks": [{"type": "command", "command": "python3 \"%s/own.py\"" % tools}]}
+    doc["hooks"]["UserPromptSubmit"] = [guard] + doc["hooks"]["UserPromptSubmit"] + [own]
+    record = json.loads(doc["description"][len(hunsu.CODEX_HOOK_PROVENANCE):])
+    record["description"] = "Our project hooks"
+    doc["description"] = hunsu.CODEX_HOOK_PROVENANCE + json.dumps(record)
+    hunsu.save_json(hooks_path(h), doc)
+    shutil.rmtree(old)
+    new = codex_hook_project(h, codex, "2.0.0")
+    return old, new, guard, own
+
+
+def test_Q_upgrade_6_hooks_only_takes_no_pin_and_regenerates_the_codex_groups():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hook_project(h, codex, "1.0.0")
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, engines=ENGINES_BOTH, judge="skip")
+        shutil.rmtree(root)
+        new = codex_hook_project(h, codex, "2.0.0")   # installed for both hosts, newer than the pin
+        before = read_bytes(os.path.join(h.target, hunsu.MANIFEST))
+        code, out = upgrade("--hooks-only", "--target", h.target)
+        assert code == 0, out
+        assert read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == before, "--hooks-only takes no pin"
+        assert "alpha 1.0.0 -> 2.0.0" not in out, out
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(new)]}, hunsu.load_json(hooks_path(h))
+        assert not not_active(h.target)
+
+
+def test_Q_upgrade_7_from_claude_code_the_generated_groups_are_rewritten_and_the_projects_own_kept():
+    with Host() as h, codex_here(h) as (codex, _):
+        old, new, guard, own = codex_update(h, codex)
+        assert any(e.startswith("codex hook UserPromptSubmit") and "not on this machine" in e for e in hunsu.check(h.target)[0]), "the stale group is said"
+        # what a Codex lock writes for the same pins, on a copy of the project: the regeneration must be exactly that
+        twin = os.path.join(h.home, "twin")
+        shutil.copytree(h.target, twin)
+        run("add", "alpha", "--target", twin)
+        with on_codex():
+            assert run("lock", "--target", twin)[0] == 0
+        expected = hunsu.load_json(os.path.join(twin, ".codex", "hooks.json"))
+        code, out = upgrade("--target", h.target)   # on Claude Code
+        assert code == 0, out
+        assert pins(h)["alpha"]["version"] == "2.0.0" and "alpha 1.0.0 -> 2.0.0" in out, (pins(h), out)
+        doc = hunsu.load_json(hooks_path(h))
+        assert doc == expected, (doc, expected)
+        groups = doc["hooks"]["UserPromptSubmit"]
+        assert generated_group(new) in groups and generated_group(old) not in groups, groups
+        assert [g for g in groups if g in (guard, own)] == [guard, own], groups   # the project's own, in their order
+        kept = json.loads(doc["description"][len(hunsu.CODEX_HOOK_PROVENANCE):])
+        assert kept["description"] == "Our project hooks", kept
+        for host in ("claude-code", "codex"):
+            with on_host(host):
+                errors = hunsu.check(h.target)[0]
+            assert not [e for e in errors if e.startswith("codex hook")], (host, errors)
+        code, out = run("lock", "--target", h.target)   # Claude Code
+        assert code == 0, out
+
+
+def test_Q_upgrade_8_host_registries_another_project_and_the_records_are_never_touched():
+    with Host() as h, codex_here(h) as (codex, bin_dir):
+        codex_update(h, codex)
+        other = os.path.join(h.home, "other")
+        os.makedirs(other)
+        run("init", "--target", other); run("add", "alpha", "--target", other)
+        registries = [os.path.join(h.claude, "plugins", "installed_plugins.json"), os.path.join(h.claude, "plugins", "known_marketplaces.json"),
+                      os.path.join(h.claude, "settings.json"), os.path.join(codex, "config.toml"), os.path.join(other, hunsu.MANIFEST),
+                      os.path.join(h.target, hunsu.LOCK)]
+        before = {p: read_bytes(p) for p in registries}
+        codex_tree = tree_bytes(codex)
+        probes(bin_dir)
+        code, out = upgrade("--target", h.target)
+        assert code == 0 and "alpha 1.0.0 -> 2.0.0" in out, out
+        for p in registries:
+            assert read_bytes(p) == before[p], p
+        assert tree_bytes(codex) == codex_tree, "Codex's config and plugin cache are untouched"
+        assert not os.path.exists(os.path.join(other, ".codex")), "another project's files are untouched"
+        assert not [c for c in probes(bin_dir) if "plugin" in c], "no host command installs or updates anything"
+
+
+def test_Q_upgrade_8_the_lock_and_the_judgments_are_byte_identical():
+    with Host() as h, host_path("claude-code"):
+        words_project(h)
+        # the judged contradiction is `authority`: lock refuses it without a resolution (the hooks build's dispute) — resolve it first
+        manifest(h.target, resolutions={"building": {"order": ["plugin:beta", "alpha:build"], "reviewed": True}})
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        alpha = h.add_plugin("m1", "alpha", "1.1.0", ["critique", "build"])
+        write(os.path.join(alpha, "skills", "build", "SKILL.md"), BUILD_SKILL.replace("small steps", "one step"))
+        h.flush()
+        files = [os.path.join(h.target, hunsu.LOCK), os.path.join(h.target, hunsu.JUDGMENTS)]
+        before = {p: read_bytes(p) for p in files}
+        code, out = upgrade("--target", h.target)
+        assert code == 0 and "alpha 1.0.0 -> 1.1.0" in out, out
+        for p in files:
+            assert read_bytes(p) == before[p], p
+        assert "building" in out and "--stale" in out, out   # the stale situation is listed for the judge, not rewritten
+
+
+def test_Q_upgrade_9_an_unreadable_codex_hooks_file_refuses_writing_nothing():
+    with Host() as h, codex_here(h) as (codex, _):
+        codex_update(h, codex)
+        hunsu.save_json(hooks_path(h), ["not", "an", "object"])
+        files = [os.path.join(h.target, hunsu.MANIFEST), hooks_path(h)]
+        for argv in ((), ("--hooks-only",), ("alpha",)):
+            before = {p: read_bytes(p) for p in files}
+            code, out = upgrade(*argv, "--target", h.target)
+            assert code == 1 and hunsu.codex_hooks_unreadable("not a JSON object") in out, (argv, code, out)
+            assert {p: read_bytes(p) for p in files} == before, argv
+
+
+def test_Q_upgrade_9_a_render_naming_a_file_the_installed_copy_lacks_refuses_writing_nothing():
+    with Host() as h, codex_here(h) as (codex, _):
+        old = codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        shutil.rmtree(old)
+        codex_hook_project(h, codex, "2.0.0", script=False)   # the new copy's hooks/codex.json names hooks/prompt.py, which it lacks
+        files = [os.path.join(h.target, hunsu.MANIFEST), hooks_path(h)]
+        for argv in ((), ("--hooks-only",)):
+            before = {p: read_bytes(p) for p in files}
+            code, out = upgrade(*argv, "--target", h.target)
+            assert code == 1, (argv, code, out)
+            assert {p: read_bytes(p) for p in files} == before, argv
+        os.remove(hooks_path(h))   # and with no file yet: none is created
+        before = read_bytes(os.path.join(h.target, hunsu.MANIFEST))
+        code, out = upgrade("--target", h.target)
+        assert code == 1 and read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == before and not os.path.exists(hooks_path(h)), out
+
+
+def test_Q_upgrade_the_claude_code_command_adapter_is_one_engine_action():
+    path = os.path.join(PLUGIN, "commands", "upgrade.md")
+    assert os.path.isfile(path), "no plugin/commands/upgrade.md"
+    text = io.open(path, encoding="utf-8").read()
+    assert text.startswith("---\ndescription: ") and '"${CLAUDE_PLUGIN_ROOT}/hunsu.py" upgrade' in text and "--target ." in text, text
+
+
+def test_Q_steps_update_steps_name_hunsu_upgrade_in_place_of_add_and_the_separate_check():
+    for host, kw in (("claude-code", {}), ("codex", {})):
+        for installed in ("1.3.0", "1.2.0"):   # installed already (no install steps), and still to install
+            with on_host(host):
+                steps = hunsu.update_steps("alpha", "m1", "1.3.0", installed=installed, pinned="1.2.0", locked="1.2.0", **kw)
+            assert not [s for s in steps if "`hunsu add alpha`" in s], (host, installed, steps)
+            assert not [s for s in steps if s.startswith("`hunsu check`")], (host, installed, steps)
+            up = [i for i, s in enumerate(steps) if s.startswith("`hunsu upgrade alpha`")]
+            assert len(up) == 1 and up[0] == len(steps) - 2, (host, installed, steps)   # just before the lock step
+            assert "takes the installed 1.3.0" in steps[up[0]] and "stale situations" in steps[up[0]], steps[up[0]]
+            assert steps[-1].startswith("`hunsu lock`"), (host, installed, steps)
+            assert up[0] == 0 or steps[up[0] - 1].startswith("restart"), (host, installed, steps)   # after the install steps and the restart
+
+
+def test_Q_steps_regenerates_names_hunsu_upgrade_hooks_only_before_the_codex_lock():
+    r = hunsu.REGENERATES
+    assert "`hunsu upgrade --hooks-only`" in r and "AGENT_HOST=codex" in r, r
+    assert r.index("`hunsu upgrade --hooks-only`") < r.index("AGENT_HOST=codex"), r
+
+
+def test_Q_steps_checks_drift_error_and_behind_line_name_hunsu_upgrade():
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.2.0", ["build"])
+        copy = os.path.join(h.home, "marketplaces", "m1")
+        write(os.path.join(copy, ".claude-plugin", "marketplace.json"), {"plugins": [{"name": "alpha", "source": "./", "version": "1.3.0"}]})
+        write(os.path.join(copy, ".claude-plugin", "plugin.json"), {"name": "alpha", "version": "1.3.0"})
+        h.markets["m1"]["installLocation"] = copy
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, judge="skip")
+        behind = [i for i in hunsu.check(h.target)[2] if hunsu.BEHIND in i]
+        assert len(behind) == 1 and "`hunsu upgrade alpha`" in behind[0] and "`hunsu add alpha`" not in behind[0], behind
+        h.add_plugin("m1", "alpha", "1.3.0", ["build"]); h.markets["m1"]["installLocation"] = copy; h.flush()
+        err = [e for e in hunsu.check(h.target)[0] if e.startswith("plugin alpha: manifest 1.2.0, host 1.3.0 — to take 1.3.0")]
+        assert len(err) == 1 and "`hunsu upgrade alpha`" in err[0] and "`hunsu add alpha`" not in err[0], err
+
+
+
+# ---------------------------------------------------------------- the eyes' findings on the 2.3.0 candidate: Q-steps' last paragraph, Q-upgrade step 2
+
+def _linked_steps_hold(steps, host, installed):
+    where = (host, installed, steps)
+    assert not [s for s in steps if s.startswith("`hunsu upgrade alpha`")], where
+    assert not [s for s in steps if "`hunsu upgrade alpha`" in s], where
+    add = [i for i, s in enumerate(steps) if s.startswith("`hunsu add alpha`")]
+    assert len(add) == 1, where
+    i = add[0]
+    assert "hunsu.json takes 1.3.0" in steps[i], where
+    assert i + 1 < len(steps) - 1, where   # a check step after it, and the lock after that
+    assert steps[i + 1].startswith("`hunsu check`") and "--stale" in steps[i + 1], where
+    assert i + 2 == len(steps) - 1 and steps[-1].startswith("`hunsu lock`"), where
+    assert i == 0 or steps[i - 1].startswith("restart"), where   # after the install steps and the restart, as before
+
+
+def test_Q_eyes_Q_steps_a_linked_plugin_keeps_hunsu_add_and_the_separate_check_on_claude_code():
+    for installed in ("1.2.0", "1.3.0"):
+        with on_host("claude-code"):
+            steps = hunsu.update_steps("alpha", "m1", "1.3.0", installed=installed, pinned="1.2.0", locked="1.2.0", linked=True)
+        _linked_steps_hold(steps, "claude-code", installed)
+
+
+def test_Q_eyes_Q_steps_a_linked_plugin_keeps_hunsu_add_and_the_separate_check_on_codex_after_the_refresh():
+    for installed in ("1.2.0", "1.3.0"):
+        with on_host("codex"):
+            steps = hunsu.update_steps("alpha", "m1", "1.3.0", installed=installed, pinned="1.2.0", locked="1.2.0", linked=True)
+        _linked_steps_hold(steps, "codex", installed)
+        if installed == "1.2.0":   # still to install: the refresh of the linked source is the first step
+            assert steps[0].startswith("`hunsu install --refresh alpha`"), steps
+
+
+def test_Q_eyes_Q_steps_outdated_says_hunsu_add_for_a_plugin_this_machine_links():
+    if not shutil.which("git"):
+        raise Skip("no git on PATH")
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.2.0", ["build"])
+        work1, clone1 = published_marketplace(h.home, "m1", "alpha", "1.2.0")
+        h.markets["m1"]["installLocation"] = clone1
+        publish(work1, "alpha", "1.3.0")
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, judge="skip")
+        assert run("lock", "--target", h.target)[0] == 0
+        src = os.path.join(h.home, "src", "alpha")
+        write(os.path.join(src, ".claude-plugin", "plugin.json"), {"name": "alpha", "version": "1.3.0"})
+        local(h.target, {"links": {"alpha": src}})
+        code, out = run("outdated", "--target", h.target)
+        assert code == 0, out
+        lines = out.splitlines()
+        alpha = next(i for i, l in enumerate(lines) if l.strip().startswith("alpha"))
+        steps = []
+        for l in lines[alpha + 1:]:
+            if not re.match(r"\s+\d+\.", l):
+                break
+            steps.append(l)
+        assert steps, out
+        assert [l for l in steps if "`hunsu add alpha`" in l], steps
+        assert not [l for l in steps if "`hunsu upgrade alpha`" in l], steps
+        assert "`hunsu upgrade alpha`" not in out, out
+
+
+def test_Q_eyes_Q_steps_the_stale_session_line_for_a_linked_hunsu_says_hunsu_add():
+    with Host() as h:
+        h.add_plugin("m1", "hunsu", "1.1.0", [])
+        h.flush()
+        hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), {"plugins": {"hunsu": {"version": "1.0.0", "marketplace": "m1"}}})
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": "1.0.0", "marketplace": "m1"}}})
+        src = os.path.join(h.home, "src", "hunsu")
+        write(os.path.join(src, ".claude-plugin", "plugin.json"), {"name": "hunsu", "version": "1.1.0"})
+        local(h.target, {"links": {"hunsu": src}})
+        old = plugin(os.path.join(h.home, "session-copy"), "m1", "hunsu", "1.0.0", [])
+        for running in (h.installed["hunsu@m1"][0]["installPath"], old):
+            line = hunsu.stale_session_line(h.target, running)
+            assert line, running
+            assert "`hunsu add hunsu`" in line and "`hunsu upgrade hunsu`" not in line, line
+            assert "`hunsu lock`" in line, line
+
+
+def test_Q_eyes_Q_upgrade_from_claude_code_without_codex_installed_writes_nothing_for_codex():
+    with Host() as h, host_path("claude-code", "codex"):
+        assert not os.path.exists(os.path.join(hunsu.CODEX, "config.toml"))   # the Host's empty Codex directory
+        h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, engines=ENGINES_BOTH, judge="skip")
+        h.add_plugin("m1", "alpha", "1.1.0", ["build"]); h.flush()
+        gitignore = os.path.join(h.target, ".gitignore")
+        before = read_bytes(gitignore) if os.path.exists(gitignore) else None
+        for argv in ((), ("--hooks-only",)):
+            code, out = upgrade(*argv, "--target", h.target)
+            assert code == 0, (argv, out)
+            assert not os.path.exists(os.path.join(h.target, ".codex")), (argv, out)   # no empty file, no directory
+            assert (read_bytes(gitignore) if os.path.exists(gitignore) else None) == before, argv
+            said = [l for l in out.splitlines() if "codex" in l.lower() and "nothing" in l.lower() and "claude" not in l.lower()]
+            assert said, (argv, out)
+
+
+def test_Q_eyes_Q_upgrade_a_manifest_plugin_codex_has_not_installed_is_said_and_alphas_group_written():
+    with Host() as h, codex_here(h, "claude-code") as (codex, _):
+        root = codex_hook_project(h, codex, "1.0.0")
+        h.add_plugin("m2", "beta", "2.0.0", ["review"])   # Claude Code only: Codex's config.toml does not name it
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target); run("add", "beta", "--target", h.target)
+        manifest(h.target, engines=ENGINES_BOTH, judge="skip")
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        said = [l for l in out.splitlines() if "beta" in l and "codex" in l.lower() and re.search(r"\bnot\b.*\binstall", l)]
+        assert said, out
+        assert os.path.exists(hooks_path(h)), out
+        assert hunsu.load_json(hooks_path(h))["hooks"] == {"UserPromptSubmit": [generated_group(root)]}, hunsu.load_json(hooks_path(h))
+
+
+def test_Q_eyes_Q_upgrade_an_existing_file_is_regenerated_to_the_projects_own_groups_when_codex_holds_no_hooks():
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex, "1.0.0")
+        tools = os.path.join(h.target, "tools")
+        write(os.path.join(tools, "guard.py"), "")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        doc = hunsu.load_json(hooks_path(h))
+        guard = {"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"%s/guard.py\"" % tools}]}
+        doc["hooks"]["PreToolUse"] = [guard]
+        hunsu.save_json(hooks_path(h), doc)
+        assert generated_group(root) in doc["hooks"]["UserPromptSubmit"], doc
+        shutil.rmtree(root)   # the update: 2.0.0 installed for both hosts, a release that declares no Codex hooks
+        new = codex_hook_project(h, codex, "2.0.0")
+        os.remove(os.path.join(new, "hooks", "codex.json"))   # Codex now holds no hooks
+        twin = os.path.join(h.home, "twin")
+        shutil.copytree(h.target, twin)
+        run("add", "alpha", "--target", twin)   # what a Codex lock writes for the same pins
+        with on_codex():
+            assert run("lock", "--target", twin)[0] == 0
+        expected = hunsu.load_json(os.path.join(twin, ".codex", "hooks.json"))
+        code, out = upgrade("--target", h.target)   # on Claude Code
+        assert code == 0, out
+        after = hunsu.load_json(hooks_path(h))
+        assert after["hooks"] == {"PreToolUse": [guard]}, after
+        assert after == expected, (after, expected)
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
