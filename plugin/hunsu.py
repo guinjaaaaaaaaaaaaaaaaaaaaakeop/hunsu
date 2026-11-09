@@ -1146,6 +1146,14 @@ def check_judgments(target, manifest, s, found):
         for key in manifest.get("resolutions", {}):   # a cluster round names situations anew; a resolution about an old name decides nothing
             if key not in known:
                 warnings.append("resolutions[%r] is about a situation no judgment has (and no skill is named so) — a cluster round renamed it; move or remove it" % key)
+    for r in (judged or {}).get("situations", []):
+        v = r.get("resolution-verdict") or {}
+        entry = manifest.get("resolutions", {}).get(r["situation"])
+        if (v.get("verdict") == "does-not-fit" and isinstance(entry, dict)
+                and v.get("resolution") == resolution_fingerprint(entry)):
+            warnings.append("situation %r: judge %s called the resolution no longer fitting its findings: %s — a person "
+                            "re-reads it in %s and changes the resolution or records their own review in it"
+                            % (r["situation"], v.get("judged-by", "unknown"), v.get("why", ""), CONFLICTS_DOC))
     for key, res in manifest.get("resolutions", {}).items():
         rv = res.get("reviewed") if isinstance(res, dict) else None
         bound = state_bound(rv.get("delegated")) if isinstance(rv, dict) else []
@@ -1237,6 +1245,12 @@ def role_ids(manifest, s):
 def judged_ids(manifest, s):
     """The set a judgment is about: the locked skills and the declared roles' prompts (modes are members of every situation)."""
     return locked_skill_ids(manifest, s) + role_ids(manifest, s)
+
+
+def resolution_fingerprint(entry):
+    """The whole resolution entry, including its review, that a verdict was about."""
+    import hashlib
+    return hashlib.sha256(json.dumps(entry, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
 def skills_fingerprint(manifest, s):
@@ -1876,6 +1890,20 @@ def judge_consume(args, target, manifest, j):
             print("situation %r: findings changed — %s; marked reviewed: false (a human must re-read)" % (sit, why))
     if changed:
         save_json(os.path.join(target, MANIFEST), manifest)
+    # Record after the changed-findings gate, against the entry that consume leaves behind.
+    for r in results:
+        v, packed, account = verdicts[r["situation"]]
+        entry = manifest.get("resolutions", {}).get(r["situation"])
+        if not isinstance(v, dict) or v.get("verdict") not in ("does-not-fit", "cannot-tell") or not isinstance(entry, dict):
+            continue
+        quote = v.get("quote") or ""
+        normalized = quote_norm(quote)
+        r["resolution-verdict"] = {"verdict": v["verdict"], "why": v.get("why") or "", "quote": quote,
+                                   "quote-found": bool(normalized) and normalized in quote_norm(packed),
+                                   "judged-by": account, "resolution": resolution_fingerprint(entry)}
+        print("situation %r: recorded %s%s"
+              % (r["situation"], v["verdict"], "" if r["situation"] in changed else
+                 " — the resolution and its reviewed are unchanged by this verdict"))
     if not cluster.get("groups"):   # a stale round: these situations replace their old selves; the rest stand
         redone = {r["situation"] for r in results}
         results = [r for r in existing.get("situations", []) if r["situation"] not in redone] + results
@@ -1920,6 +1948,11 @@ def write_conflicts_doc(target, doc, manifest):
                 lines.append("  - proposed: `%s`" % json.dumps(f["proposed"], ensure_ascii=False))
         if r["situation"] in res:
             lines.append("- resolution: `%s`" % json.dumps(res[r["situation"]], ensure_ascii=False))
+        if r.get("resolution-verdict"):
+            v = r["resolution-verdict"]
+            lines.append("- resolution verdict: %s — judge %s: %s; quote (%s by hunsu): “%s”"
+                         % (v["verdict"], v["judged-by"], v["why"],
+                            "found" if v["quote-found"] else "not found", v["quote"]))
         lines.append("")
     if doc.get("rejected"):
         lines += ["## rejected by hunsu (no quote, unknown member, or bad kind)", ""] + ["- %s" % x for x in doc["rejected"]] + [""]
@@ -2661,7 +2694,8 @@ def cmd_role_list(args):
 
 @mutates_project
 def cmd_lock(args):
-    """Snapshot of the resolved environment. Written only when check has no errors; warnings are recorded, not hidden."""
+    """Snapshot of the resolved environment. Written only when check has no errors; warnings are recorded, not hidden.
+    Recorded warnings are check's once this lock and, on Codex, its hook groups are in place."""
     dev = load_json(os.path.join(args.target, LOCAL)).get("dev", {})
     if dev:
         # a lock names released content; a working source on one machine is neither released nor the team's
@@ -2702,10 +2736,14 @@ def cmd_lock(args):
             "judge": "skipped" if manifest.get("judge") == "skip" else ("none" if judgments_status(manifest, s, args.target)[0] is None else "judged"),
             "warnings": warnings}
     save_json(os.path.join(args.target, LOCK), lock)
-    print("locked %d plugins · %d skills · %d hooks -> %s (%d warnings recorded)"
-          % (len(lock["plugins"]), len(lock["skills"]), len(lock["hooks"]), LOCK, len(warnings)))
     if HOST == "codex":
         materialize_codex_hooks(args.target, manifest, s)
+    _, warnings, _ = check(args.target)
+    if warnings != lock["warnings"]:
+        lock["warnings"] = warnings
+        save_json(os.path.join(args.target, LOCK), lock)
+    print("locked %d plugins · %d skills · %d hooks -> %s (%d warnings recorded)"
+          % (len(lock["plugins"]), len(lock["skills"]), len(lock["hooks"]), LOCK, len(warnings)))
     return 0
 
 

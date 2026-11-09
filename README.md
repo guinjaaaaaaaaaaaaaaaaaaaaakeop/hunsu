@@ -59,7 +59,7 @@ installed.
 | `AGENTS.md`, `CLAUDE.md`, `README.md`, `LICENSE` | this checkout's guidance and documents | no |
 | `hunsu.json`, `hunsu.lock.json`, `hunsu-judgments.json` | this checkout's own agent environment | no |
 | `test_hunsu.py`, `test_hostcall_env.py` | the tests | no |
-| `plan/`, `mangsang/`, `reviews/`, `.chongdae/` | contracts, the concept net, review and run records | no |
+| `plan/`, `reviews/`, `.chongdae/` | contracts, review and run records | no |
 
 The payload has no implementation dependency on this checkout: it imports nothing outside `plugin/` and needs none of
 the root's files to run — it reads a user's project records and the host's settings as data, as any installed plugin
@@ -89,6 +89,11 @@ instead of `~/.claude` and `~/.codex`, as the tests do.
 
 ### Tests
 
+The fake host carries stub `claude`, `codex` and `node` executables that answer only `--version`, so the suite needs
+Python 3.11 or newer and git, not Claude Code, Codex or node. At startup the suite clears session host, home, sandbox,
+worker, plugin-root and survey variables, so running inside Claude Code or Codex gives the same run; a test needing a
+live host is reported as SKIP with its reason.
+
 ```
 python3 test_hunsu.py
 python3 -m unittest test_hostcall_env.py
@@ -102,8 +107,8 @@ five version values agree and both catalogs select `./plugin`; and a copy of `pl
 outside the repository, runs `--help`, `init`, `add`, `check`, `lock`, its hooks and the judge worker without reading a
 file of this checkout. Fresh interpreters, without the suite's `sys.path` set-up, check the root wrappers: the same output
 and exit code as the payload's files, the payload's modules on import, one module object with the hooks' import, and
-monkeypatches on a root import reaching the runtime. No test reads your live `~/.claude`, `~/.codex` or plugin cache. In the umbrella checkout,
-`tools/same-file.py` says when the vendored `hostcall.py` copies drift.
+monkeypatches on a root import reaching the runtime. No test reads your live `~/.claude`, `~/.codex` or plugin cache. The
+maintainers' copy check says when the vendored `hostcall.py` copies drift.
 
 ## Versioning and release
 

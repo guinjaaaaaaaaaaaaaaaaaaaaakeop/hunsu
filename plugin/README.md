@@ -355,7 +355,10 @@ before use. Undecided or `session` → the session does such work; `alternates` 
 
 ### `lock`
 
-write `hunsu.lock.json`; refuses on errors, records warnings. Two kinds of field in it. Code reads: `plugins.*.version`
+write `hunsu.lock.json`; refuses on errors, records warnings. The recorded `warnings` are what `check` says once the lock
+— on Codex, also the hook groups it writes — is in place, so a warning about the lock it replaced, or one its own
+regeneration repaired, is not recorded (the first `lock` after `upgrade` once recorded "lock pins <old>" for versions it
+then pinned). Two kinds of field in it. Code reads: `plugins.*.version`
 and `.fingerprint` (`check`, chongdae's builder), `skills` and `denied` (the pre-skill hook), `resolutions` (the
 session-start line), `roles` (chongdae), `reporters` and `record-paths` (dwitbuk, hacheong), `settings` (dwitbuk's stop
 hook, with `hunsu.json` overriding). The rest — `judge`, `warnings`, `hooks`, `engines`, `skills-fingerprint`,
@@ -482,6 +485,11 @@ still-fits whose quote is verbatim in the members' text and names no state repla
 delegation — and leaves a proposal nobody has read at `reviewed: false`: the judge's word does not turn an unread proposal
 into approved history. Any other verdict marks the resolution `reviewed: false`. Either way it stays, and dwitbuk lists a
 `reviewed: false` one until a human re-reads.
+A verdict that does not confirm the resolution (`does-not-fit`, `cannot-tell`) is kept with its situation in
+`hunsu-judgments.json` as `resolution-verdict`, whether or not the findings changed: the verdict, its whole why and
+quote, whether hunsu found the quote, the judge, and a fingerprint of the hunsu.json entry it was about. `check` warns
+of a `does-not-fit` until that entry is edited or a later re-judge says otherwise. Recording the verdict changes no
+resolution and no `reviewed`; it is no one's approval or refusal. `hunsu-conflicts.md` shows it for a person to re-read.
 
 A judgment is about its members' words. Since 2.3.0 each situation's fingerprints are taken over the text with
 whitespace normalized (`" ".join(text.split())`), recorded as `fingerprint-text: whitespace-normalized`. This covers

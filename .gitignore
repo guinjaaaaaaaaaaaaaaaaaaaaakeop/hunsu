@@ -4,3 +4,5 @@ hunsu.local.json
 hunsu-conflicts.md
 *-response.transcript.jsonl
 .hunsu-bootstrap/
+.codex/hooks.json
+.codex/hunsu-dispatch.py

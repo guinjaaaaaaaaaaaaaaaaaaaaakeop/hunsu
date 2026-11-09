@@ -11,6 +11,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unittest
+
+# A fixture chooses its host environment; the launching session must not choose it.
+for _session_var in (
+    "AGENT_HOST", "AGENT_CODEX_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+    "HUNSU_CODEX_DIR", "HUNSU_CLAUDE_DIR", "AGENT_CODEX_SANDBOX", "CODEX_SANDBOX",
+    "AGENT_WORKER", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT", "HUNSU_SURVEY",
+):
+    os.environ.pop(_session_var, None)
 
 HERE = os.path.dirname(os.path.abspath(__file__))   # the development checkout: tests, records, the catalogs
 PLUGIN = os.path.join(HERE, "plugin")                # the installed payload: what a host copies — the engine and hooks under test
@@ -69,11 +78,29 @@ class Host:
         self.no_codex = os.path.join(self.home, "no-codex")
         os.makedirs(self.no_codex)
         hunsu.CODEX = self.no_codex
+        if os.name != "nt":
+            self._old_path = os.environ.get("PATH")
+            stub_dir = tempfile.mkdtemp(prefix="host-stubs-", dir=self.home)
+            for exe, version in [*STUB_VERSIONS.values(), ("node", "v22.0.0")]:
+                path = os.path.join(stub_dir, exe)
+                write(path, "#!/bin/sh\n"
+                      'if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then\n'
+                      "  printf '%s\\n' '" + version + "'\n"
+                      "  exit 0\nfi\n"
+                      "printf '%s\\n' \"hunsu test suite's stub, not a live host\"\n"
+                      "exit 1\n")
+                os.chmod(path, 0o755)
+            os.environ["PATH"] = stub_dir + (os.pathsep + self._old_path if self._old_path is not None else "")
         return self
 
     def __exit__(self, *a):
         hunsu.CLAUDE = self._old
         hunsu.CODEX = self._old_codex
+        if os.name != "nt":
+            if self._old_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = self._old_path
         shutil.rmtree(self.home, ignore_errors=True)
 
 
@@ -96,8 +123,9 @@ def manifest(target, **changes):
 
 
 
-class Skip(Exception):
-    """Raised by a test that cannot run on this host; the runner reports it as SKIP, never as PASS."""
+class Skip(unittest.SkipTest):
+    """Raised by a test that cannot run on this host; the runner reports it as SKIP, never as PASS. A unittest.SkipTest,
+    so a runner that collects these functions through unittest (hacheong's red-before-build) skips it too, not an error."""
 
 
 STUB_VERSIONS = {"claude-code": ("claude", "2.1.400 (Claude Code)"), "codex": ("codex", "codex-cli 0.170.0")}
@@ -5682,19 +5710,652 @@ def test_Q_review_7_a_payload_without_hooks_dispatch_py_runs_help_init_and_check
         shutil.rmtree(work, ignore_errors=True)
 
 
+# ---- Q-hermetic: inside Host, claude/codex/node are the fixture's stubs, never the machine's
+
+STUB_HOSTS = ("claude", "codex", "node")
+
+
+def _needs_posix_stubs():
+    if os.name == "nt":
+        raise Skip("stub host executables are POSIX shell scripts")
+
+
+def _started_path_dirs():
+    return {os.path.realpath(d) for d in os.environ.get("PATH", "").split(os.pathsep) if d}
+
+
+def _under(path, root):
+    return path is not None and os.path.realpath(path).startswith(os.path.realpath(root) + os.sep)
+
+
+def test_Q_hermetic_1_which_claude_codex_and_node_inside_Host_are_the_fixtures_own_under_its_home():
+    _needs_posix_stubs()
+    before = _started_path_dirs()
+    with Host() as h:
+        for exe in STUB_HOSTS:
+            found = shutil.which(exe)
+            assert found is not None, ("inside Host `%s` resolves to nothing: the fixture carries no stub for it" % exe, os.environ.get("PATH"))
+            assert _under(found, h.home), ("inside Host `%s` is not the fixture's own stub under its temporary directory" % exe, found, h.home)
+            assert os.path.realpath(os.path.dirname(found)) not in before, ("inside Host `%s` comes from a directory of the PATH the suite started with" % exe, found)
+            assert os.access(found, os.X_OK), ("the stub `%s` is not executable" % exe, found)
+
+
+def test_Q_hermetic_1_version_of_inside_Host_answers_the_stub_versions_not_the_machines():
+    _needs_posix_stubs()
+    with Host() as h:
+        for exe in STUB_HOSTS:
+            assert _under(shutil.which(exe), h.home), ("`%s` inside Host is not the fixture's stub; its version would be the machine's" % exe, shutil.which(exe))
+        claude_said = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", STUB_VERSIONS["claude-code"][1]).group(0)
+        codex_said = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", STUB_VERSIONS["codex"][1]).group(0)
+        assert claude_said == "2.1.400" and codex_said == "0.170.0", ("STUB_VERSIONS changed under the contract", STUB_VERSIONS)
+        assert hunsu.version_of("claude") == claude_said, ("version_of('claude') inside Host is not STUB_VERSIONS' claude", hunsu.version_of("claude"))
+        assert hunsu.version_of("codex") == codex_said, ("version_of('codex') inside Host is not STUB_VERSIONS' codex", hunsu.version_of("codex"))
+        node = hunsu.version_of("node")
+        assert node is not None and re.fullmatch(r"\d+\.\d+(?:\.\d+)?", node), ("version_of('node') inside Host is not a fixed version string", node)
+        # the same answer twice: a fixed version, not a probe of whatever is installed
+        assert hunsu.version_of("claude") == claude_said and hunsu.version_of("node") == node, "the stub's version is not fixed between calls"
+
+
+def test_Q_hermetic_1_a_stub_called_with_other_arguments_exits_non_zero_and_says_it_is_the_suites_stub():
+    _needs_posix_stubs()
+    with Host() as h:
+        for exe, argv in (("claude", ["claude", "-p", "hello"]), ("codex", ["codex", "exec", "hello"]), ("node", ["node", "-e", "process.exit(0)"])):
+            found = shutil.which(exe)
+            # decided before anything runs: a test inside Host never runs the machine's own host
+            assert _under(found, h.home), ("`%s` inside Host is not the fixture's stub; refusing to run the machine's" % exe, found)
+            r = subprocess.run(argv, capture_output=True, text=True, env=dict(os.environ), cwd=h.target, timeout=60)
+            said = (r.stdout or "") + (r.stderr or "")
+            assert r.returncode != 0, ("the `%s` stub accepted an invocation that is not --version" % exe, argv, r.returncode, said)
+            assert "stub" in said.lower(), ("the `%s` stub's refusal does not say it is the suite's stub" % exe, argv, said)
+            lines = [ln for ln in said.splitlines() if ln.strip()]
+            assert len(lines) == 1, ("the `%s` stub's refusal is not one line" % exe, said)
+            # --version still answers, exit 0, and says nothing else
+            v = subprocess.run([exe, "--version"], capture_output=True, text=True, env=dict(os.environ), cwd=h.target, timeout=60)
+            assert v.returncode == 0 and "stub" not in (v.stdout + v.stderr).lower(), ("`%s --version` is not the stub's plain version answer" % exe, v.returncode, v.stdout, v.stderr)
+
+
+def test_Q_hermetic_2_leaving_Host_restores_PATH_exactly_also_when_the_block_raised():
+    _needs_posix_stubs()
+    before = os.environ.get("PATH")
+    with Host() as h:
+        inside = os.environ.get("PATH")
+        assert inside != before, "Host did not put its stubs ahead of the machine's PATH"
+        assert inside.split(os.pathsep)[0] and _under(inside.split(os.pathsep)[0], h.home), ("Host's first PATH entry is not under its temporary directory", inside)
+        assert inside.endswith(os.pathsep + before) if before else True, ("Host's PATH does not keep the machine's PATH behind the stubs", inside, before)
+    assert os.environ.get("PATH") == before, ("PATH after Host differs from before", os.environ.get("PATH"), before)
+
+    class Boom(Exception):
+        pass
+
+    try:
+        with Host():
+            raise Boom()
+    except Boom:
+        pass
+    assert os.environ.get("PATH") == before, ("PATH after a raising Host block differs from before", os.environ.get("PATH"), before)
+    # twice in a row (the second enter does not see the first's leftovers)
+    with Host():
+        with Host():
+            pass
+        assert os.environ.get("PATH") != before
+    assert os.environ.get("PATH") == before, ("PATH after nested Host blocks differs from before", os.environ.get("PATH"), before)
+    assert "PATH" in os.environ if before is not None else True
+
+
+def test_Q_hermetic_2_host_path_inside_Host_still_sets_PATH_to_its_own_directory_only():
+    _needs_posix_stubs()
+    with Host() as h, host_path("codex") as bin_dir:
+        assert os.environ["PATH"] == bin_dir, ("host_path's PATH is not its own directory only", os.environ["PATH"], bin_dir)
+        assert shutil.which("claude") is None, ("host_path('codex') inside Host still finds a claude", shutil.which("claude"))
+        assert shutil.which("node") is None, ("host_path('codex') inside Host still finds a node", shutil.which("node"))
+        found = shutil.which("codex")
+        assert found is not None and os.path.realpath(os.path.dirname(found)) == os.path.realpath(bin_dir), ("codex inside host_path is not host_path's own", found, bin_dir)
+        assert hunsu.version_of("codex") == "0.170.0", hunsu.version_of("codex")
+        assert hunsu.version_of("claude") is None, hunsu.version_of("claude")
+    # after both: nothing of either remains, and Host's stubs are gone from PATH
+    assert not any(_under(d, h.home) for d in os.environ.get("PATH", "").split(os.pathsep) if d), os.environ.get("PATH")
+
+
+# ---- Q-lock: the warnings a lock records are check's once the lock it writes is in place
+
+FLOOR_WARN = "engine codex: the workers of implementer run on it, and `engines` does not require it — add a floor (nothing checks its version)"
+
+
+def lock_warnings(h):
+    """The `warnings` the project's hunsu.lock.json records (asserted present: a lock without the field is a failure, not an error)."""
+    path = os.path.join(h.target, hunsu.LOCK)
+    assert os.path.isfile(path), "no hunsu.lock.json"
+    doc = hunsu.load_json(path)
+    assert isinstance(doc.get("warnings"), list), ("the lock records no `warnings` list", doc.get("warnings"))
+    return doc["warnings"]
+
+
+def locked_line(out):
+    """The one `locked … -> hunsu.lock.json (N warnings recorded)` line `lock` printed."""
+    lines = [l for l in out.splitlines() if l.startswith("locked ")]
+    assert len(lines) == 1, out
+    return lines[0]
+
+
+def codex_worker_role(h, root):
+    """A plain role whose worker runs on Codex while the manifest's `engines` names no codex floor: check warns FLOOR_WARN, a
+    warning that stays true after any lock."""
+    write(os.path.join(root, "worker.py"), "")
+    manifest(h.target, engines={"claude-code": ">=2.1", "python": ">=3.0"},
+             roles={"implementer": ["python3", "{plugin:alpha}/worker.py", "--request", "{request}", "--response", "{response}",
+                                    "--host", "codex", "--model", "m"]})
+
+
+def test_Q_lock_1_the_first_claude_code_lock_after_upgrade_records_no_skew_against_the_lock_it_replaced_and_equals_check_after():
+    # (a) Claude Code, Codex in use: the lock pins alpha 1.0.0 with dispatched groups; both installed copies (one tree, which
+    # the Codex cache holds and the Claude Code install record names) become 2.0.0; `upgrade` takes 2.0.0 into hunsu.json
+    with Host() as h, codex_here(h) as (codex, _):
+        old = codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert_dispatched(h)
+        shutil.rmtree(old)
+        codex_hook_project(h, codex, "2.0.0")
+        with on_host("claude-code"):
+            code, out = upgrade("--target", h.target)
+            assert code == 0, out
+            assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["plugins"]["alpha"]["version"] == "2.0.0"
+            # check as the project stands says the skew against the 1.0.0 lock — the one the lock below replaces
+            assert [w for w in hunsu.check(h.target)[1] if w.startswith(SKEW_WARN)], "the fixture no longer produces the skew warning before the lock"
+            code, out = run("lock", "--target", h.target)
+            assert code == 0, out
+            recorded = lock_warnings(h)
+            assert hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["plugins"]["alpha"]["version"] == "2.0.0"
+            assert not [w for w in recorded if w.startswith(SKEW_WARN)], ("the lock recorded a skew warning measured against the lock it replaced", recorded)
+            assert not [w for w in recorded if "lock pins 1.0.0" in w], recorded
+            after = hunsu.check(h.target)[1]
+            assert recorded == after, ("the lock's warnings are not check's once the lock is in place", recorded, after)
+            # the count printed is the recorded list's length
+            line = locked_line(out)
+            assert line.endswith("(%d warnings recorded)" % len(recorded)), (line, recorded)
+            # a second lock, nothing changed, leaves the file's warnings as they were
+            first = read_bytes(os.path.join(h.target, hunsu.LOCK))
+            code, out = run("lock", "--target", h.target)
+            assert code == 0, out
+            assert lock_warnings(h) == recorded, ("a second lock changed the recorded warnings", lock_warnings(h), recorded)
+            assert locked_line(out).endswith("(%d warnings recorded)" % len(recorded)), out
+            assert lock_warnings(h) == json.loads(first.decode("utf-8"))["warnings"], "the second lock's file differs from the first's in `warnings`"
+
+
+def test_Q_lock_1_a_codex_lock_over_the_2_3_0_form_records_no_versioned_copies_warning_and_equals_check_after():
+    # (b) Codex: .codex/hooks.json in the 2.3.0 form — a generated group naming a versioned copy — which this lock's regeneration rewrites
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex, "1.0.0")
+        write_2_3_0_form(h, root)
+        with on_codex():
+            assert [w for w in hunsu.check(h.target)[1] if w.startswith(VERSIONED_WARN)], "the fixture no longer produces the versioned-copies warning before the lock"
+            code, out = run("lock", "--target", h.target)
+            assert code == 0, out
+            assert_dispatched(h)
+            recorded = lock_warnings(h)
+            assert not [w for w in recorded if "name versioned copies" in w], ("the lock recorded the warning its own regeneration repaired", recorded)
+            assert not [w for w in recorded if w.startswith("codex hook")], recorded
+            after = hunsu.check(h.target)[1]
+            assert recorded == after, ("the lock's warnings are not check's once the lock and the hook groups are in place", recorded, after)
+            assert locked_line(out).endswith("(%d warnings recorded)" % len(recorded)), out
+
+
+def test_Q_lock_1_a_codex_lock_over_an_edited_dispatcher_records_no_dispatcher_warning_and_equals_check_after():
+    # (b) Codex: a .codex/hunsu-dispatch.py whose bytes differ from the payload's — this lock writes the payload's back
+    with Host() as h, codex_here(h) as (codex, _):
+        codex_hooks_project(h, codex, "1.0.0")
+        with on_codex():
+            assert run("lock", "--target", h.target)[0] == 0
+        assert_dispatched(h)
+        with io.open(dispatcher_of(h), "a", encoding="utf-8") as fh:
+            fh.write("# edited here\n")
+        assert read_bytes(dispatcher_of(h)) != read_bytes(DISPATCH)
+        with on_codex():
+            said = [w for w in hunsu.check(h.target)[1] if w.startswith(DISPATCHER_FINDING)]
+            assert len(said) == 1 and "is not the one this hunsu writes" in said[0], "the fixture no longer produces the dispatcher warning before the lock"
+            code, out = run("lock", "--target", h.target)
+            assert code == 0, out
+            assert read_bytes(dispatcher_of(h)) == read_bytes(DISPATCH), "the Codex lock did not write the payload's dispatcher back"
+            recorded = lock_warnings(h)
+            assert not [w for w in recorded if "is not the one this hunsu writes" in w], ("the lock recorded the dispatcher warning its own write repaired", recorded)
+            assert not [w for w in recorded if w.startswith(DISPATCHER_FINDING)], recorded
+            after = hunsu.check(h.target)[1]
+            assert recorded == after, ("the lock's warnings are not check's once the dispatcher is written", recorded, after)
+            assert locked_line(out).endswith("(%d warnings recorded)" % len(recorded)), out
+
+
+def test_Q_lock_1_a_warning_that_stays_true_after_the_lock_is_still_recorded_beside_none_the_lock_repaired():
+    # (c) Codex, the 2.3.0 form beside a plain role whose host `engines` does not name: the lock repairs the first and records
+    # the second — the floor warning is in the lock's `warnings` and in check's after, the versioned one in neither, the lists equal
+    with Host() as h, codex_here(h) as (codex, _):
+        root = codex_hooks_project(h, codex, "1.0.0")
+        write_2_3_0_form(h, root)
+        codex_worker_role(h, root)
+        with on_codex():
+            before = hunsu.check(h.target)[1]
+            assert FLOOR_WARN in before and [w for w in before if w.startswith(VERSIONED_WARN)], ("the fixture no longer produces both warnings", before)
+            code, out = run("lock", "--target", h.target)
+            assert code == 0, out
+            recorded = lock_warnings(h)
+            after = hunsu.check(h.target)[1]
+            assert FLOOR_WARN in recorded, ("a warning still true after the lock was dropped from the record", recorded)
+            assert FLOOR_WARN in after, after
+            assert not [w for w in recorded if w.startswith(VERSIONED_WARN)], ("the lock recorded the warning its regeneration repaired", recorded)
+            assert recorded == after, (recorded, after)
+            assert locked_line(out).endswith("(%d warnings recorded)" % len(recorded)), out
+        # the same record read from Claude Code: the floor warning is still said, and the lock's list is still what check says
+        with on_host("claude-code"):
+            claude_after = hunsu.check(h.target)[1]
+        assert FLOOR_WARN in claude_after, claude_after
+
+
+# ---- Q-verdict: a judge's does-not-fit on unchanged findings is recorded, warned and rendered, and moves nothing else
+
+VERDICT_WHY = ("the deny does not reach native subagents, which both members now spawn for the very work the resolution settles, "
+               "and neither the use nor the note says who reviews what a subagent produces; " + "the judge's long reason. " * 16).strip()
+assert len(VERDICT_WHY) > 400, len(VERDICT_WHY)
+WHY_HEAD = VERDICT_WHY[:60]   # the why's first words: what a warning or a document must carry to count as saying the why
+VERDICT_JUDGE = "claude-code opus-x"   # unread_round's response worker: the account the situation's own judged-by is taken from
+
+DOES_NOT_FIT = lambda quote, why=VERDICT_WHY: {"verdict": "does-not-fit", "why": why, "quote": quote}
+CANNOT_TELL = lambda quote, why="the texts do not say whether a subagent's review counts": {"verdict": "cannot-tell", "why": why, "quote": quote}
+
+
+def situation_record(h, situation="reviewing a change"):
+    """The one record hunsu-judgments.json holds for SITUATION."""
+    doc = hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))
+    recs = [s for s in doc.get("situations", []) if s.get("situation") == situation]
+    assert len(recs) == 1, (situation, doc)
+    return recs[0]
+
+
+def verdict_warnings(h, situation="reviewing a change", why=VERDICT_WHY):
+    """check's warnings that name SITUATION and carry the first words of WHY — the verdict warning Q-verdict 5 describes."""
+    return [w for w in hunsu.check(h.target)[1] if situation in w and why[:60] in w]
+
+
+def conflicts_section(h, situation="reviewing a change"):
+    """The `## SITUATION …` section of hunsu-conflicts.md, up to the next `## `."""
+    text = read_bytes(os.path.join(h.target, hunsu.CONFLICTS_DOC)).decode("utf-8")
+    secs = [p for p in re.split(r"(?m)^## ", text) if p.startswith(situation)]
+    assert len(secs) == 1, (situation, text)
+    return secs[0]
+
+
+def entry_minus_reviewed(h, situation="reviewing a change"):
+    return {k: v for k, v in resolutions_of(h)[situation].items() if k != "reviewed"}
+
+
+def does_not_fit_round(h, d, quote="now with style", why=VERDICT_WHY, new_desc="does critique, now with style"):
+    """The (a) round: alpha:critique's text becomes NEW_DESC (still containing "does critique", so the findings are the same as
+    the first round's) and the judge answers does-not-fit with WHY and QUOTE (a phrase of the new text, not of the findings)."""
+    code, out, rpath = unread_round(h, d, new_desc, DOES_NOT_FIT(quote, why), finding_quote="does critique")
+    assert code == 0, out
+    return out
+
+
+def verdict_project(h, reviewed=True):
+    """unread_project's shape with a second situation that gets a packet: 'building' = alpha:build + gamma:plan, both judged with
+    an overlap and both resolved (reviewed REVIEWED), so a stale round of one leaves the other for consume to keep."""
+    h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
+    h.add_plugin("m2", "beta", "2.0.0", ["review"])
+    h.add_plugin("m3", "gamma", "3.0.0", ["plan"])
+    h.flush()
+    run("init", "--target", h.target)
+    for name in ("alpha", "beta", "gamma"):
+        run("add", name, "--target", h.target)
+    d = os.path.join(h.target, "judge")
+    run("judge", "request", "--target", h.target, "--out", d)
+    write(os.path.join(d, "cluster-response.json"), {"groups": [
+        {"situation": "reviewing a change", "members": ["alpha:critique", "beta:review"], "why": "both review"},
+        {"situation": "building", "members": ["alpha:build", "gamma:plan"], "why": "both build"}]})
+    code, out = run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))
+    assert code == 0 and "2 group packets" in out, out
+    assert hunsu.load_json(os.path.join(d, "group-01-request.json"))["situation"] == "reviewing a change"
+    assert hunsu.load_json(os.path.join(d, "group-02-request.json"))["situation"] == "building"
+    write(os.path.join(d, "group-01-response.json"), {"findings": [
+        {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique", "beta:review": "does review"},
+         "why": "same work", "proposed": {"use": "alpha:critique", "deny": ["beta:review"]}}]})
+    write(os.path.join(d, "group-02-response.json"), {"findings": [
+        {"kind": "overlap", "members": ["alpha:build", "gamma:plan"], "quotes": {"alpha:build": "does build", "gamma:plan": "does plan"},
+         "why": "same build", "proposed": {"use": "alpha:build", "deny": ["gamma:plan"]}}]})
+    code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "test")
+    assert code == 0, out
+    manifest(h.target, resolutions={
+        "reviewing a change": {"use": "alpha:critique", "deny": ["beta:review"], "note": "the judge's proposal", "reviewed": reviewed},
+        "building": {"use": "alpha:build", "deny": ["gamma:plan"], "note": "the judge's other proposal", "reviewed": reviewed}})
+    return d
+
+
+def building_round(h, d, new_desc, verdict, by="test3"):
+    """A stale round that re-judges only 'building': gamma:plan's text becomes NEW_DESC (keep "does plan" in it and the findings
+    are the same), the response carries VERDICT and no worker (so BY is the account), consume runs."""
+    gamma = h.installed["gamma@m3"][0]["installPath"]
+    write(os.path.join(gamma, "skills", "plan", "SKILL.md"), "---\nname: plan\ndescription: %s\n---\n" % new_desc)
+    code, out = run("judge", "request", "--target", h.target, "--out", d, "--stale")
+    assert code == 0 and "1 group packets" in out, out
+    name = next(n for n in sorted(os.listdir(d)) if n.startswith("group-") and n.endswith("-request.json"))
+    req = hunsu.load_json(os.path.join(d, name))
+    assert req["situation"] == "building" and "existing_resolution" in req, req
+    response = {"findings": [{"kind": "overlap", "members": ["alpha:build", "gamma:plan"],
+                              "quotes": {"alpha:build": "does build", "gamma:plan": "does plan"}, "why": "still the same build", "proposed": {}}]}
+    if verdict is not None:
+        response["resolution_verdict"] = verdict
+    write(os.path.join(d, name.replace("-request", "-response")), response)
+    code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", by)
+    assert code == 0, out
+    return out
+
+
+def test_Q_verdict_1_same_findings_with_does_not_fit_record_the_verdict_whole_and_keep_the_findings_and_the_manifest():
+    # (a) the record: findings, judged-by and findings-fingerprint word for word the first round's, hunsu.json byte-unchanged,
+    # `resolution-verdict` with every field, the long why not cut, and consume's own line about it
+    with Host() as h:
+        d = unread_project(h, True)
+        first = situation_record(h)
+        assert first["judged-by"] == "test" and "resolution-verdict" not in first, first
+        manifest_before = read_bytes(os.path.join(h.target, hunsu.MANIFEST))
+        out = does_not_fit_round(h, d)
+        rec = situation_record(h)
+        assert rec["findings"] == first["findings"], (first["findings"], rec["findings"])
+        assert rec["judged-by"] == "test", rec
+        assert rec["findings-fingerprint"] == first["findings-fingerprint"], rec
+        assert read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == manifest_before, "consume rewrote hunsu.json for a verdict on unchanged findings"
+        v = rec.get("resolution-verdict")
+        assert isinstance(v, dict), ("consume recorded nothing of the judge's does-not-fit verdict", rec)
+        assert v["verdict"] == "does-not-fit", v
+        assert v["why"] == VERDICT_WHY, ("the why is cut or changed", v["why"])
+        assert v["quote"] == "now with style", v
+        assert v["quote-found"] is True, v
+        assert v["judged-by"] == VERDICT_JUDGE, v
+        assert isinstance(v.get("resolution"), str) and v["resolution"], ("no fingerprint of the resolution entry", v)
+        lines = [l for l in out.splitlines() if "reviewing a change" in l and "does-not-fit" in l]
+        assert len(lines) == 1, ("consume says nothing of the verdict it recorded", out)
+        assert "reviewed" in lines[0], lines   # … and that the resolution and its `reviewed` are unchanged by it
+
+
+def test_Q_verdict_1_same_findings_with_does_not_fit_warn_once_in_check_pass_lock_leave_policy_and_show_in_the_conflicts_doc():
+    # (a) what else sees it: check — one new warning, no new error; lock succeeds; policy prints what it printed; the conflicts
+    # document shows the verdict, the judge, the why and the quote under the situation
+    with Host() as h:
+        d = unread_project(h, True)
+        errors_before, warnings_before, _ = hunsu.check(h.target)
+        policy_before = run("policy", "--target", h.target)
+        assert policy_before[0] == 0 and "reviewing a change" in policy_before[1], policy_before
+        does_not_fit_round(h, d)
+        errors, warnings, _ = hunsu.check(h.target)
+        assert errors == errors_before, ("a verdict is no error", errors)
+        new = [w for w in warnings if w not in warnings_before]
+        assert len(new) == 1, ("check says nothing (or more than one thing) of the does-not-fit verdict", warnings)
+        assert "reviewing a change" in new[0], new
+        assert WHY_HEAD in new[0], ("the warning does not carry the judge's why", new)
+        assert VERDICT_JUDGE in new[0], ("the warning does not name the judge", new)
+        assert hunsu.CONFLICTS_DOC in new[0], ("the warning does not send a person to the conflicts document", new)
+        assert run("policy", "--target", h.target) == policy_before, "policy's output moved for a verdict"
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert verdict_warnings(h), "the warning is gone after lock"
+        sec = conflicts_section(h)
+        assert "does-not-fit" in sec, ("the conflicts document does not show the verdict", sec)
+        assert WHY_HEAD in sec, ("the conflicts document does not show the why", sec)
+        assert VERDICT_JUDGE in sec, ("the conflicts document does not name the judge", sec)
+        assert "now with style" in sec, ("the conflicts document does not show the quote", sec)
+
+
+def test_Q_verdict_2_a_later_consume_that_does_not_re_judge_the_situation_leaves_the_record_and_the_warning():
+    # (b) first half: check, lock and judge render leave hunsu-judgments.json's bytes; a stale round of 'building' alone keeps
+    # 'reviewing a change' whole, verdict included, and its warning; building's own verdict takes --by when the response has no worker
+    with Host() as h:
+        d = verdict_project(h)
+        does_not_fit_round(h, d)
+        rec = situation_record(h)
+        assert rec.get("resolution-verdict", {}).get("verdict") == "does-not-fit", rec
+        assert verdict_warnings(h), hunsu.check(h.target)[1]
+        j_bytes = read_bytes(os.path.join(h.target, hunsu.JUDGMENTS))
+        for argv in (("check",), ("lock",), ("judge", "render")):
+            code, out = run(*argv, "--target", h.target)
+            assert code == 0, (argv, out)
+            assert read_bytes(os.path.join(h.target, hunsu.JUDGMENTS)) == j_bytes, "%s rewrote hunsu-judgments.json" % " ".join(argv)
+        m_bytes = read_bytes(os.path.join(h.target, hunsu.MANIFEST))
+        building_round(h, d, "does plan, now bigger", DOES_NOT_FIT("now bigger", "the planner builds too"), by="test3")
+        assert situation_record(h) == rec, ("a stale round of another situation moved the record", rec, situation_record(h))
+        assert verdict_warnings(h), ("the warning is gone after a round that did not re-judge the situation", hunsu.check(h.target)[1])
+        assert read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == m_bytes
+        b = situation_record(h, "building").get("resolution-verdict")
+        assert isinstance(b, dict) and b["verdict"] == "does-not-fit" and b["why"] == "the planner builds too", b
+        assert b["judged-by"] == "test3", ("--by is the fallback account when the response names no worker", b)
+        assert b["quote-found"] is True, b
+        assert verdict_warnings(h, "building", "the planner builds too"), hunsu.check(h.target)[1]
+
+
+def test_Q_verdict_2_a_re_judge_with_a_grounded_still_fits_removes_the_record_and_the_warning():
+    # (b) second half, still-fits: the same findings again, a quote in the text — the record goes, the warning goes, and the
+    # resolution is still byte for byte what it was (no delegation written for an unchanged situation)
+    with Host() as h:
+        d = unread_project(h, True)
+        does_not_fit_round(h, d)
+        assert "resolution-verdict" in situation_record(h), situation_record(h)
+        assert verdict_warnings(h), hunsu.check(h.target)[1]
+        m_bytes = read_bytes(os.path.join(h.target, hunsu.MANIFEST))
+        code, out, _ = unread_round(h, d, "does critique, with more style", FITS("with more style"), finding_quote="does critique")
+        assert code == 0, out
+        rec = situation_record(h)
+        assert "resolution-verdict" not in rec, ("a still-fits re-judge left the older verdict in place", rec)
+        assert rec["findings"][0]["quotes"]["alpha:critique"] == "does critique" and rec["judged-by"] == "test", rec
+        assert not verdict_warnings(h), hunsu.check(h.target)[1]
+        assert read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == m_bytes, "a still-fits on unchanged findings moved hunsu.json"
+
+
+def test_Q_verdict_2_a_re_judge_with_no_verdict_removes_the_record_and_the_warning():
+    # (b) second half, no verdict: the same findings again and no resolution_verdict in the response
+    with Host() as h:
+        d = unread_project(h, True)
+        does_not_fit_round(h, d)
+        assert "resolution-verdict" in situation_record(h), situation_record(h)
+        assert verdict_warnings(h), hunsu.check(h.target)[1]
+        m_bytes = read_bytes(os.path.join(h.target, hunsu.MANIFEST))
+        code, out, _ = unread_round(h, d, "does critique, with more style", None, finding_quote="does critique")
+        assert code == 0, out
+        rec = situation_record(h)
+        assert "resolution-verdict" not in rec, ("a re-judge without a verdict left the older verdict in place", rec)
+        assert rec["findings"][0]["quotes"]["alpha:critique"] == "does critique" and rec["judged-by"] == "test", rec
+        assert not verdict_warnings(h), hunsu.check(h.target)[1]
+        assert read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == m_bytes
+        assert "does-not-fit" not in conflicts_section(h), conflicts_section(h)
+
+
+def test_Q_verdict_5_a_reviewed_record_written_by_hand_ends_the_warning_while_the_judgments_record_stays():
+    # (c) a person records their own review in the entry: check stops warning, hunsu-judgments.json is byte for byte as it was
+    with Host() as h:
+        d = unread_project(h, True)
+        does_not_fit_round(h, d)
+        assert len(verdict_warnings(h)) == 1, hunsu.check(h.target)[1]
+        j_bytes = read_bytes(os.path.join(h.target, hunsu.JUDGMENTS))
+        res = resolutions_of(h)
+        res["reviewing a change"]["reviewed"] = {"by": "a person"}
+        manifest(h.target, resolutions=res)
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not [w for w in warnings if "reviewing a change" in w and WHY_HEAD in w], ("the warning outlives the edit it was about", warnings)
+        assert errors == [], errors
+        assert read_bytes(os.path.join(h.target, hunsu.JUDGMENTS)) == j_bytes, "check rewrote hunsu-judgments.json"
+        assert situation_record(h)["resolution-verdict"]["verdict"] == "does-not-fit"
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert not verdict_warnings(h), hunsu.check(h.target)[1]
+        assert read_bytes(os.path.join(h.target, hunsu.JUDGMENTS)) == j_bytes, "lock rewrote hunsu-judgments.json"
+
+
+def test_Q_verdict_5_a_changed_note_or_deny_ends_the_warning_while_the_judgments_record_stays():
+    # (c) the entry's text changes (its note, or its deny): the verdict was about the entry before, so check stops warning
+    for key, value in (("note", "re-read 2026-11-09: the deny stands, subagents inherit it"), ("deny", ["beta:review", "alpha:build"])):
+        with Host() as h:
+            d = unread_project(h, True)
+            does_not_fit_round(h, d)
+            assert len(verdict_warnings(h)) == 1, (key, hunsu.check(h.target)[1])
+            j_bytes = read_bytes(os.path.join(h.target, hunsu.JUDGMENTS))
+            res = resolutions_of(h)
+            res["reviewing a change"][key] = value
+            manifest(h.target, resolutions=res)
+            errors, warnings, _ = hunsu.check(h.target)
+            assert not [w for w in warnings if "reviewing a change" in w and WHY_HEAD in w], (key, "the warning outlives the edit it was about", warnings)
+            assert read_bytes(os.path.join(h.target, hunsu.JUDGMENTS)) == j_bytes, (key, "check rewrote hunsu-judgments.json")
+            assert situation_record(h)["resolution-verdict"]["why"] == VERDICT_WHY, key
+            assert resolutions_of(h)["reviewing a change"]["reviewed"] is True, (key, resolutions_of(h))
+
+
+def test_Q_verdict_1_changed_findings_with_does_not_fit_mark_reviewed_false_as_before_and_record_and_warn_the_verdict():
+    # (d) the existing gate still fires, and the verdict is recorded and warned as well; the entry minus `reviewed` is as before
+    with Host() as h:
+        d = unread_project(h, True)
+        first = situation_record(h)
+        before = entry_minus_reviewed(h)
+        warnings_before = hunsu.check(h.target)[1]
+        code, out, _ = unread_round(h, d, "does critique, differently", DOES_NOT_FIT("differently"))
+        assert code == 0, out
+        res = resolutions_of(h)["reviewing a change"]
+        assert res["reviewed"] is False, res
+        assert entry_minus_reviewed(h) == before, (before, res)
+        rec = situation_record(h)
+        assert rec["findings"] != first["findings"] and rec["judged-by"] == VERDICT_JUDGE, rec
+        v = rec.get("resolution-verdict")
+        assert isinstance(v, dict), ("consume recorded nothing of the verdict on changed findings", rec)
+        assert v["verdict"] == "does-not-fit" and v["why"] == VERDICT_WHY and v["quote"] == "differently", v
+        assert v["quote-found"] is True and v["judged-by"] == VERDICT_JUDGE and v.get("resolution"), v
+        new = [w for w in hunsu.check(h.target)[1] if w not in warnings_before]
+        assert len(new) == 1 and "reviewing a change" in new[0] and WHY_HEAD in new[0], ("no warning for the verdict", new, hunsu.check(h.target)[1])
+        assert "does-not-fit" in conflicts_section(h) and WHY_HEAD in conflicts_section(h), conflicts_section(h)
+
+
+def test_Q_verdict_1_same_findings_with_cannot_tell_are_recorded_and_rendered_but_not_warned_and_an_unknown_verdict_records_none():
+    # (e) cannot-tell: recorded with its fields, shown in the conflicts document, no warning, hunsu.json byte-unchanged; then a
+    # re-judge whose verdict value is unknown records none (item 1's last sentence, item 2's second)
+    with Host() as h:
+        d = unread_project(h, True)
+        m_bytes = read_bytes(os.path.join(h.target, hunsu.MANIFEST))
+        errors_before, warnings_before, _ = hunsu.check(h.target)
+        code, out, _ = unread_round(h, d, "does critique, now with style", CANNOT_TELL("now with style"), finding_quote="does critique")
+        assert code == 0, out
+        rec = situation_record(h)
+        v = rec.get("resolution-verdict")
+        assert isinstance(v, dict), ("consume recorded nothing of the judge's cannot-tell verdict", rec)
+        assert v["verdict"] == "cannot-tell" and v["why"] == "the texts do not say whether a subagent's review counts", v
+        assert v["quote"] == "now with style" and v["quote-found"] is True and v["judged-by"] == VERDICT_JUDGE and v.get("resolution"), v
+        assert rec["findings"][0]["quotes"]["alpha:critique"] == "does critique" and rec["judged-by"] == "test", rec
+        errors, warnings, _ = hunsu.check(h.target)
+        assert (errors, warnings) == (errors_before, warnings_before), ("a cannot-tell verdict is not warned", warnings)
+        assert read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == m_bytes
+        assert "cannot-tell" in conflicts_section(h), conflicts_section(h)
+        lines = [l for l in out.splitlines() if "reviewing a change" in l and "cannot-tell" in l]
+        assert len(lines) == 1, out
+        code, out, _ = unread_round(h, d, "does critique, with more style", {"verdict": "maybe", "why": "?", "quote": "with more style"}, finding_quote="does critique")
+        assert code == 0, out
+        assert "resolution-verdict" not in situation_record(h), situation_record(h)
+        assert read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == m_bytes
+
+
+def test_Q_verdict_1_a_does_not_fit_whose_quote_is_not_in_the_texts_is_recorded_with_quote_found_false_and_still_warned():
+    # (f) the quote is the judge's claim, not hunsu's: recorded as given, `quote-found` false, warned all the same
+    with Host() as h:
+        d = unread_project(h, True)
+        m_bytes = read_bytes(os.path.join(h.target, hunsu.MANIFEST))
+        warnings_before = hunsu.check(h.target)[1]
+        does_not_fit_round(h, d, quote="a sentence nobody wrote")
+        v = situation_record(h).get("resolution-verdict")
+        assert isinstance(v, dict), ("consume recorded nothing of the verdict", situation_record(h))
+        assert v["verdict"] == "does-not-fit" and v["quote"] == "a sentence nobody wrote", v
+        assert v["quote-found"] is False, v
+        assert v["why"] == VERDICT_WHY and v["judged-by"] == VERDICT_JUDGE, v
+        new = [w for w in hunsu.check(h.target)[1] if w not in warnings_before]
+        assert len(new) == 1 and "reviewing a change" in new[0] and WHY_HEAD in new[0], new
+        assert read_bytes(os.path.join(h.target, hunsu.MANIFEST)) == m_bytes
+        assert "a sentence nobody wrote" in conflicts_section(h), conflicts_section(h)
+
+
+def test_Q_verdict_7_changed_findings_with_does_not_fit_name_the_verdict_as_kept_and_never_say_the_resolution_is_unchanged():
+    # item 7 and 8 (g): the gate's line says `reviewed: false`; the record line names the situation and the verdict as kept
+    # and says nothing of the resolution or its `reviewed` being unchanged — that would contradict the gate's line
+    with Host() as h:
+        d = unread_project(h, True)
+        code, out, _ = unread_round(h, d, "does critique, differently", DOES_NOT_FIT("differently"))
+        assert code == 0, out
+        assert resolutions_of(h)["reviewing a change"]["reviewed"] is False, resolutions_of(h)
+        assert situation_record(h).get("resolution-verdict", {}).get("verdict") == "does-not-fit", situation_record(h)
+        situation_lines = [l for l in out.splitlines() if "reviewing a change" in l]
+        assert situation_lines, ("consume says nothing of the situation", out)
+        gate = [l for l in situation_lines if "marked reviewed: false" in l]
+        assert gate, ("the changed-findings gate's own line is missing", out)
+        lying = [l for l in situation_lines if "unchanged" in l.lower()]
+        assert lying == [], ("consume says the resolution or its reviewed is unchanged while the gate has just set reviewed: false", lying, out)
+        verdict_lines = [l for l in situation_lines if "does-not-fit" in l and l not in gate]
+        assert len(verdict_lines) == 1, ("consume does not say, in one line of its own, that the does-not-fit was kept with the situation", out)
+        assert "kept" in verdict_lines[0].lower() or "recorded" in verdict_lines[0].lower(), verdict_lines
+
+
+def test_Q_verdict_7_unchanged_findings_with_does_not_fit_say_the_resolution_and_its_reviewed_are_unchanged():
+    # item 7 and 8 (g): with unchanged findings the one line naming the situation and the verdict says the resolution and its
+    # `reviewed` are unchanged — and nothing marks `reviewed: false`
+    with Host() as h:
+        d = unread_project(h, True)
+        out = does_not_fit_round(h, d)
+        assert resolutions_of(h)["reviewing a change"]["reviewed"] is True, resolutions_of(h)
+        situation_lines = [l for l in out.splitlines() if "reviewing a change" in l]
+        assert not [l for l in situation_lines if "marked reviewed: false" in l], ("the gate fired on unchanged findings", out)
+        verdict_lines = [l for l in situation_lines if "does-not-fit" in l]
+        assert len(verdict_lines) == 1, ("consume does not say, in one line, that the does-not-fit was kept with the situation", out)
+        line = verdict_lines[0]
+        assert "unchanged" in line.lower(), ("the line does not say the resolution is unchanged", line)
+        assert "reviewed" in line, ("the line does not say its `reviewed` is unchanged", line)
+        assert "resolution" in line.lower(), ("the line does not name the resolution", line)
+
+
+def test_Q_verdict_9_resolution_fingerprint_is_the_entry_identity_whatever_the_key_order_and_moves_with_any_value_reviewed_included():
+    # item 9, called directly: equal for equal entries in another insertion order; different for any changed value, `reviewed`
+    # (absent / False / a person's record) and `note` included; a string of hex characters
+    fp = getattr(hunsu, "resolution_fingerprint", None)
+    assert callable(fp), "hunsu has no resolution_fingerprint"
+    base = {"use": "alpha:critique", "deny": ["beta:review"], "note": "the judge's proposal", "reviewed": True}
+    reordered = {"reviewed": True, "note": "the judge's proposal", "deny": ["beta:review"], "use": "alpha:critique"}
+    assert list(base) != list(reordered)
+    a, b = fp(base), fp(reordered)
+    assert isinstance(a, str) and a, ("not a string", a)
+    assert re.fullmatch(r"[0-9a-f]+", a), ("not hex characters", a)
+    assert a == b, ("the same entry in another key order has another fingerprint", a, b)
+    assert fp(dict(base)) == a, "a second call on an equal entry differs"
+    variants = [
+        {k: v for k, v in base.items() if k != "reviewed"},                      # reviewed absent
+        dict(base, reviewed=False),                                             # reviewed: false
+        dict(base, reviewed={"by": "a person"}),                                # a person's review record
+        dict(base, reviewed={"by": "another person"}),                          # another record
+        dict(base, note="re-read 2026-11-09: the deny stands"),                 # a changed note
+        dict(base, deny=["beta:review", "alpha:build"]),                        # a changed deny
+        dict(base, use="beta:review"),                                          # a changed use
+        {k: v for k, v in base.items() if k != "note"},                          # note absent
+    ]
+    prints = [fp(v) for v in variants]
+    for v, f in zip(variants, prints):
+        assert isinstance(f, str) and re.fullmatch(r"[0-9a-f]+", f), (v, f)
+        assert f != a, ("a changed entry has the base entry's fingerprint", v)
+    assert len(set(prints)) == len(prints), ("two different entries share a fingerprint", list(zip(variants, prints)))
+    assert fp(base) == a, "fingerprinting mutated or is unstable for the base entry"
+    assert base["reviewed"] is True and list(base) == ["use", "deny", "note", "reviewed"], ("the function mutated its argument", base)
+
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    failed = 0
+    failed = skipped = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
             try:
                 fn()
                 print("PASS", name)
             except Skip as why:
+                skipped += 1
                 print("SKIP", name, "--", why)
             except (Exception, SystemExit) as err:   # a self-check that dies between tests lies by omission
                 failed += 1
                 print("FAIL", name, "--", "%s: %s" % (type(err).__name__, err))
-    print("all passed" if not failed else "%d failed" % failed)
+    summary = "all passed" if not failed else "%d failed" % failed
+    print(summary + (", %d skipped" % skipped if skipped else ""))
     sys.exit(1 if failed else 0)

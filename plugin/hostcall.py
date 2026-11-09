@@ -2,7 +2,7 @@
 eyes, hacheong's members.
 
 Vendored, not imported across plugins: a product knows roles and artifact types, never another product, and each plugin is
-installed on its own — so the same file sits in each plugin, and the umbrella checkout's `tools/same-file.py` fails when
+installed on its own — so the same file sits in each plugin, and the maintainers' copy check fails when
 the copies differ. Nothing here reads a request or judges an answer: it starts the host with a prompt, a schema and a
 sandbox, returns what the host said, and keeps the whole stream next to the response as the call's own record.
 """
