@@ -4477,6 +4477,273 @@ def test_Q_upgrade_5_a_linked_plugin_is_unchanged_and_said():
         assert any("alpha" in l and "not taken" in l for l in out.splitlines()) and "alpha 1.0.0 ->" not in out, out
 
 
+# ---------------------------------------------------------------- installed-copy links: a link to a host's versioned installed copy is not a development source
+# A machine may link a plugin to the copy a host installed (its plugin cache, `<cache>/<market>/<name>/<version>`, told by real
+# path). Such a link is compared by version and moved by `upgrade`, described as an installed copy by `check` and `lock`, and
+# refused by `install --refresh`; a link to a real development source keeps every line it has today.
+
+def _installed_copy_project(h):
+    """alpha 1.0.0 installed for the project from the fake Claude cache, hunsu.json pinning it (claude-code only, judge skip).
+    Returns the 1.0.0 copy's directory, written with `/`."""
+    copy = h.add_plugin("m1", "alpha", "1.0.0", ["build"])
+    h.flush()
+    run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+    manifest(h.target, engines={"claude-code": ">=0.0"}, judge="skip")
+    return posix(copy)
+
+
+def _linked_of(h):
+    return hunsu.load_json(os.path.join(h.target, hunsu.LOCK))["plugins"]["alpha"].get("linked")
+
+
+def _same_dir(a, b):
+    return os.path.realpath(a) == os.path.realpath(b)
+
+
+def test_Q_identity_Q_upgrade_link_Q_lock_link_Q_check_link_a_claude_side_copy_at_the_pin_is_at_the_pin_and_said_as_an_installed_copy():
+    with Host() as h, host_path("claude-code"):
+        link = _installed_copy_project(h)
+        local(h.target, {"links": {"alpha": link}})
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        assert "alpha 1.0.0: at the pin" in out, out
+        assert "development source" not in out and "install --refresh" not in out, out
+        assert pins(h)["alpha"]["version"] == "1.0.0" and hunsu.links(h.target) == {"alpha": link}, (pins(h), hunsu.links(h.target))
+        identify = getattr(hunsu, "installed_copy_link", None)
+        assert callable(identify), "hunsu has no installed_copy_link"
+        assert identify("alpha", "m1", link) == ("claude-code", "1.0.0", link), identify("alpha", "m1", link)
+        dev = getattr(hunsu, "development_links", None)
+        assert callable(dev), "hunsu has no development_links"
+        assert dev(h.target, hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))) == {}, dev(h.target, hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST)))
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert _linked_of(h) == {"installed-copy": "claude-code", "version": "1.0.0"}, _linked_of(h)
+        errors, warnings, info = hunsu.check(h.target)
+        assert not errors, errors
+        assert not [w for w in warnings if "alpha" in w], warnings
+        assert [i for i in info if "installed copy" in i and "alpha" in i], info
+
+
+def test_Q_check_link_Q_upgrade_link_Q_lock_link_a_newer_claude_side_release_is_a_drift_error_then_taken_and_the_link_moves():
+    with Host() as h, host_path("claude-code"):
+        old = _installed_copy_project(h)
+        new = posix(h.add_plugin("m1", "alpha", "1.1.0", ["build"]))   # the install record now names 1.1.0; the 1.0.0 directory stays
+        h.flush()
+        assert os.path.isdir(old) and os.path.isdir(new)
+        local(h.target, {"links": {"alpha": old}})
+        errors, warnings, _ = hunsu.check(h.target)
+        on_alpha = [e for e in errors if "alpha" in e]
+        assert len(on_alpha) == 1, errors
+        assert "manifest 1.0.0, host 1.1.0" in on_alpha[0] and "`hunsu upgrade alpha`" in on_alpha[0], on_alpha[0]
+        assert "hunsu add" not in on_alpha[0] and "install --refresh" not in on_alpha[0], on_alpha[0]
+        assert not [w for w in warnings if "linked source is at" in w], warnings
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        assert "alpha 1.0.0 -> 1.1.0" in out, out
+        assert pins(h)["alpha"]["version"] == "1.1.0", pins(h)
+        assert _same_dir(hunsu.links(h.target)["alpha"], new), (hunsu.links(h.target), new)
+        assert "\\" not in hunsu.links(h.target)["alpha"], hunsu.links(h.target)
+        assert [l for l in out.splitlines() if "the link moves to claude-code's installed copy 1.1.0" in l], out
+        assert "install --refresh" not in out and "development source" not in out, out
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert _linked_of(h) == {"installed-copy": "claude-code", "version": "1.1.0"}, _linked_of(h)
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not errors, errors
+        assert not [w for w in warnings if "alpha" in w], warnings
+        # a second upgrade: at the pin, the link left where it is, no move line
+        links_before = dict(hunsu.links(h.target))
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        assert "alpha 1.1.0: at the pin" in out and "the link moves" not in out, out
+        assert hunsu.links(h.target) == links_before, (hunsu.links(h.target), links_before)
+
+
+def test_Q_check_link_two_installed_copies_of_one_version_with_different_content_is_an_error_naming_both_copies_never_install_refresh():
+    # Q-check item 3 / Q-tests (h): the link is Codex's 1.0.0 copy (with hooks); Claude Code loads its own cache copy of
+    # alpha 1.0.0 (no hooks) — two copies of one release with different content. The error is this case's own line, naming
+    # both copies; never the development-source line (a manifest bump and `install --refresh`, which Q-refresh refuses).
+    with Host() as h, codex_here(h) as (codex, _):
+        link = posix(codex_hooks_project(h, codex, "1.0.0"))
+        assert _same_dir(link, os.path.join(codex, "plugins", "cache", "m1", "alpha", "1.0.0"))
+        local(h.target, {"links": {"alpha": link}})
+        claude_copy = h.add_plugin("m1", "alpha", "1.0.0", ["build"])   # Claude Code's own 1.0.0 copy: a different content
+        h.flush()
+        assert hunsu.HOST == "claude-code"
+        assert not _same_dir(link, claude_copy)
+        assert tree_bytes(claude_copy) != tree_bytes(link), "the fixture's two copies must differ in content"
+        errors, warnings, info = hunsu.check(h.target)
+        # the "codex hooks: … not active" line (no .codex/hooks.json in this fixture) is not this plugin's line and is unchanged
+        on_alpha = [e for e in errors if "alpha" in e and not e.startswith("codex hooks: ")]
+        assert len(on_alpha) == 1, errors
+        line = on_alpha[0]
+        assert line.startswith("plugin alpha: "), line
+        assert "codex's installed copy 1.0.0" in line, line
+        assert "under the same version" in line, line
+        assert "one of the two copies is not the release" in line, line
+        assert "`hunsu unlink alpha`" in line, line
+        assert "install --refresh" not in line, line
+        assert "bump it in plugin.json" not in line, line
+        assert "development source" not in line, line
+        assert not [w for w in warnings if "alpha" in w], warnings
+        # the Claude copy made one content with the Codex copy: two copies of one release are one content — no error, the info line
+        shutil.rmtree(claude_copy)
+        shutil.copytree(link, claude_copy)
+        errors, warnings, info = hunsu.check(h.target)
+        assert not [e for e in errors if "alpha" in e and not e.startswith("codex hooks: ")], errors
+        assert not [w for w in warnings if "alpha" in w], warnings
+        assert [i for i in info if "installed copy" in i and "alpha" in i], info
+        assert not [i for i in info if "alpha" in i and "install --refresh" in i], info
+
+
+def test_Q_upgrade_link_Q_lock_link_a_codex_side_copy_is_at_the_pin_then_moves_to_the_codex_copy_at_the_new_pin():
+    with Host() as h, codex_here(h) as (codex, _):
+        old = posix(codex_hooks_project(h, codex, "1.0.0"))
+        assert _same_dir(old, os.path.join(codex, "plugins", "cache", "m1", "alpha", "1.0.0"))
+        local(h.target, {"links": {"alpha": old}})
+        with on_codex():
+            code, out = upgrade("--target", h.target)
+            assert code == 0, out
+            assert "alpha 1.0.0: at the pin" in out and "development source" not in out and "install --refresh" not in out, out
+            assert hunsu.links(h.target) == {"alpha": old}, hunsu.links(h.target)
+            code, out = run("lock", "--target", h.target)
+            assert code == 0, out
+        assert _linked_of(h) == {"installed-copy": "codex", "version": "1.0.0"}, _linked_of(h)
+        new = posix(codex_hook_project(h, codex, "2.0.0"))   # beside the 1.0.0 copy, which stays
+        assert os.path.isdir(old) and os.path.isdir(new)
+        with on_codex():
+            code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        assert "alpha 1.0.0 -> 2.0.0" in out, out
+        assert pins(h)["alpha"]["version"] == "2.0.0", pins(h)
+        assert _same_dir(hunsu.links(h.target)["alpha"], new), (hunsu.links(h.target), new)
+        assert [l for l in out.splitlines() if "the link moves to codex's installed copy 2.0.0" in l], out
+        assert "install --refresh" not in out, out
+
+
+def test_Q_upgrade_link_a_release_the_links_host_has_no_copy_of_is_not_taken_and_the_advice_cannot_reinstall_the_old_copy():
+    with Host() as h, codex_here(h) as (codex, _):
+        link = posix(codex_hooks_project(h, codex, "1.0.0"))
+        local(h.target, {"links": {"alpha": link}})
+        # Claude Code gets 2.0.0 for the project from its own cache; the Codex cache still holds only 1.0.0
+        h.add_plugin("m1", "alpha", "2.0.0", ["build"])
+        h.flush()
+        assert os.listdir(os.path.join(codex, "plugins", "cache", "m1", "alpha")) == ["1.0.0"]
+        assert hunsu.HOST == "claude-code"
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        assert pins(h)["alpha"]["version"] == "1.0.0", pins(h)
+        assert hunsu.links(h.target) == {"alpha": link}, hunsu.links(h.target)
+        said = [l for l in out.splitlines() if "alpha" in l and "not taken" in l]
+        assert len(said) == 1, out
+        assert "codex's installed copy 1.0.0" in said[0] and "no copy of alpha 2.0.0" in said[0], said[0]
+        assert "alpha 1.0.0 -> 2.0.0" not in out, out
+        assert "install --refresh" not in out and "hunsu add" not in out, out
+        assert "next:" in out, out
+
+
+def test_Q_identity_Q_upgrade_link_Q_lock_link_a_development_source_keeps_todays_line_and_only_a_cache_copy_by_real_path_is_an_installed_copy():
+    with Host() as h, host_path("claude-code"):
+        copy = _installed_copy_project(h)
+        identify = getattr(hunsu, "installed_copy_link", None)
+        assert callable(identify), "hunsu has no installed_copy_link"
+        # a directory outside both caches whose path merely reads plugins/cache/<market>/<name>/<v>: a development source
+        # (one content with the installed copy, as a development source at the same version must be: that rule is unchanged)
+        pattern = posix(os.path.join(h.home, "elsewhere", "plugins", "cache", "m1", "alpha", "1.0.0"))
+        shutil.copytree(copy, pattern)
+        assert identify("alpha", "m1", pattern) is None, identify("alpha", "m1", pattern)
+        local(h.target, {"links": {"alpha": pattern}})
+        code, out = upgrade("--target", h.target)
+        assert code == 0, out
+        assert "alpha: linked to a development source here — not taken (`hunsu install --refresh alpha`, then `hunsu add alpha`)" in out.splitlines(), out
+        assert pins(h)["alpha"]["version"] == "1.0.0" and hunsu.links(h.target) == {"alpha": pattern}, (pins(h), hunsu.links(h.target))
+        code, out = run("lock", "--target", h.target)
+        assert code == 0, out
+        assert _linked_of(h) is True, _linked_of(h)
+        dev = getattr(hunsu, "development_links", None)
+        assert callable(dev), "hunsu has no development_links"
+        assert dev(h.target, hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))) == {"alpha": pattern}
+        # the negatives: a missing directory, a cache directory whose manifest names another plugin, the copy under another marketplace
+        assert identify("alpha", "m1", posix(os.path.join(h.home, "nowhere"))) is None
+        impostor = plugin(h.cache, "m1", "alpha", "9.9.9", ["build"])
+        write(os.path.join(impostor, ".claude-plugin", "plugin.json"), {"name": "beta", "version": "9.9.9"})
+        assert identify("alpha", "m1", posix(impostor)) is None, identify("alpha", "m1", posix(impostor))
+        other = plugin(h.cache, "other", "alpha", "1.0.0", ["build"])
+        assert identify("alpha", "m1", posix(other)) is None, identify("alpha", "m1", posix(other))
+        assert identify("alpha", "m1", copy) == ("claude-code", "1.0.0", copy), identify("alpha", "m1", copy)
+        # a symlink to the cache copy is that copy: the root is the copy's directory, not the symlink
+        if os.name == "nt":
+            raise Skip("symlinks need privileges on Windows")
+        sym = os.path.join(h.home, "sym")
+        os.symlink(copy, sym)
+        assert identify("alpha", "m1", sym) == ("claude-code", "1.0.0", copy), identify("alpha", "m1", sym)
+
+
+def test_Q_refresh_link_install_refresh_of_an_installed_copy_link_is_refused_before_any_host_command():
+    with Host() as h:
+        link = _installed_copy_project(h)
+        local(h.target, {"links": {"alpha": link}})
+        bindir = os.path.join(h.home, "bin"); os.makedirs(bindir)
+        log = os.path.join(h.home, "claude.log")
+        fake = os.path.join(bindir, "claude")
+        write(fake, "#!/bin/sh\necho \"$PWD $*\" >> %s\n" % log.replace("\\", "/"))
+        os.chmod(fake, 0o755)
+        path = os.environ["PATH"]; os.environ["PATH"] = bindir + os.pathsep + path
+        try:
+            code, out = run("install", "--refresh", "alpha", "--target", h.target)
+        finally:
+            os.environ["PATH"] = path
+        assert code != 0, out
+        assert "not a development source" in out and "`hunsu upgrade alpha`" in out, out
+        assert not os.path.exists(log) or not io.open(log, encoding="utf-8").read().strip(), io.open(log, encoding="utf-8").read()
+        assert hunsu.links(h.target) == {"alpha": link}, hunsu.links(h.target)
+
+
+def test_Q_steps_link_the_stale_session_line_for_a_hunsu_linked_to_its_installed_copy_says_hunsu_upgrade():
+    with Host() as h:
+        copy = posix(h.add_plugin("m1", "hunsu", "1.1.0", []))
+        h.flush()
+        hunsu.save_json(os.path.join(h.target, hunsu.MANIFEST), {"plugins": {"hunsu": {"version": "1.0.0", "marketplace": "m1"}}})
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": "1.0.0", "marketplace": "m1"}}})
+        local(h.target, {"links": {"hunsu": copy}})   # the link is the installed 1.1.0 copy itself
+        old = plugin(os.path.join(h.home, "session-copy"), "m1", "hunsu", "1.0.0", [])
+        for running in (h.installed["hunsu@m1"][0]["installPath"], old):
+            line = hunsu.stale_session_line(h.target, running)
+            assert line, running
+            assert "`hunsu upgrade hunsu`" in line and "`hunsu add hunsu`" not in line, line
+            assert "install --refresh" not in line, line
+            assert "`hunsu lock`" in line, line
+
+
+def test_Q_steps_link_outdated_says_hunsu_upgrade_for_a_plugin_linked_to_its_installed_copy():
+    if not shutil.which("git"):
+        raise Skip("no git on PATH")
+    with Host() as h:
+        copy = posix(h.add_plugin("m1", "alpha", "1.2.0", ["build"]))
+        work1, clone1 = published_marketplace(h.home, "m1", "alpha", "1.2.0")   # a marketplace published on this disk: no network
+        h.markets["m1"]["installLocation"] = clone1
+        publish(work1, "alpha", "1.3.0")
+        h.flush()
+        run("init", "--target", h.target); run("add", "alpha", "--target", h.target)
+        manifest(h.target, judge="skip")
+        assert run("lock", "--target", h.target)[0] == 0
+        local(h.target, {"links": {"alpha": copy}})   # the link is the installed 1.2.0 copy itself
+        code, out = run("outdated", "--target", h.target)
+        assert code == 0, out
+        lines = out.splitlines()
+        alpha = next(i for i, l in enumerate(lines) if l.strip().startswith("alpha"))
+        assert "published 1.3.0" in lines[alpha], lines[alpha]
+        steps = []
+        for l in lines[alpha + 1:]:
+            if not re.match(r"\s+\d+\.", l):
+                break
+            steps.append(l)
+        assert steps, out
+        assert [l for l in steps if "`hunsu upgrade alpha`" in l], steps
+        assert not [l for l in steps if "`hunsu add alpha`" in l], steps
+        assert "`hunsu add alpha`" not in out and "install --refresh" not in out, out
+
+
 def codex_update(h, codex):
     """alpha 1.0.0 locked on Codex with the project's own groups around the generated one, then the update: the 1.0.0 copy
     removed, 2.0.0 installed for both hosts; hunsu.json still pins 1.0.0. Returns (old, new, guard, own)."""

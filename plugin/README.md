@@ -120,7 +120,7 @@ allows. No lock, no enforcement.
 | `.claude/settings.local.json` | no (`init` and `dev` add it to `.gitignore`; `check` fails if it is committed) | `dev` — the working sources this machine runs instead of the manifest's copies |
 | `.codex/hooks.json` | no (`lock` and `upgrade` add it to `.gitignore`) | `lock` on Codex and `upgrade` on either host — the hook groups generated from the copies installed for Codex (this machine's paths), beside the project's own groups, which they keep |
 | `.codex/hunsu-dispatch.py` | no (`lock` and `upgrade` add it to `.gitignore`) | `lock` on Codex and `upgrade` on either host, whenever a generated group runs through it — a byte copy of this payload's `hooks/dispatch.py`, the version-independent entry the generated groups call (standalone: it imports nothing of hunsu, so replacing any copy in the cache leaves it working), written before the groups |
-| `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — plugins that come from a local checkout on *this* machine; by hand, `local-hooks-ok` for user-level hooks that are only yours, and `hosts` when this machine runs one host |
+| `hunsu.local.json` | no (`init` adds it to `.gitignore`) | `add`/`link` — development sources or installed host copies on *this* machine; `upgrade` moves installed-copy links when it takes a newer release; by hand, `local-hooks-ok` for user-level hooks that are only yours, and `hosts` when this machine runs one host |
 
 ## Commands
 
@@ -147,9 +147,14 @@ manifest, and `check` accepts exactly that content
 `hunsu upgrade [PLUGIN ...] [--hooks-only] [--target DIR]` takes the releases installed for this project on the
 host it runs on into hunsu.json. With names, only those plugins; without names, all declared plugins. It takes only
 a release newer than the pin, recording its version, shareable source and marketplace as `add` does. It never takes
-a marketplace's uninstalled version, an older version, a linked or development plugin, a local source, or a copy
+a marketplace's uninstalled version, an older version, a development-source link or development plugin, a local source, or a copy
 this host has not installed. It says which it leaves; non-release versions are left for `add` to decide.
 `--hooks-only` takes no pins.
+
+A link to an installed host copy is compared by version like an unlinked plugin, including "at the pin". When taking
+a newer release, `upgrade` moves the link to that version's copy on the same host as the link. If that host lacks the
+copy, it leaves the pin and link and asks you to install that version there or `hunsu unlink PLUGIN`; refreshing the
+old copy is not an update. A development-source link is left as before.
 
 For the hosts this project runs here, it rewrites the generated Codex groups from the copies installed for Codex,
 from either host, keeping the project's own groups, their order and description. It says when that installed
@@ -191,6 +196,16 @@ marketplace M lists 1.13.0 (local copy)`, or a linked checkout's version — no 
 its last `claude plugin marketplace update`; the session's first line counts them), links, extra
 plugins, machine-bound paths, roles declared with chongdae locked and no `reviewer` (every run then ends with its
 record unread — chongdae records it as each run's non-claim; here it is said once, where it is decided). Exit 1 on errors. `--remote` runs `outdated` after it.
+
+A link to an installed host copy keeps the ordinary manifest/host drift error and update steps through `hunsu upgrade`.
+When its version differs from the copy installed for this project, a warning names both and gives `hunsu link X PATH`
+to move it (or `hunsu unlink X`); if the link's host lacks that version, it asks you to install it there first. No content
+comparison is made across versions. At the same version an info line says "an installed copy, not a development source",
+and content is compared with the copy this host loads, ignoring the install receipt as below. A difference is an error
+naming both copies: compare each with the release and reinstall the one that differs; `hunsu unlink X` takes the link
+out of the comparison. It never advises a refresh or a version bump for this difference. Such a link offers no
+release of its own; marketplace offers use the ordinary update steps. Development-source links keep their source
+comparison and `install --refresh` advice.
 
 **Hosts and the roles' workers.** By default this machine runs every host `engines` names (`claude-code`, `codex`): the
 shared mixed configuration, where a session on one host may hire workers on the other. A machine that runs one host says
@@ -278,10 +293,10 @@ receipt names, and its files compared with the release's (`check` compares conte
 same version) — before the rest; an upgrade takes what the marketplace publishes now and by itself proves no version.
 `codex plugin remove` + `add` is not part of an ordinary update — the upgrade has refreshed the copy already: it is for a
 copy `check` finds corrupted (reinstall) and, through `install --refresh`, for a linked development source, which is the
-step `outdated` names for a linked plugin. A linked plugin keeps `hunsu add X` to take the goal into hunsu.json and the
+step `outdated` names for a development-source link. A development-source link keeps `hunsu add X` to take the goal into hunsu.json and the
 separate `hunsu check` step with `hunsu judge request --out DIR --stale`, judging those packets, and
-`hunsu judge consume --dir DIR`: `upgrade` does not take a linked plugin. The stale-session line uses the same exception
-when hunsu itself is linked. Generated Codex groups that run through the dispatcher follow the copy Codex installs;
+`hunsu judge consume --dir DIR`: `upgrade` does not take a development-source link. The stale-session line uses the same exception
+when hunsu itself links to a development source. Generated Codex groups that run through the dispatcher follow the copy Codex installs;
 groups generated before 2.4.0 name the old copy until `hunsu upgrade --hooks-only` (on either host) or a `hunsu lock` on
 Codex rewrites them.
 
@@ -366,6 +381,10 @@ hook, with `hunsu.json` overriding). The rest — `judge`, `warnings`, `hooks`, 
 lock in a diff: what was found and where it came from (an `engines` value is `null` when nothing was found, or when this
 machine's `hosts` left that host out and nothing required it, so it was not probed — `check` says which). Nothing decides on them; do not cite them as a mechanism.
 
+`plugins.*.linked` is absent for an unlinked plugin, `true` for a development-source link, or
+`{"installed-copy": "claude-code", "version": "1.0.0"}` for an installed-copy link (the host may also be `codex`).
+It describes the link; nothing decides on it.
+
 `.fingerprint` is the installed copy's content: every file's path and bytes (CRLF read as LF), leaving out `__pycache__/`,
 `.git/`, `*.pyc`, `.DS_Store`, the host's `.in_use` marker, and the receipt Codex's marketplace installer writes at a copy's
 root, `.codex-marketplace-install.json` (where it installed from, at which revision) — so one release installed by Claude
@@ -397,14 +416,22 @@ conflict judgment — see below
 the second machine: for each plugin in the manifest that is missing here, `claude plugin marketplace add` + `claude
 plugin install <plugin>@<marketplace> --scope project`, then tells you to `check`. An `unpublished` plugin installs
 from its `hunsu link <plugin> <marketplace dir>` on this machine, or not at all. A plugin present at another version
-is reported as drift, not reinstalled. `--refresh <plugin>…` (or `all`) re-snapshots a *linked* plugin — Claude Code:
+is reported as drift, not reinstalled. `--refresh <plugin>…` (or `all`) re-snapshots a linked *development source* — Claude Code:
 uninstall + install at project scope; Codex: `plugin remove` + `plugin add` — so an edited or bumped source reaches
 the copy the host loads. (Claude Code loads a `directory` marketplace's plugins in place, so there the refresh only
-updates the host's record.)
+updates the host's record.) `--refresh all` selects development-source links alone. Naming an installed-copy link
+refuses before any host command: there is no development source to re-snapshot; `hunsu upgrade X` compares with the pin,
+and `hunsu link X DIR` or `hunsu unlink X` changes the link.
 
 ### `link` / `unlink`
 
-this machine only. A link names a marketplace directory; the plugin in it is found the way a host finds it, and only
+this machine only; `unlink` removes the local link. A link directly to a version directory in either host's
+`plugins/cache/<marketplace>/<plugin>/` is an installed-copy link when its real path matches that cache directory and
+its plugin manifest names the declared plugin. Both caches are read, whatever host runs hunsu; a symlink to a copy
+counts, a lookalike path outside the caches or a copy from another marketplace does not. Its manifest supplies the
+version (the directory name when absent). Other links are development sources.
+
+A development-source link names a marketplace directory; the plugin in it is found the way a host finds it, and only
 there. A catalog that lists the plugin (`.claude-plugin/marketplace.json` or `.agents/plugins/marketplace.json`, this host's
 first) decides: its entry's directory — a string source, or Codex's `{"source": "local", "path": …}` — inside the linked
 directory. A repository root whose catalog selects `./plugin` is therefore read as its `plugin/`, never as the checkout

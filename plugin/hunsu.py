@@ -696,7 +696,7 @@ def check_behind(target, manifest, s, found):
     local copy of the plugin's marketplace, and a linked checkout (`hunsu link`) when there is one."""
     errors, warnings, info = found
     markets = load_json(os.path.join(CLAUDE, "plugins", "known_marketplaces.json")) if HOST != "codex" else {}
-    linked = links(target)
+    linked = development_links(target, manifest)
     for name, want in sorted(manifest.get("plugins", {}).items()):
         pinned = _semver(want.get("version"))
         if pinned is None:
@@ -724,7 +724,8 @@ def check_plugins(target, manifest, s, found):
     """True when a plugin is missing here: the checks that read skills, hooks, roles and judgments wait for it."""
     errors, warnings, info = found
     # 1. manifest vs what is enabled here. A linked plugin is this machine's development copy: version drift is expected.
-    linked = links(target)
+    linked = development_links(target, manifest)
+    all_links = links(target)
     dev = s.get("dev") or {}
     for name, want in manifest["plugins"].items():
         have = enabled(s, name, want)
@@ -764,12 +765,28 @@ def check_plugins(target, manifest, s, found):
                           % (name, have["version"], name))
         elif taken.get("fingerprint") and locked.get("fingerprint") and taken["fingerprint"] != locked["fingerprint"] and locked.get("version") == have["version"]:
             info.append("plugin %s: content taken under version %s (%s)" % (name, have["version"], taken.get("why", "")))
+        copy_link = installed_copy_link(name, want.get("marketplace"), all_links[name]) if name in all_links else None
+        if copy_link:
+            host, cv, root = copy_link
+            link = all_links[name]
+            if cv != have["version"]:
+                destination = os.path.join(CLAUDE if host == "claude-code" else CODEX,
+                                           "plugins", "cache", want["marketplace"], name, have["version"]).replace(os.sep, "/")
+                if os.path.isdir(destination):
+                    advice = "`hunsu link %s %s` moves the link (or `hunsu unlink %s`)" % (name, destination, name)
+                else:
+                    advice = "install %s %s for %s and `hunsu link %s <its copy>`, or `hunsu unlink %s`" % (name, have["version"], host, name, name)
+                warnings.append("plugin %s: linked to %s's installed copy %s (%s), while %s %s is installed for this project — %s"
+                                % (name, host, cv, link, name, have["version"], advice))
+            else:
+                info.append("plugin %s: linked to %s's installed copy %s (%s) — an installed copy, not a development source"
+                            % (name, host, cv, link))
         # a linked plugin is this machine's development copy: the installed copy (what the host loads) must be that source —
         # whatever the manifest says about versions, this is about the link and the install
-        if name in linked:
-            src = linked_source(linked[name], name)
+        if name in linked or (copy_link and copy_link[1] == have["version"]):
+            src = copy_link[2] if copy_link else linked_source(linked[name], name)
             src_version = source_version(src) if src else None
-            if not os.path.isdir(linked[name]):
+            if not copy_link and not os.path.isdir(linked[name]):
                 warnings.append("plugin %s: linked to %s, which does not exist on this machine — `hunsu link %s <marketplace dir>` (links are per machine)" % (name, linked[name], name))
             elif not src:
                 # a catalog naming a directory that holds no plugin (a repository whose plugin/ is missing), or one outside the link:
@@ -781,8 +798,13 @@ def check_plugins(target, manifest, s, found):
                 warnings.append("plugin %s: the linked source is at %s, the installed copy at %s — `hunsu install --refresh %s`, then the manifest decides (`hunsu add %s`)"
                                 % (name, src_version, have["version"], name, name))
             elif src and have.get("path") and os.path.isdir(have["path"]) and tree_fingerprint(src) != tree_fingerprint(have["path"]):
-                errors.append("plugin %s: the linked source (%s) differs from the installed copy under the same version %s — a version names one content: "
-                              "bump it in plugin.json (patch at least), then `hunsu install --refresh %s`" % (name, src, have["version"], name))
+                if copy_link:
+                    errors.append("plugin %s: %s's installed copy %s (%s) differs from the copy this host loads for this project under the same version %s — a version names one content: "
+                                  "one of the two copies is not the release; compare each with the release and reinstall the one that differs (`hunsu unlink %s` takes the link out of the comparison)"
+                                  % (name, host, cv, link, cv, name))
+                else:
+                    errors.append("plugin %s: the linked source (%s) differs from the installed copy under the same version %s — a version names one content: "
+                                  "bump it in plugin.json (patch at least), then `hunsu install --refresh %s`" % (name, src, have["version"], name))
         if not shareable(want["source"]):
             warnings.append("plugin %s: source %r — the team cannot install it until it has a shareable source" % (name, want["source"]))
     for key, p in s["plugins"].items():
@@ -1994,11 +2016,18 @@ def cmd_install(args):
     if not manifest:
         raise SystemExit("no %s — nothing to install" % MANIFEST)
     s = survey(args.target)
-    linked = links(args.target)
+    linked = development_links(args.target, manifest)
+    all_links = links(args.target)
     todo, blocked = [], []
     refresh = set(args.refresh or [])
     if refresh == {"all"}:
         refresh = set(linked)
+    for name in sorted(refresh):
+        copy_link = installed_copy_link(name, (manifest["plugins"].get(name) or {}).get("marketplace"), all_links[name]) if name in all_links else None
+        if copy_link:
+            host, cv, _ = copy_link
+            raise SystemExit("plugin %s is linked to %s's installed copy %s, not a development source — nothing to re-snapshot; `hunsu upgrade %s` compares it with the pin (`hunsu link %s DIR` or `hunsu unlink %s` changes the link)"
+                             % (name, host, cv, name, name, name))
     for name in sorted(refresh):
         if name not in linked:
             raise SystemExit("plugin %s is not linked here — `--refresh` reinstalls a linked plugin from its link (hunsu.local.json)" % name)
@@ -2246,7 +2275,7 @@ def cmd_outdated(args):
         if goal:
             owed += 1
             for i, st in enumerate(update_steps(name, market, goal, installed=have, pinned=pinned, locked=locked, copy=copy,
-                                                scope=install_scope(target, name, market), linked=name in links(target)), 1):
+                                                scope=install_scope(target, name, market), linked=name in development_links(target, manifest)), 1):
                 print("      %d. %s" % (i, st))
         for key, here, others in install_records_elsewhere(target, name, market):
             if here:
@@ -2709,14 +2738,17 @@ def cmd_lock(args):
         for line in errors:
             print("  error %s" % line)
         raise SystemExit("not locked — %d error(s); fix them or run `hunsu check`" % len(errors))
-    linked = links(args.target)
+    linked = {}
+    for name, link in links(args.target).items():
+        copy_link = installed_copy_link(name, (manifest["plugins"].get(name) or {}).get("marketplace"), link)
+        linked[name] = {"installed-copy": copy_link[0], "version": copy_link[1]} if copy_link else True
     skip = unprobed_hosts(args.target, manifest, s)
     lock = {"artifact-type": "hunsu/lock@1", "host": HOST,
             # what this machine had; a host engine its `hosts` leaves out and nothing requires is not run: null, not probed (as check says)
             "engines": {e: None if e in skip else version_of(HOST_EXE.get(e, e)) for e in manifest.get("engines", {})},
             "plugins": {name: {"version": enabled(s, name, want)["version"], "source": want["source"], "marketplace": want.get("marketplace"),
                                "fingerprint": tree_fingerprint(enabled(s, name, want)["path"]) if os.path.isdir(enabled(s, name, want).get("path") or "") else None,
-                               **({"linked": True} if name in linked else {})}   # the content this version named when it was locked
+                               **({"linked": linked[name]} if name in linked else {})}   # the content this version named when it was locked
                         for name, want in manifest["plugins"].items()},
             "skills": locked_skill_ids(manifest, s),
             "denied": denied_skills(manifest, locked_skill_ids(manifest, s)),
@@ -2807,7 +2839,7 @@ def stale_session_line(target, root):
         goal = have if newer else locked["version"]
         pinned = (load_json(os.path.join(target, MANIFEST)).get("plugins") or {}).get("hunsu", {}).get("version")
         steps = update_steps("hunsu", locked.get("marketplace"), goal, installed=have, pinned=pinned, locked=locked["version"],
-                             scope=install_scope(target, "hunsu", locked.get("marketplace")), linked="hunsu" in links(target))
+                             scope=install_scope(target, "hunsu", locked.get("marketplace")), linked="hunsu" in development_links(target, load_json(os.path.join(target, MANIFEST))))
         if goal == have and running != have:
             steps.insert(0, "restart the session (a /clear does not reload plugins)")
         return ("hunsu: this session runs hunsu %s while hunsu.lock.json pins %s and hunsu %s is installed for this project — %s"
@@ -3510,7 +3542,8 @@ def cmd_upgrade(args):
         if name not in manifest.get("plugins", {}):
             raise SystemExit("%s is not in hunsu.json — nothing written" % name)
     s = survey(target)
-    linked, changed = links(target), False
+    linked, changed = development_links(target, manifest), False
+    all_links, moves = links(target), []
     if not args.hooks_only:
         for name in selected:
             want = manifest["plugins"][name]
@@ -3532,6 +3565,18 @@ def cmd_upgrade(args):
                 if not shareable(found["source"]):
                     print("%s: installed from a local source — not taken (`hunsu add %s` decides)" % (name, name))
                     continue
+                copy_link = installed_copy_link(name, want.get("marketplace"), all_links[name]) if name in all_links else None
+                if copy_link:
+                    host, cv, _ = copy_link
+                    destination = os.path.join(CLAUDE if host == "claude-code" else CODEX,
+                                               "plugins", "cache", want["marketplace"], name, installed).replace(os.sep, "/")
+                    doc = plugin_manifest(destination) if os.path.isdir(destination) else None
+                    if not doc or doc.get("name") != name or doc.get("version") != installed:
+                        print("%s: pinned %s, installed %s for %s — not taken: this machine links %s to %s's installed copy %s (%s), and %s has no copy of %s %s — install %s for %s (then `hunsu upgrade %s`), or `hunsu unlink %s`"
+                              % (name, pinned, installed, HOST, name, host, cv, all_links[name], host, name, installed, installed, host, name, name))
+                        continue
+                    if os.path.realpath(all_links[name]) != os.path.realpath(destination):
+                        moves.append((name, host, installed, destination))
                 manifest["plugins"][name] = installed_entry(found)
                 changed = True
                 print("%s %s -> %s (installed for %s)" % (name, pinned, installed, HOST))
@@ -3569,6 +3614,9 @@ def cmd_upgrade(args):
         print("claude-code: a plugin's hooks run from its installed copy (hooks/hooks.json); nothing is generated")
     if changed:
         save_json(path, manifest)
+    for name, host, installed, destination in moves:
+        set_link(target, name, destination)
+        print("%s: the link moves to %s's installed copy %s (%s)" % (name, host, installed, destination))
     if codex_s is not None:
         managed = codex_plugin_hooks(enabled(codex_s, name, want) for name, want in manifest["plugins"].items())
         if not any(managed.values()) and not os.path.exists(os.path.join(target, ".codex", "hooks.json")):
@@ -3600,6 +3648,32 @@ LOCAL_SETTINGS = ".claude/settings.local.json"   # the host's own machine-local 
 
 def links(target):
     return load_json(os.path.join(target, LOCAL)).get("links", {})
+
+
+def installed_copy_link(name, market, link):
+    """Identify a link by the actual cache directory it names, on either host."""
+    if not market or not os.path.isdir(link):
+        return None
+    real = os.path.realpath(link)
+    for host, base in (("claude-code", CLAUDE), ("codex", CODEX)):
+        cache = os.path.join(base, "plugins", "cache", market, name)
+        try:
+            versions = sorted(os.listdir(cache))
+        except OSError:
+            continue
+        for version in versions:
+            root = os.path.join(cache, version)
+            if os.path.isdir(root) and os.path.realpath(root) == real:
+                doc = plugin_manifest(root)
+                if doc is not None and doc.get("name") == name:
+                    return host, doc.get("version") or version, root.replace(os.sep, "/")
+    return None
+
+
+def development_links(target, manifest):
+    """Machine-local links excluding copies installed in the declared marketplace's caches."""
+    return {name: link for name, link in links(target).items()
+            if installed_copy_link(name, (manifest.get("plugins", {}).get(name) or {}).get("marketplace"), link) is None}
 
 
 PLUGIN_MANIFESTS = (os.path.join(".claude-plugin", "plugin.json"), os.path.join(".codex-plugin", "plugin.json"), "plugin.json")
