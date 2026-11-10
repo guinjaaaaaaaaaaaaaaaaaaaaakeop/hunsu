@@ -1171,7 +1171,8 @@ def test_judge_packets_consume_and_situation_resolutions():
         manifest(h.target, resolutions={"reviewing a change": {"deny": ["beta:review"], "reviewed": False}, "building": {"order": ["alpha:build", "plugin:beta"]}})
         code, out = run("check", "--findings", "--target", h.target)
         doc = json.loads(out)
-        assert code == 0 and doc["source"] == "hunsu" and [f["kind"] for f in doc["findings"]] == ["unreviewed"], out
+        # the two rejected judge findings check warns of reach the review too, one finding each, beside the unreviewed resolution
+        assert code == 0 and doc["source"] == "hunsu" and sorted(f["kind"] for f in doc["findings"]) == ["rejected-finding", "rejected-finding", "unreviewed"], out
         assert doc["standing"] is True, "check reads the environment as it is now: a drift it stops reporting is gone"
         manifest(h.target, resolutions={"reviewing a change": {"deny": ["beta:review"], "reviewed": True}, "building": {"order": ["alpha:build", "plugin:beta"]}})
         manifest(h.target, engines={"claude-code": ">=0.0", "node": ">=0.0"})
@@ -4642,6 +4643,55 @@ def test_Q_upgrade_link_a_release_the_links_host_has_no_copy_of_is_not_taken_and
         assert "next:" in out, out
 
 
+# the warning for an installed-copy link whose copy is not the version installed here: its text, both advice shapes, and
+# silence beside the drift error when the link is the pin's copy
+
+def test_Q_link_warning_a_claude_side_copy_below_the_installed_and_pinned_release_warns_with_the_move_advice():
+    with Host() as h, host_path("claude-code"):
+        old = _installed_copy_project(h)
+        new = posix(h.add_plugin("m1", "alpha", "2.0.0", ["build"]))   # installed for the project; the 1.0.0 directory stays
+        h.flush()
+        assert run("add", "alpha", "--target", h.target)[0] == 0
+        assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["plugins"]["alpha"]["version"] == "2.0.0"
+        assert os.path.isdir(old) and os.path.isdir(new)
+        local(h.target, {"links": {"alpha": old}})
+        errors, warnings, _ = hunsu.check(h.target)
+        assert not [e for e in errors if "alpha" in e], errors
+        on_alpha = [w for w in warnings if "alpha" in w]
+        assert on_alpha == ["plugin alpha: linked to claude-code's installed copy 1.0.0 (%s), while alpha 2.0.0 is installed for this project — "
+                            "`hunsu link alpha %s` moves the link (or `hunsu unlink alpha`)" % (old, new)], on_alpha
+
+
+def test_Q_link_warning_a_codex_side_copy_whose_host_has_no_copy_of_the_installed_release_warns_with_the_install_advice():
+    with Host() as h, codex_here(h) as (codex, _):
+        link = posix(codex_hooks_project(h, codex, "1.0.0"))
+        # Claude Code gets 2.0.0 for the project from its own cache and the manifest takes it; the Codex cache holds only 1.0.0
+        h.add_plugin("m1", "alpha", "2.0.0", ["build"])
+        h.flush()
+        assert run("add", "alpha", "--target", h.target)[0] == 0
+        assert hunsu.load_json(os.path.join(h.target, hunsu.MANIFEST))["plugins"]["alpha"]["version"] == "2.0.0"
+        assert os.listdir(os.path.join(codex, "plugins", "cache", "m1", "alpha")) == ["1.0.0"]
+        local(h.target, {"links": {"alpha": link}})
+        assert hunsu.HOST == "claude-code"
+        _, warnings, _ = hunsu.check(h.target)
+        on_alpha = [w for w in warnings if "alpha" in w and not w.startswith("codex hook")]
+        assert on_alpha == ["plugin alpha: linked to codex's installed copy 1.0.0 (%s), while alpha 2.0.0 is installed for this project — "
+                            "install alpha 2.0.0 for codex and `hunsu link alpha <its copy>`, or `hunsu unlink alpha`" % link], on_alpha
+
+
+def test_Q_link_warning_a_link_to_the_pins_copy_beside_a_newer_installed_release_is_the_drift_error_alone():
+    # the drift error's steps (`hunsu upgrade alpha`) move the link; a warning advising a move off the pin is not said beside it
+    with Host() as h, host_path("claude-code"):
+        old = _installed_copy_project(h)
+        h.add_plugin("m1", "alpha", "1.1.0", ["build"])
+        h.flush()
+        local(h.target, {"links": {"alpha": old}})
+        errors, warnings, _ = hunsu.check(h.target)
+        on_alpha = [e for e in errors if "alpha" in e]
+        assert len(on_alpha) == 1 and on_alpha[0].startswith("plugin alpha: manifest 1.0.0, host 1.1.0"), errors
+        assert not [w for w in warnings if "alpha" in w], ("a warning on alpha beside its drift error", warnings)
+
+
 def test_Q_identity_Q_upgrade_link_Q_lock_link_a_development_source_keeps_todays_line_and_only_a_cache_copy_by_real_path_is_an_installed_copy():
     with Host() as h, host_path("claude-code"):
         copy = _installed_copy_project(h)
@@ -6606,6 +6656,449 @@ def test_Q_verdict_9_resolution_fingerprint_is_the_entry_identity_whatever_the_k
     assert fp(base) == a, "fingerprinting mutated or is unstable for the base entry"
     assert base["reviewed"] is True and list(base) == ["use", "deny", "note", "reviewed"], ("the function mutated its argument", base)
 
+
+# ---- the stale-session line: once per session and state, never into a host notification
+# Hook processes get TMPDIR (and TEMP/TMP) under the fake host's home, so the machine-local records land there.
+
+STALE_STEPS = " — the plugins updated since this session started are not loaded: restart the session (a /clear does not reload plugins)"
+
+
+def stale_line(running, pinned):
+    return "hunsu: this session runs hunsu %s while hunsu.lock.json pins %s%s" % (running, pinned, STALE_STEPS)
+
+
+def once_project(h):
+    """hunsu 1.0.0 installed for the project and pinned by its lock; a session copy at 0.9.0 (what an older session loaded).
+    Returns (the session copy, the installed copy, the temporary directory hook processes get)."""
+    h.add_plugin("m1", "hunsu", "1.0.0", [])
+    h.flush()
+    old = plugin(os.path.join(h.home, "session-copy"), "m1", "hunsu", "0.9.0", [])
+    hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": "1.0.0", "marketplace": "m1"}}})
+    tmp = os.path.join(h.home, "tmp")
+    os.makedirs(tmp, exist_ok=True)
+    return old, h.installed["hunsu@m1"][0]["installPath"], tmp
+
+
+def session_hook(h, tmp, name, root, session=None, prompt=None, **extra):
+    """Run plugin/hooks/NAME as the host does: the payload on stdin (cwd, and session_id / prompt when given), the plugin root
+    ROOT, the fake host, TMPDIR under the fake home. Returns the additionalContext it said, or ""."""
+    payload = {"cwd": h.target, "hook_event_name": "SessionStart" if name == "session_start.py" else "UserPromptSubmit"}
+    if name == "session_start.py":
+        payload["source"] = "startup"
+    if session is not None:
+        payload["session_id"] = session
+    if prompt is not None:
+        payload["prompt"] = prompt
+    env = dict(os.environ, HUNSU_CLAUDE_DIR=h.claude, CLAUDE_PLUGIN_ROOT=root, TMPDIR=tmp, TEMP=tmp, TMP=tmp)
+    env.pop("AGENT_WORKER", None), env.pop("HUNSU_SURVEY", None)
+    env.update(extra)
+    done = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", name)], input=json.dumps(payload), capture_output=True,
+                          text=True, encoding="utf-8", env=env)
+    assert done.returncode == 0, (name, done.returncode, done.stderr)
+    return json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] if done.stdout.strip() else ""
+
+
+def tree_listing(root):
+    out = []
+    for base, dirs, files in os.walk(root):
+        for n in dirs + files:
+            out.append(os.path.relpath(os.path.join(base, n), root))
+    return sorted(out)
+
+
+def test_Q_once_a_prompt_says_the_stale_line_once_per_session_and_a_changed_lock_pin_once_again():
+    with Host() as h:
+        old, _, tmp = once_project(h)
+        before = tree_listing(h.target)
+        line = stale_line("0.9.0", "1.0.0")
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s1", "first question") == line
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s1", "second question") == "", "the same line said twice in one session"
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s1", "third question") == ""
+        # the lock moves on: a different line, said once
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": "1.1.0", "marketplace": "m1"}}})
+        new = session_hook(h, tmp, "prompt_submit.py", old, "s1", "fourth question")
+        assert new.startswith("hunsu: this session runs hunsu 0.9.0 while hunsu.lock.json pins 1.1.0"), new
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s1", "fifth question") == "", "the new line said twice"
+        hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": "1.0.0", "marketplace": "m1"}}})
+        assert tree_listing(h.target) == before
+
+
+def test_Q_once_a_task_notification_or_a_subagent_hand_back_says_nothing_and_records_nothing():
+    with Host() as h:
+        old, _, tmp = once_project(h)
+        line = stale_line("0.9.0", "1.0.0")
+        for note in ("<task-notification>\n<task-id>x</task-id>\n<status>completed</status>\n</task-notification>",
+                     "<agent-message from=\"x\">\ndone: the review is written\n</agent-message>",
+                     "  \n\t<task-notification>\n<task-id>y</task-id>\n</task-notification>"):   # leading whitespace aside
+            assert session_hook(h, tmp, "prompt_submit.py", old, "s2", note) == "", ("a host notification was told the line", note)
+        # nothing was recorded for them: the person's first prompt is still told
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s2", "what changed?") == line
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s2", "<task-notification>\n<task-id>z</task-id>") == ""
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s2", "and now?") == ""
+
+
+def test_Q_once_without_a_session_id_the_line_is_said_at_each_prompt():
+    with Host() as h:
+        old, _, tmp = once_project(h)
+        line = stale_line("0.9.0", "1.0.0")
+        # a session that does say its id is told once, which a payload without one never is
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s9", "q") == line
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s9", "q") == ""
+        for _ in range(3):
+            assert session_hook(h, tmp, "prompt_submit.py", old, None, "a question") == line
+        assert session_hook(h, tmp, "prompt_submit.py", old, "", "a question") == line
+        assert session_hook(h, tmp, "prompt_submit.py", old, "", "a question") == line
+
+
+def test_Q_once_the_record_is_machine_local_outside_the_project_and_holds_neither_the_line_nor_the_path():
+    with Host() as h:
+        old, _, tmp = once_project(h)
+        before = tree_listing(h.target)
+        session_hook(h, tmp, "prompt_submit.py", old, "s1", "first")
+        session_hook(h, tmp, "prompt_submit.py", old, "s1", "second")
+        session_hook(h, tmp, "prompt_submit.py", old, "s2", "<agent-message from=\"x\">\nhi")
+        session_hook(h, tmp, "prompt_submit.py", old, "s2", "a person")
+        session_hook(h, tmp, "session_start.py", old, "s3")
+        assert tree_listing(h.target) == before, ("a hook wrote under the project", before, tree_listing(h.target))
+        records = os.path.join(tmp, "hunsu-sessions")
+        assert os.path.isdir(records), ("no record directory under the temporary directory", os.listdir(tmp))
+        files = [os.path.join(base, n) for base, _, names in os.walk(records) for n in names]
+        assert files, "no session record written"
+        for f in files:
+            data = read_bytes(f)
+            for leak in ("this session runs", "restart the session", "hunsu.lock.json", "0.9.0", h.target, os.path.realpath(h.target),
+                         posix(h.target)):
+                assert leak.encode("utf-8") not in data, ("the record holds %r" % leak, f, data)
+            assert os.path.basename(f) not in ("s1", "s2", "s3") and "project" not in os.path.basename(f), f
+
+
+def test_Q_once_session_start_says_the_line_first_records_it_and_says_it_again_at_the_next_start():
+    with Host() as h:
+        old, _, tmp = once_project(h)
+        line = stale_line("0.9.0", "1.0.0")
+        assert session_hook(h, tmp, "session_start.py", old, "s3").split("\n")[0] == line
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s3", "first prompt after the start") == "", "the prompt repeated what SessionStart said"
+        # a compaction (or /clear, or resume) starts a context without the line: said again
+        assert session_hook(h, tmp, "session_start.py", old, "s3").split("\n")[0] == line
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s3", "next") == ""
+
+
+def test_Q_once_an_agreeing_prompt_clears_the_record_so_disagreeing_again_says_the_line_again():
+    with Host() as h:
+        old, installed, tmp = once_project(h)
+        line = stale_line("0.9.0", "1.0.0")
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s4", "one") == line
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s4", "two") == ""
+        assert session_hook(h, tmp, "prompt_submit.py", installed, "s4", "three") == ""   # the lock's version: agrees, says nothing
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s4", "four") == line, "the agreeing prompt did not clear the record"
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s4", "five") == ""
+        # the agreeing start clears it the same way
+        assert "restart the session" not in session_hook(h, tmp, "session_start.py", installed, "s4")
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s4", "six") == line
+
+
+def test_Q_once_a_worker_and_a_probe_stay_silent_with_a_session_id_and_record_nothing():
+    with Host() as h:
+        old, _, tmp = once_project(h)
+        line = stale_line("0.9.0", "1.0.0")
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s5", "q", AGENT_WORKER="1") == ""
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s5", "q", HUNSU_SURVEY="1") == ""
+        assert session_hook(h, tmp, "session_start.py", old, "s5", AGENT_WORKER="1") == ""
+        # silence recorded nothing: the session's own first prompt is told, and once
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s5", "q") == line
+        assert session_hook(h, tmp, "prompt_submit.py", old, "s5", "q") == ""
+
+
+@contextlib.contextmanager
+def session_tmp(h):
+    """TMPDIR (TEMP, TMP) a directory under the fake home for this process, tempfile's cache cleared around it."""
+    tmp = os.path.join(h.home, "tmp")
+    os.makedirs(tmp, exist_ok=True)
+    saved = {k: os.environ.get(k) for k in ("TMPDIR", "TEMP", "TMP")}
+    os.environ.update(TMPDIR=tmp, TEMP=tmp, TMP=tmp)
+    tempfile.tempdir = None
+    try:
+        yield tmp
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        tempfile.tempdir = None
+
+
+def the_session_line():
+    fn = getattr(hunsu, "session_line", None)
+    assert callable(fn), "hunsu has no session_line"
+    return fn
+
+
+LINE_A = "hunsu: this session runs hunsu 0.9.0 while hunsu.lock.json pins 1.0.0 — restart the session"
+LINE_B = "hunsu: this session runs hunsu 0.9.0 while hunsu.lock.json pins 1.1.0 — restart the session"
+
+
+def test_Q_once_session_line_says_a_line_once_a_new_line_once_and_none_clears_the_record():
+    session_line = the_session_line()
+    with Host() as h, session_tmp(h) as tmp:
+        assert session_line("d1", h.target, LINE_A) == LINE_A
+        assert session_line("d1", h.target, LINE_A) is None
+        assert session_line("d1", h.target, LINE_B) == LINE_B
+        assert session_line("d1", h.target, LINE_B) is None
+        assert session_line("d1", h.target, None) is None
+        assert session_line("d1", h.target, LINE_B) == LINE_B, "None did not clear the record"
+        assert session_line("d1", h.target, None) is None
+        assert session_line("d1", h.target, None) is None   # clearing what is not there raises nothing
+        # one record per (session, project): another session, another project are their own
+        other = os.path.join(h.home, "other-project"); os.makedirs(other)
+        assert session_line("d1", other, LINE_B) == LINE_B
+        assert session_line("d2", h.target, LINE_B) == LINE_B
+        assert os.path.isdir(os.path.join(tmp, "hunsu-sessions")), os.listdir(tmp)
+
+
+def test_Q_once_session_line_with_no_session_returns_the_line_every_time():
+    session_line = the_session_line()
+    with Host() as h, session_tmp(h):
+        for session in ("", None):
+            for _ in range(3):
+                assert session_line(session, h.target, LINE_A) == LINE_A, session
+            assert session_line(session, h.target, None) is None
+
+
+def test_Q_once_session_line_without_a_usable_temporary_directory_returns_the_line_and_raises_nothing():
+    import errno
+    from unittest.mock import patch
+    session_line = the_session_line()
+    with Host() as h, session_tmp(h):
+        boom = FileNotFoundError(errno.ENOENT, "No usable temporary directory found in [...]")
+        p = patch.object(tempfile, "gettempdir", side_effect=boom)
+        p.start()
+        try:
+            for _ in range(3):
+                assert session_line("t1", h.target, LINE_A) == LINE_A
+            assert session_line("t1", h.target, None) is None
+        finally:
+            p.stop()
+            tempfile.tempdir = None
+
+
+def test_Q_once_session_line_with_an_unwritable_record_directory_returns_the_line_and_raises_nothing():
+    session_line = the_session_line()
+    if os.name == "nt":
+        raise Skip("an unwritable directory is made with POSIX modes")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        raise Skip("root writes through a 0o500 directory")
+    with Host() as h, session_tmp(h) as tmp:
+        records = os.path.join(tmp, "hunsu-sessions")
+        os.makedirs(records)
+        os.chmod(records, 0o500)
+        try:
+            for _ in range(3):
+                assert session_line("w1", h.target, LINE_A) == LINE_A
+            assert session_line("w1", h.target, None) is None
+            assert os.listdir(records) == []
+        finally:
+            os.chmod(records, 0o700)
+
+
+# ---- the SessionStart line from a loaded copy that is not the lock's hunsu: whose verdict it is, and the lock's engine
+
+def loaded_project(h, pinned="1.1.0"):
+    """hunsu 1.1.0 installed for the project (with its engine file), hunsu.json present, the lock pinning hunsu PINNED from m1
+    with a resolution (so the policy block prints), and a session copy at 1.0.0. Returns (the 1.1.0 root, the session copy, tmp)."""
+    root = h.add_plugin("m1", "hunsu", "1.1.0", [])
+    shutil.copy(os.path.join(PLUGIN, "hunsu.py"), os.path.join(root, "hunsu.py"))
+    h.flush()
+    assert run("init", "--target", h.target)[0] == 0
+    assert os.path.exists(os.path.join(h.target, hunsu.MANIFEST))
+    hunsu.save_json(os.path.join(h.target, hunsu.LOCK), {"plugins": {"hunsu": {"version": pinned, "marketplace": "m1"}},
+                                                        "resolutions": {"building": {"order": ["alpha:build", "plugin:beta"]}}})
+    old = plugin(os.path.join(h.home, "session-copy"), "m1", "hunsu", "1.0.0", [])
+    shutil.copy(os.path.join(PLUGIN, "hunsu.py"), os.path.join(old, "hunsu.py"))
+    tmp = os.path.join(h.home, "tmp")
+    os.makedirs(tmp, exist_ok=True)
+    return root, old, tmp
+
+
+def check_lines(ctx):
+    return [l for l in ctx.split("\n") if l.startswith("hunsu: environment ")]
+
+
+def test_Q_loaded_an_older_loaded_copy_says_its_verdict_is_the_loaded_copys_and_names_the_locks_engine_for_check_and_policy():
+    with Host() as h:
+        root, old, tmp = loaded_project(h)
+        ctx = session_hook(h, tmp, "session_start.py", old, "L1")
+        assert "- building: alpha:build first, then plugin:beta" in ctx, ctx   # the policy block is there to be read
+        said = check_lines(ctx)
+        assert len(said) == 1, ctx
+        assert ("said by this session's hunsu 1.0.0, not the 1.1.0 hunsu.lock.json pins: the loaded copy's verdict, not the lock's.") in said[0], said[0]
+        assert "\"%s/hunsu.py\" check` gives the lock's verdict." % posix(root) in ctx, ctx
+        assert "\"%s/hunsu.py\" policy" % posix(root) in ctx, ("the policy command is not the lock's engine", ctx)
+        assert "\"%s/hunsu.py\" check" % posix(old) not in ctx and "\"%s/hunsu.py\" policy" % posix(old) not in ctx, ctx
+        # the session on the lock's own copy: 2.6.0's line, nothing of whose verdict it is
+        ctx = session_hook(h, tmp, "session_start.py", h.installed["hunsu@m1"][0]["installPath"], "L2")
+        said = check_lines(ctx)
+        assert len(said) == 1 and said[0].endswith("check` for the list."), ctx
+        assert "loaded copy's verdict" not in ctx and "gives the lock's verdict" not in ctx, ctx
+
+
+def test_Q_loaded_a_lock_pin_not_installed_here_is_said_so_and_no_other_root_is_named_for_it():
+    with Host() as h:
+        root, old, tmp = loaded_project(h, pinned="1.2.0")
+        ctx = session_hook(h, tmp, "session_start.py", old, "L3")
+        said = check_lines(ctx)
+        assert len(said) == 1, ctx
+        assert ("said by this session's hunsu 1.0.0, not the 1.2.0 hunsu.lock.json pins: the loaded copy's verdict, not the lock's.") in said[0], said[0]
+        assert "hunsu 1.2.0 is not installed for this project on this machine." in ctx, ctx
+        assert "gives the lock's verdict" not in ctx, ctx
+        assert "\"%s/hunsu.py\" policy" % posix(root) not in ctx, ("the 1.1.0 copy named as the lock's engine", ctx)
+
+
+# ---- check --findings carries the judge's does-not-fit verdicts and rejected findings, as check warns of them
+
+FINDINGS_REJECTED_HEAD = "hunsu rejected a judge's finding — a real conflict may be among them; a person reads it (hunsu-conflicts.md): "
+REJECTED_OLD = ('group-01-response.json: quote not in the text of beta:review — {"kind": "overlap", "members": ["alpha:critique", "beta:review"], '
+                '"quotes": {"alpha:critique": "does critique", "beta:review": "reviews every change"}, "why": "same work"}')
+REJECTED_NEW = ('group-01-response.json (judge claude-code opus-x): no quote from beta:review — {"kind": "overlap", "members": '
+                '["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique"}, "why": "no quote for beta"}')
+DOES_NOT_FIT_TEXT = ("judge %s called this resolution no longer fitting its findings: %s — quote (found by hunsu): “now with style” — a person "
+                     "re-reads it in hunsu-conflicts.md and changes the resolution or records their own review in it" % (VERDICT_JUDGE, VERDICT_WHY))
+
+
+def findings_of(h):
+    code, out = run("check", "--findings", "--target", h.target)
+    return code, json.loads(out)["findings"]
+
+
+def findings_project(h):
+    """A does-not-fit verdict on the current resolution entry of 'reviewing a change', and two rejected entries: one as a
+    release before this one wrote it (no judge), one in this release's form (its judge named)."""
+    d = unread_project(h, True)
+    does_not_fit_round(h, d)
+    path = os.path.join(h.target, hunsu.JUDGMENTS)
+    doc = hunsu.load_json(path)
+    doc["rejected"] = [REJECTED_OLD, REJECTED_NEW]
+    hunsu.save_json(path, doc)
+    warnings = hunsu.check(h.target)[1]
+    assert len(verdict_warnings(h)) == 1, warnings
+    assert [w for w in warnings if "2 judge finding(s) were rejected" in w], warnings
+    return d
+
+
+def test_Q_findings_carries_one_does_not_fit_finding_and_one_rejected_finding_per_entry_as_check_warns():
+    with Host() as h:
+        findings_project(h)
+        errors, warnings, _ = hunsu.check(h.target)
+        check_code = run("check", "--target", h.target)[0]
+        code, findings = findings_of(h)
+        assert code == check_code, (code, check_code)   # the exit code is check's: 1 only on errors
+        dnf = [f for f in findings if f.get("kind") == "does-not-fit"]
+        assert len(dnf) == 1, findings
+        assert dnf[0]["where"] == "hunsu.json resolutions[%r]" % "reviewing a change", dnf[0]
+        assert dnf[0]["text"] == DOES_NOT_FIT_TEXT, dnf[0]["text"]
+        rej = [f for f in findings if f.get("kind") == "rejected-finding"]
+        assert len(rej) == 2, findings
+        assert all(f["where"] == "hunsu-judgments.json rejected" for f in rej), rej
+        assert sorted(f["text"] for f in rej) == sorted([FINDINGS_REJECTED_HEAD + REJECTED_OLD + " (its judge was not recorded with it)",
+                                                         FINDINGS_REJECTED_HEAD + REJECTED_NEW]), rej
+        assert not [f for f in dnf + rej if "layer" in f], dnf + rej   # a charge a person disposes: the review's default
+        # check's own lines are what they were: one verdict warning, one rejected count; nothing of the reporter's kinds
+        assert hunsu.check(h.target)[1] == warnings
+        assert len(verdict_warnings(h)) == 1 and len([w for w in warnings if "judge finding(s) were rejected" in w]) == 1, warnings
+        assert not [w for w in warnings + errors if "rejected-finding" in w or "its judge was not recorded" in w], warnings
+        # stable while the records are: a second report says the same findings
+        assert findings_of(h)[1] == findings
+
+
+def test_Q_findings_an_old_entry_whose_finding_text_reads_judge_is_still_told_its_judge_was_not_recorded():
+    # An entry names its judge only by how consume begins it (the packet name followed directly by " (judge <account>): "),
+    # never by text inside the finding's JSON: an older entry whose judge's own words read "(judge" is still an old entry.
+    old_judge_words = ('group-02-response.json: quote not in the text of beta:review — {"kind": "overlap", "members": '
+                       '["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique", "beta:review": '
+                       '"reviews it"}, "why": "as the earlier round said (judge said so)"}')
+    with Host() as h:
+        findings_project(h)
+        path = os.path.join(h.target, hunsu.JUDGMENTS)
+        doc = hunsu.load_json(path)
+        doc["rejected"] = [old_judge_words, REJECTED_NEW]
+        hunsu.save_json(path, doc)
+        assert [w for w in hunsu.check(h.target)[1] if "2 judge finding(s) were rejected" in w], hunsu.check(h.target)[1]
+        code, findings = findings_of(h)
+        rej = [f for f in findings if f.get("kind") == "rejected-finding"]
+        assert len(rej) == 2, findings
+        assert sorted(f["text"] for f in rej) == sorted([FINDINGS_REJECTED_HEAD + old_judge_words + " (its judge was not recorded with it)",
+                                                         FINDINGS_REJECTED_HEAD + REJECTED_NEW]), rej
+
+
+def test_Q_findings_with_stale_judgments_no_rejected_finding_is_carried_since_check_warns_of_none():
+    with Host() as h:
+        findings_project(h)
+        assert len([f for f in findings_of(h)[1] if f.get("kind") == "rejected-finding"]) == 2
+        beta = h.installed["beta@m2"][0]["installPath"]
+        write(os.path.join(beta, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: does review, now otherwise\n---\n")
+        errors, warnings, _ = hunsu.check(h.target)
+        assert errors, "a member's text changed since the judgment: the stale judgment is an error"
+        assert not [w for w in warnings if "judge finding(s) were rejected" in w], warnings
+        assert not [f for f in findings_of(h)[1] if f.get("kind") == "rejected-finding"], "--findings carries more than check warns"
+
+
+def test_Q_findings_with_the_resolution_entry_edited_no_does_not_fit_finding_is_carried():
+    with Host() as h:
+        findings_project(h)
+        assert len([f for f in findings_of(h)[1] if f.get("kind") == "does-not-fit"]) == 1
+        res = resolutions_of(h)
+        res["reviewing a change"]["note"] = "re-read by a person: the deny stands, subagents included"
+        manifest(h.target, resolutions=res)
+        assert not verdict_warnings(h), hunsu.check(h.target)[1]
+        assert not [f for f in findings_of(h)[1] if f.get("kind") == "does-not-fit"], "a verdict on an older resolution entry carried"
+
+
+def test_Q_findings_consume_records_each_rejections_judge_and_names_each_shape_fault():
+    with Host() as h:
+        h.add_plugin("m1", "alpha", "1.0.0", ["critique", "build"])
+        h.add_plugin("m2", "beta", "2.0.0", ["review"])
+        h.add_plugin("m3", "gamma", "3.0.0", ["plan"])
+        h.flush()
+        run("init", "--target", h.target)
+        for name in ("alpha", "beta", "gamma"):
+            run("add", name, "--target", h.target)
+        d = os.path.join(h.target, "judge")
+        assert run("judge", "request", "--target", h.target, "--out", d)[0] == 0
+        write(os.path.join(d, "cluster-response.json"), {"groups": [
+            {"situation": "reviewing a change", "members": ["alpha:critique", "beta:review"], "why": "both review"},
+            {"situation": "building", "members": ["alpha:build", "gamma:plan"], "why": "both build"}]})
+        code, out = run("judge", "request", "--target", h.target, "--out", d, "--groups", os.path.join(d, "cluster-response.json"))
+        assert code == 0 and "2 group packets" in out, out
+        # a response carrying its worker: each rejection names that judge
+        write(os.path.join(d, "group-01-response.json"), {"worker": {"host": "claude-code", "model": "opus-x"}, "findings": [
+            {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique", "beta:review": "does review"},
+             "why": "same work", "proposed": {"use": "alpha:critique"}},
+            {"kind": "overlap", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique"}, "why": "no quote for beta", "proposed": {}},
+            {"kind": "overlap", "members": ["alpha:critique", "zeta:nope"], "quotes": {"alpha:critique": "does critique", "zeta:nope": "x"}, "why": "a stranger", "proposed": {}},
+            {"kind": "x", "members": ["alpha:critique", "beta:review"], "quotes": {"alpha:critique": "does critique", "beta:review": "does review"}, "why": "odd kind", "proposed": {}}]})
+        # a response without a worker: --by is the judge
+        write(os.path.join(d, "group-02-response.json"), {"findings": [
+            {"kind": "overlap", "members": ["alpha:build"], "quotes": {"alpha:build": "does build"}, "why": "alone", "proposed": {}}]})
+        code, out = run("judge", "consume", "--target", h.target, "--dir", d, "--by", "test")
+        assert code == 0 and "4 rejected" in out, out
+        rejected = hunsu.load_json(os.path.join(h.target, hunsu.JUDGMENTS))["rejected"]
+        assert len(rejected) == 4, rejected
+        by_worker = [r for r in rejected if " (judge claude-code opus-x): " in r]
+        assert len(by_worker) == 3 and all(r.startswith("group-01") for r in by_worker), rejected
+        by_flag = [r for r in rejected if " (judge test): " in r]
+        assert len(by_flag) == 1 and by_flag[0].startswith("group-02"), rejected
+        reasons = [r.split(": ", 1)[1].split(" — ", 1)[0] for r in rejected]
+        assert "no quote from beta:review" in reasons, reasons
+        unknown = [r for r in reasons if r.startswith("unknown member(s) ")]
+        assert len(unknown) == 1 and "zeta:nope" in unknown[0] and "alpha:critique" not in unknown[0], reasons
+        assert "kind 'x' is not overlap, contradiction or premise" in reasons, reasons
+        assert "fewer than two members" in reasons, reasons
+        # the review reads each, judge and reason included, and none as one whose judge was not recorded
+        manifest(h.target, resolutions={"reviewing a change": {"use": "alpha:critique", "reviewed": True},
+                                        "building": {"use": "alpha:build", "reviewed": True}})
+        assert [w for w in hunsu.check(h.target)[1] if "4 judge finding(s) were rejected" in w], hunsu.check(h.target)[1]
+        rej = [f for f in findings_of(h)[1] if f.get("kind") == "rejected-finding"]
+        assert sorted(f["text"] for f in rej) == sorted(FINDINGS_REJECTED_HEAD + r for r in rejected), rej
 
 
 if __name__ == "__main__":

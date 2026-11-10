@@ -101,7 +101,8 @@ python3 -m unittest test_hostcall_env.py
 
 Both put `plugin/` on `sys.path` explicitly and fail if `hunsu` or `hostcall` came from anywhere else. `test_hunsu.py`
 builds fake hosts under temporary directories — every `check` error branch, `compose`'s gates, the sentinel's allow/deny,
-both SessionStart states and the stale-session line fire once; `outdated` runs against local bare repositories standing
+both SessionStart states, reminders once per session and state, notification suppression, loaded-copy verdict attribution,
+judge verdict and rejection findings, and installed-copy link warning text and drift suppression; `outdated` runs against local bare repositories standing
 for the publishers, with no network. It also checks the payload itself: `plugin/` holds exactly the runtime files, the
 five version values agree and both catalogs select `./plugin`; and a copy of `plugin/` alone, in a temporary directory
 outside the repository, runs `--help`, `init`, `add`, `check`, `lock`, its hooks and the judge worker without reading a

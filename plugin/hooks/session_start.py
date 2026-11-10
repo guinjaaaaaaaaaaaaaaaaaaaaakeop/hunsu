@@ -7,7 +7,7 @@ Reads the hook payload (stdin JSON with `cwd`) and puts into the session's first
   hunsu.lock.json -> also where the lock's plugins are on this machine, one line: a session that calls an engine by hand
                      takes its root from there, not from a glob over the plugin cache (pre_bash.py refuses the latter)
   this session runs a hunsu other than the lock pins (a `/clear`, which this hook also fires on, does not reload plugins)
-                  -> one line saying so, the same the UserPromptSubmit hook (prompt_submit.py) repeats at every prompt
+                  -> one line saying so, recorded so UserPromptSubmit says it again only when the state changes
 Fires after a compaction too: the summary keeps none of this (guin-site 10-08 → 10-11: four compactions, and the summary
 carried an old engine's path forward instead).
 Never blocks. Never writes to the project.
@@ -44,6 +44,8 @@ def main():
         return 0
     if os.environ.get("AGENT_WORKER"):
         return 0
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("PLUGIN_ROOT") or os.path.dirname(HERE)
+    policy_engine = ENGINE
     cwd = hunsu.project_root(payload.get("cwd") or os.getcwd())
     engine = "%s \"%s\"" % (PY, ENGINE.replace(os.sep, "/"))
     if os.environ.get("HUNSU_SURVEY"):
@@ -62,6 +64,18 @@ def main():
             summary += " · %d plugin(s) behind a release available here" % behind
         state = "environment differs from hunsu.json" if done.returncode else "environment matches hunsu.json"
         msg = "hunsu: %s (%s). `%s \"%s\" check` for the list." % (state, summary, PY, ENGINE.replace(os.sep, "/"))
+        running = hunsu.plugin_version_at(root)
+        locked = (hunsu.load_json(os.path.join(cwd, hunsu.LOCK)).get("plugins") or {}).get("hunsu") or {}
+        if (running and locked.get("version") and running != locked["version"]
+                and "hunsu" not in (hunsu.load_json(os.path.join(cwd, hunsu.LOCAL)).get("dev") or {})):
+            locked_root = hunsu.locked_roots(cwd).get("hunsu", (None, None))[1]
+            msg = ("hunsu: %s (%s) — said by this session's hunsu %s, not the %s hunsu.lock.json pins: "
+                   "the loaded copy's verdict, not the lock's." % (state, summary, running, locked["version"]))
+            if locked_root:
+                policy_engine = os.path.join(locked_root, "hunsu.py")
+                msg += " `%s \"%s\" check` gives the lock's verdict." % (PY, policy_engine.replace(os.sep, "/"))
+            else:
+                msg += " hunsu %s is not installed for this project on this machine." % locked["version"]
         if done.returncode and "no writable temporary directory" in done.stderr:
             msg = "hunsu: check could not complete — " + done.stderr.strip()
         lock = hunsu.load_json(os.path.join(cwd, "hunsu.lock.json"))
@@ -72,8 +86,9 @@ def main():
         if lines:
             msg += ("\nhunsu policy — this project's resolutions between its skills, by situation (hunsu.json `resolutions`; the judge's evidence "
                     "is in hunsu-conflicts.md; `%s \"%s\" policy` prints them again, with who settled each). Follow them when the situation applies:\n- "
-                    % (PY, ENGINE.replace(os.sep, "/")) + "\n- ".join(lines))
-    stale = None if os.environ.get("HUNSU_SURVEY") else hunsu.stale_session_line(cwd, os.environ.get("CLAUDE_PLUGIN_ROOT") or os.environ.get("PLUGIN_ROOT") or os.path.dirname(HERE))
+                    % (PY, policy_engine.replace(os.sep, "/")) + "\n- ".join(lines))
+    stale = hunsu.stale_session_line(cwd, root)
+    hunsu.session_line(payload.get("session_id"), cwd, stale)
     if stale:
         msg = stale + "\n" + msg
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": msg}}))

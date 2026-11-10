@@ -570,7 +570,7 @@ def user_hook_groups(s):
     return groups
 
 
-def check(target):
+def check(target, judgment_findings=None):
     """Everything `check` asks of a project, in order: the machine-local files, the plugins against the manifest (the rest
     waits until every plugin is here), the session, the engines, the hooks, skill-name overlap, the roles, the judgments.
     Each step is a function below; all append to one (errors, warnings, info)."""
@@ -592,7 +592,7 @@ def check(target):
     check_local_skills(target, manifest, s, found)
     check_skill_overlap(target, manifest, s, found)
     check_roles(manifest, s, found)
-    check_judgments(target, manifest, s, found)
+    check_judgments(target, manifest, s, found, judgment_findings)
     return found
 
 
@@ -769,7 +769,7 @@ def check_plugins(target, manifest, s, found):
         if copy_link:
             host, cv, root = copy_link
             link = all_links[name]
-            if cv != have["version"]:
+            if cv != have["version"] and cv != want["version"]:
                 destination = os.path.join(CLAUDE if host == "claude-code" else CODEX,
                                            "plugins", "cache", want["marketplace"], name, have["version"]).replace(os.sep, "/")
                 if os.path.isdir(destination):
@@ -778,7 +778,7 @@ def check_plugins(target, manifest, s, found):
                     advice = "install %s %s for %s and `hunsu link %s <its copy>`, or `hunsu unlink %s`" % (name, have["version"], host, name, name)
                 warnings.append("plugin %s: linked to %s's installed copy %s (%s), while %s %s is installed for this project — %s"
                                 % (name, host, cv, link, name, have["version"], advice))
-            else:
+            elif cv == have["version"]:
                 info.append("plugin %s: linked to %s's installed copy %s (%s) — an installed copy, not a development source"
                             % (name, host, cv, link))
         # a linked plugin is this machine's development copy: the installed copy (what the host loads) must be that source —
@@ -1129,7 +1129,9 @@ def check_roles(manifest, s, found):
                                                            "\"--target\", \".\"])" if "dwitbuk" in plugins else ""))
 
 
-def check_judgments(target, manifest, s, found):
+def check_judgments(target, manifest, s, found, judgment_findings=None):
+    if judgment_findings is None:
+        judgment_findings = []
     errors, warnings, info = found
     # 6. judged conflicts — every situation with findings needs a resolution; judgments about another set are stale
     judged, stale = judgments_status(manifest, s, target)
@@ -1162,6 +1164,10 @@ def check_judgments(target, manifest, s, found):
                             % (len(bound), "; ".join("%s: %s %s" % (k, v[0][0], v[0][1]) for k, v in bound.items())))
         if judged.get("rejected"):
             warnings.append("%d judge finding(s) were rejected (no quote, a quote not in the text, a mode quote naming one state, an unknown member or kind) — a real conflict may be among them; read them in %s" % (len(judged["rejected"]), CONFLICTS_DOC))
+            for entry in judged["rejected"]:
+                judgment_findings.append({"kind": "rejected-finding", "where": "hunsu-judgments.json rejected",
+                    "text": "hunsu rejected a judge's finding — a real conflict may be among them; a person reads it "
+                            "(hunsu-conflicts.md): " + entry + ("" if re.match(r"^\S+ \(judge .+?\): ", entry) else " (its judge was not recorded with it)")})
         if settled:
             info.append("%d finding(s) settled by the members' own text (sequenced / not co-active / duplicate, each on a verified sentence) — no resolution needed; see %s" % (settled, CONFLICTS_DOC))
         known = {r["situation"] for r in judged.get("situations", [])} | {sid.split(":", 1)[1] for sid in judged_ids(manifest, s)}
@@ -1176,6 +1182,10 @@ def check_judgments(target, manifest, s, found):
             warnings.append("situation %r: judge %s called the resolution no longer fitting its findings: %s — a person "
                             "re-reads it in %s and changes the resolution or records their own review in it"
                             % (r["situation"], v.get("judged-by", "unknown"), v.get("why", ""), CONFLICTS_DOC))
+            judgment_findings.append({"kind": "does-not-fit", "where": "hunsu.json resolutions[%r]" % r["situation"],
+                "text": "judge %s called this resolution no longer fitting its findings: %s — quote (%s by hunsu): “%s” — "
+                        "a person re-reads it in hunsu-conflicts.md and changes the resolution or records their own review in it"
+                        % (v.get("judged-by", "unknown"), v.get("why", ""), "found" if v.get("quote-found") else "not found", v.get("quote", ""))})
     for key, res in manifest.get("resolutions", {}).items():
         rv = res.get("reviewed") if isinstance(res, dict) else None
         bound = state_bound(rv.get("delegated")) if isinstance(rv, dict) else []
@@ -1192,12 +1202,14 @@ def check_judgments(target, manifest, s, found):
 
 
 def cmd_check(args):
-    errors, warnings, info = check(args.target)
+    judgment_findings = []
+    errors, warnings, info = check(args.target, judgment_findings)
     if getattr(args, "findings", False):
         manifest = load_json(os.path.join(args.target, MANIFEST))
         findings = [{"kind": "drift", "where": e.split(":")[0], "text": e} for e in errors]
         findings += [{"kind": "unreviewed", "where": "hunsu.json resolutions[%r]" % k, "text": "applied from the judge's proposal, marked reviewed: false — `hunsu policy` shows the conflict a person judges"}
                      for k, r in manifest.get("resolutions", {}).items() if isinstance(r, dict) and r.get("reviewed") is False]
+        findings += judgment_findings
         print(json.dumps({"artifact-type": "dwitbuk/findings@1", "source": "hunsu", "standing": True, "findings": findings}, ensure_ascii=False, indent=1))
         return 1 if errors else 0
     for label, items in (("error", errors), ("warn", warnings), ("info", info)):
@@ -1792,6 +1804,8 @@ def judge_consume(args, target, manifest, j):
             continue
         req = load_json(os.path.join(d, name.replace("-response", "-request")))
         resp = load_json(os.path.join(d, name))
+        w = resp.get("worker") or {}
+        account = " ".join(str(w[k]) for k in ("host", "model") if w.get(k)) or args.by or "unknown"
         # a finding's quote is checked against the text it claims to quote — the member's text as packed, or the mode's injected
         # text — whitespace-normalized. "No quote, no finding" was checked for presence only: a sentence the judge paraphrased or
         # made up passed, and a person was asked to resolve a conflict no text contains.
@@ -1804,18 +1818,29 @@ def judge_consume(args, target, manifest, j):
             quotes = f.get("quotes", {})
             if isinstance(quotes, list):   # the schema's shape (a list of {member, quote}: Codex refuses open maps); read either
                 quotes = {q.get("member"): q.get("quote") for q in quotes if isinstance(q, dict)}
-            bad = (f.get("kind") not in KINDS or len(members) < 2 or any(m not in valid_ids for m in members)
-                   or any(not str(quotes.get(m, "")).strip() for m in members) or not f.get("why"))
-            unquoted = [] if bad else [m for m in members if norm(quotes.get(m, "")) not in texts.get(m, "")]
-            if bad or unquoted:
-                rejected.append("%s: %s%s" % (name, "quote not in the text of %s — " % ", ".join(unquoted) if unquoted else "",
-                                              json.dumps(f, ensure_ascii=False)[:160]))
+            faults = []
+            if f.get("kind") not in KINDS:
+                faults.append("kind %r is not overlap, contradiction or premise" % f.get("kind"))
+            if len(members) < 2:
+                faults.append("fewer than two members")
+            unknown = [m for m in members if m not in valid_ids]
+            if unknown:
+                faults.append("unknown member(s) " + ", ".join(unknown))
+            missing = [m for m in members if not str(quotes.get(m, "")).strip()]
+            if missing:
+                faults.append("no quote from " + ", ".join(missing))
+            if not f.get("why"):
+                faults.append("no why")
+            unquoted = [] if faults else [m for m in members if norm(quotes.get(m, "")) not in texts.get(m, "")]
+            if faults or unquoted:
+                reason = "; ".join(faults) if faults else "quote not in the text of " + ", ".join(unquoted)
+                rejected.append("%s (judge %s): %s — %s" % (name, account, reason, json.dumps(f, ensure_ascii=False)[:160]))
                 continue
             hooked = [m.get("source") for m in req.get("modes", [])]
             bound = state_bound_quotes({"quotes": quotes}, hooked)
             if bound:   # true of the session it was read in, not of the mode: quote the sentence that holds in every state
-                rejected.append("%s: a quote of %s names one state (%s) — quote the mode's sentence that holds in every state — %s"
-                                % (name, bound[0][0], "; ".join(w for _, w in bound), json.dumps(f, ensure_ascii=False)[:160]))
+                rejected.append("%s (judge %s): a quote of %s names one state (%s) — quote the mode's sentence that holds in every state — %s"
+                                % (name, account, bound[0][0], "; ".join(w for _, w in bound), json.dumps(f, ensure_ascii=False)[:160]))
                 continue
             proposed = f.get("proposed") or {}
             if isinstance(proposed, str):   # Codex's strict schema carries it as text
@@ -1840,8 +1865,6 @@ def judge_consume(args, target, manifest, j):
         members = [m["id"] for m in req.get("members", [])]
         mode_ids = [m["source"] for m in req.get("modes", [])]   # a mode is a member of every situation; its plugin's version counts too
         # what travels for the resolution gate: the judge's verdict on the existing resolution, the texts it could quote from, and who judged
-        w = resp.get("worker") or {}
-        account = " ".join(str(w[k]) for k in ("host", "model") if w.get(k)) or args.by or "unknown"
         packed = "\n".join([str(m.get("text", "")) for m in req.get("members", [])] + [str(m.get("text", m.get("command", ""))) for m in req.get("modes", [])])
         verdicts[req.get("situation", name)] = (resp.get("resolution_verdict"), packed, account)
         results.append({"situation": req.get("situation", name), "members": members, "modes": mode_ids,
@@ -2820,6 +2843,29 @@ def installed_version(target, name, market=None):
     """What this host has installed for `target` — the copy a new session would load."""
     root, recorded = _installed(target, name, market)
     return (plugin_version_at(root) or recorded) if root else None
+
+
+def session_line(session, target, line):
+    """Say a line once per session and project; agreeing clears the machine-local record."""
+    import hashlib
+    if not session:
+        return line
+    try:
+        key = hashlib.sha256(json.dumps([session, os.path.realpath(target)]).encode("utf-8")).hexdigest()
+        directory = os.path.join(tempfile.gettempdir(), "hunsu-sessions")
+        path = os.path.join(directory, key + ".json")
+        if line is None:
+            if os.path.exists(path):
+                os.unlink(path)
+            return None
+        digest = hashlib.sha256(line.encode("utf-8")).hexdigest()
+        if load_json(path) == digest:
+            return None
+        os.makedirs(directory, exist_ok=True)
+        save_json(path, digest)
+        return line
+    except (OSError, ValueError):
+        return line
 
 
 def stale_session_line(target, root):

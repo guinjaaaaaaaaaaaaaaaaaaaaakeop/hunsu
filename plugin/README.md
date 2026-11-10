@@ -83,13 +83,21 @@ Open any project. hunsu's SessionStart hook puts one line into the session:
 
 It fires at startup, on resume, after `/clear` and after a compaction (the summary keeps none of it).
 
-And at every prompt (UserPromptSubmit), when this session runs plugins other than the ones the lock pins: a host loads
+At UserPromptSubmit, once per session for each loaded, locked and installed state, when this session runs plugins other
+than the ones the lock pins: a host loads
 a session's plugins once, at start — an update mid-session says "restart to apply", and `/clear` does not reload them —
 while `check` compares the lock with what is *installed*, not with what this session loaded. hunsu's own hook knows the
 version it runs from (its plugin root); when that differs from the lock's hunsu, or from what is installed for this
-project, one line goes into the prompt's context, and into the SessionStart line too:
+project, one line goes into the prompt's context. SessionStart always says it and records it so the next prompt does not
+repeat it:
 
     hunsu: this session runs hunsu 1.9.0 while hunsu.lock.json pins 1.10.0 — the plugins updated since this session started are not loaded: restart the session (a /clear does not reload plugins)
+
+A changed line is said once again; agreement clears the record. The reminder is not put into a prompt that starts with
+`<task-notification>` (a background task ended) or `<agent-message` (a subagent's hand-back). Another session's message is
+passed over only if the host delivers it in one of those forms, which no hook payload has shown. When the loaded hunsu
+differs from the lock's version, SessionStart labels the check verdict as the loaded copy's and names the lock's engine
+for `check` and `policy` if installed here; otherwise it says that the pinned version is not installed.
 
 Nothing when they agree, nothing in a worker session or under hunsu's own probe (`HUNSU_SURVEY`), nothing while hunsu is
 in development here (`hunsu dev`). No check runs per prompt: the lock, the host's install record, a plugin.json. It is
@@ -199,7 +207,10 @@ record unread — chongdae records it as each run's non-claim; here it is said o
 
 A link to an installed host copy keeps the ordinary manifest/host drift error and update steps through `hunsu upgrade`.
 When its version differs from the copy installed for this project, a warning names both and gives `hunsu link X PATH`
-to move it (or `hunsu unlink X`); if the link's host lacks that version, it asks you to install it there first. No content
+to move it (or `hunsu unlink X`); if the link's host lacks that version, it asks you to install it there first. When the
+link is the pin's copy and another version is installed, there is no such warning: the drift error stands alone, and its
+steps set the link right (`hunsu upgrade X` moves the link when it takes the release; installing the pin makes the link
+the installed copy). No content
 comparison is made across versions. At the same version an info line says "an installed copy, not a development source",
 and content is compared with the copy this host loads, ignoring the install receipt as below. A difference is an error
 naming both copies: compare each with the release and reinstall the one that differs; `hunsu unlink X` takes the link
@@ -485,7 +496,10 @@ six findings a person had resolved on a walk-through project, all with accept/or
 You write `resolutions[<situation>]` for the `authority` ones. `check` fails for a situation with an `authority`
 finding and no resolution; the same finding (members and quotes) in another situation is covered by one resolution.
 A rejected finding (no quote, a quote not in the text — JSON escapes and whitespace aside) is a `check` warning: a real
-conflict may be among them. `lock` carries
+conflict may be among them. `check --findings` carries these rejections while judgments are current, and the judge's
+`does-not-fit` verdicts on unchanged resolutions, with their judge and reason. From 2.7.0 each `judge consume` rejection
+records its judge (worker host and model, else `--by`, else `unknown`) and its reason, naming every shape fault. Older
+entries are kept as written; findings say when the judge was not recorded. `lock` carries
 the resolutions, and the SessionStart hook **materializes** them: one line per situation in the session's first
 context ("reviewing a change: use dwitbuk:review; never other:review", `[unreviewed]` when a proposal was applied
 unread). `deny` is also enforced by the sentinel at call time; `use`, `order`, `accept` act through these lines.
@@ -614,7 +628,7 @@ with a mode every group is judged (cost: 1 + groups calls).
   `.env`): a product reads its own from hunsu.json and lets this machine's override it.
 - `reporters` — name → argv of the commands that report findings for the reviewer (`dwitbuk/findings@1`), e.g.
   `["python3", "{plugin:chongdae}/chongdae.py", "report", "--since", "{since}"]`. Locked; dwitbuk reads them from the
-  lock. hunsu's own is `check --findings` (drift, unread resolutions), marked `"standing": true`: it reads the
+  lock. hunsu's own is `check --findings` (drift, unread resolutions, the judge's does-not-fit verdicts and the judge findings hunsu rejected), marked `"standing": true`: it reads the
   environment as it is now, so a drift it stops reporting is gone, not owed.
 
 ## Codex and the sandbox
@@ -653,6 +667,11 @@ snapshot and the plugins installed from it; `install --refresh` re-snapshots a l
   under that tool name is unverified.
 - On Codex the shell-command hook is declared with matcher `*` and reads `tool_input.command` (a string, or argv joined);
   that Codex passes its shell commands that way is unverified.
+- Notification prefixes (`<task-notification>` and `<agent-message`) are read from the host's own transcript — the text
+  a queued notification carries. The host's documentation says UserPromptSubmit also fires on a background subagent's
+  report and on another session's message. No hook payload of a notification was observed. The once-per-session record
+  needs the payload's `session_id`; without one, the line is said at each prompt. Codex's payload is unverified for both
+  notification detection and the session id.
 - On Codex the UserPromptSubmit hook (`hooks/codex.json`, materialized by `lock`) is declared the same way; that Codex runs
   it and takes its `additionalContext` is unverified.
 - The dispatcher (`.codex/hunsu-dispatch.py`, since 2.4.0) is tested on fake hosts only: no live Codex session has run a
